@@ -9,6 +9,7 @@ import (
 // and byte order needed to decode tag values and read tile payloads.
 type File struct {
 	r      io.ReaderAt
+	size   int64
 	reader *byteReader
 	pages  []*Page
 }
@@ -16,8 +17,9 @@ type File struct {
 // Open parses the header and every IFD in r, producing a File ready for use by
 // format packages. Open does not read tile payloads. The caller retains
 // ownership of r; File does not close it (the io.ReaderAt contract does not
-// include Close).
-func Open(r io.ReaderAt) (*File, error) {
+// include Close). size is the total readable size of r in bytes and is stored
+// for future offset-bounds validation.
+func Open(r io.ReaderAt, size int64) (*File, error) {
 	h, err := parseHeader(r)
 	if err != nil {
 		return nil, err
@@ -31,7 +33,7 @@ func Open(r io.ReaderAt) (*File, error) {
 	for _, i := range ifds {
 		pages = append(pages, newPage(i, br))
 	}
-	return &File{r: r, reader: br, pages: pages}, nil
+	return &File{r: r, size: size, reader: br, pages: pages}, nil
 }
 
 // Pages returns the pages in IFD order. The slice is owned by File; do not mutate.
@@ -43,3 +45,6 @@ func (f *File) LittleEndian() bool { return f.reader.order == binary.LittleEndia
 // ReaderAt returns the underlying reader for use by format packages reading
 // tile byte ranges.
 func (f *File) ReaderAt() io.ReaderAt { return f.r }
+
+// Size returns the total byte size of the underlying reader as provided to Open.
+func (f *File) Size() int64 { return f.size }

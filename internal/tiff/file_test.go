@@ -10,7 +10,7 @@ func TestOpenFileMinimal(t *testing.T) {
 		{256, 3, 1024}, // ImageWidth
 		{257, 3, 768},  // ImageLength
 	})
-	f, err := Open(bytes.NewReader(data))
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestOpenFileMinimal(t *testing.T) {
 
 func TestOpenRejectsBigTIFF(t *testing.T) {
 	data := []byte{'I', 'I', 43, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0}
-	if _, err := Open(bytes.NewReader(data)); err == nil {
+	if _, err := Open(bytes.NewReader(data), int64(len(data))); err == nil {
 		t.Fatal("expected BigTIFF to be rejected")
 	}
 }

@@ -76,7 +76,8 @@ func buildPageTIFF(t *testing.T) []byte {
 }
 
 func TestPageAccessors(t *testing.T) {
-	f, err := Open(bytes.NewReader(buildPageTIFF(t)))
+	data := buildPageTIFF(t)
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -115,7 +116,8 @@ func TestPageAccessors(t *testing.T) {
 }
 
 func TestPageTileGrid(t *testing.T) {
-	f, _ := Open(bytes.NewReader(buildPageTIFF(t)))
+	data := buildPageTIFF(t)
+	f, _ := Open(bytes.NewReader(data), int64(len(data)))
 	p := f.Pages()[0]
 	gx, gy, err := p.TileGrid()
 	if err != nil {

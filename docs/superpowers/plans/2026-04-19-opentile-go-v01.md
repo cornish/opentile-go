@@ -1278,7 +1278,7 @@ func TestOpenFileMinimal(t *testing.T) {
         {256, 3, 1024}, // ImageWidth
         {257, 3, 768},  // ImageLength
     })
-    f, err := Open(bytes.NewReader(data))
+    f, err := Open(bytes.NewReader(data), int64(len(data)))
     if err != nil {
         t.Fatalf("Open: %v", err)
     }
@@ -1292,7 +1292,7 @@ func TestOpenFileMinimal(t *testing.T) {
 
 func TestOpenRejectsBigTIFF(t *testing.T) {
     data := []byte{'I', 'I', 43, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0}
-    if _, err := Open(bytes.NewReader(data)); err == nil {
+    if _, err := Open(bytes.NewReader(data), int64(len(data))); err == nil {
         t.Fatal("expected BigTIFF to be rejected")
     }
 }
@@ -1317,6 +1317,7 @@ import (
 // and byte order needed to decode tag values and read tile payloads.
 type File struct {
     r      io.ReaderAt
+    size   int64
     reader *byteReader
     pages  []*Page
 }
@@ -1324,8 +1325,9 @@ type File struct {
 // Open parses the header and every IFD in r, producing a File ready for use by
 // format packages. Open does not read tile payloads. The caller retains
 // ownership of r; File does not close it (the io.ReaderAt contract does not
-// include Close).
-func Open(r io.ReaderAt) (*File, error) {
+// include Close). size is the total readable size of r in bytes and is stored
+// for future offset-bounds validation.
+func Open(r io.ReaderAt, size int64) (*File, error) {
     h, err := parseHeader(r)
     if err != nil {
         return nil, err
@@ -1339,7 +1341,7 @@ func Open(r io.ReaderAt) (*File, error) {
     for _, i := range ifds {
         pages = append(pages, newPage(i, br))
     }
-    return &File{r: r, reader: br, pages: pages}, nil
+    return &File{r: r, size: size, reader: br, pages: pages}, nil
 }
 
 // Pages returns the pages in IFD order. The slice is owned by File; do not mutate.
@@ -1471,7 +1473,8 @@ func buildPageTIFF(t *testing.T) []byte {
 }
 
 func TestPageAccessors(t *testing.T) {
-    f, err := Open(bytes.NewReader(buildPageTIFF(t)))
+    data := buildPageTIFF(t)
+    f, err := Open(bytes.NewReader(data), int64(len(data)))
     if err != nil {
         t.Fatalf("Open: %v", err)
     }
@@ -1510,7 +1513,8 @@ func TestPageAccessors(t *testing.T) {
 }
 
 func TestPageTileGrid(t *testing.T) {
-    f, _ := Open(bytes.NewReader(buildPageTIFF(t)))
+    data := buildPageTIFF(t)
+    f, _ := Open(bytes.NewReader(data), int64(len(data)))
     p := f.Pages()[0]
     gx, gy, err := p.TileGrid()
     if err != nil {
@@ -2143,7 +2147,7 @@ func resetRegistry() {
 // size is the total file size in bytes.
 func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
     cfg := newConfig(opts)
-    file, err := tiff.Open(r)
+    file, err := tiff.Open(r, size)
     if err != nil {
         if errors.Is(err, tiff.ErrInvalidTIFF) {
             return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)

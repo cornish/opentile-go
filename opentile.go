@@ -43,7 +43,7 @@ func resetRegistry() {
 // size is the total file size in bytes.
 func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 	cfg := newConfig(opts)
-	file, err := tiff.Open(r)
+	file, err := tiff.Open(r, size)
 	if err != nil {
 		if errors.Is(err, tiff.ErrInvalidTIFF) {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
@@ -89,10 +89,5 @@ type fileCloser struct {
 }
 
 func (fc *fileCloser) Close() error {
-	err1 := fc.Tiler.Close()
-	err2 := fc.f.Close()
-	if err1 != nil {
-		return err1
-	}
-	return err2
+	return errors.Join(fc.Tiler.Close(), fc.f.Close())
 }
