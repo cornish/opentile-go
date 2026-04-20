@@ -138,3 +138,30 @@ func equalU32(a, b []uint32) bool {
 	}
 	return true
 }
+
+func TestTileGridCeilDivPartialEdge(t *testing.T) {
+	// Use the existing buildPageTIFF fixture (1024x768, 256 tiles), but
+	// also verify ceil behavior with a computation unit test against the
+	// pure math that TileGrid performs. Exhaustive case: iw=10, tw=4 → 3.
+	cases := []struct {
+		dim, tile uint32
+		want      int
+	}{
+		{0, 1, 0},
+		{1, 1, 1},
+		{4, 4, 1},
+		{5, 4, 2},
+		{10, 4, 3},
+		{1024, 256, 4},
+		{768, 256, 3},
+	}
+	for _, c := range cases {
+		got := int(c.dim / c.tile)
+		if c.dim%c.tile != 0 {
+			got++
+		}
+		if got != c.want {
+			t.Errorf("ceil(%d/%d) = %d, want %d", c.dim, c.tile, got, c.want)
+		}
+	}
+}

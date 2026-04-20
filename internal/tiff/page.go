@@ -163,7 +163,13 @@ func (p *Page) TileGrid() (int, int, error) {
 	if !ok || tl == 0 {
 		return 0, 0, fmt.Errorf("tiff: TileLength missing or zero")
 	}
-	gx := int((iw + tw - 1) / tw)
-	gy := int((il + tl - 1) / tl)
+	gx := int(iw / tw)
+	if iw%tw != 0 {
+		gx++
+	}
+	gy := int(il / tl)
+	if il%tl != 0 {
+		gy++
+	}
 	return gx, gy, nil
 }
