@@ -65,3 +65,27 @@ func TestParseDescriptionRejectsGarbageMPP(t *testing.T) {
 		t.Fatal("expected error on garbage MPP")
 	}
 }
+
+func TestParseDescriptionTwoDigitYear(t *testing.T) {
+	// Real-world Aperio slides (CMU-1-Small-Region.svs, CMU-1.svs, JP2K-33003-1.svs)
+	// use two-digit years in Date field.
+	desc := "Aperio Image Library v11.2.1\n" +
+		"256x256 (16x16) JPEG/RGB|" +
+		"Date = 12/29/09|Time = 09:59:15"
+	md, err := parseDescription(desc)
+	if err != nil {
+		t.Fatalf("parseDescription: %v", err)
+	}
+	want := time.Date(2009, 12, 29, 9, 59, 15, 0, time.UTC)
+	if !md.AcquisitionDateTime.Equal(want) {
+		t.Errorf("AcquisitionDateTime: got %v, want %v", md.AcquisitionDateTime, want)
+	}
+}
+
+func TestParseDescriptionRejectsMalformedDate(t *testing.T) {
+	desc := "Aperio Image Library v11.2.1\n1x1 (1x1)|Date = garbage|Time = 09:59:15"
+	_, err := parseDescription(desc)
+	if err == nil {
+		t.Fatal("expected error on malformed date")
+	}
+}

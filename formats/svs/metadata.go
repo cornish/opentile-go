@@ -79,13 +79,33 @@ func parseDescription(desc string) (Metadata, error) {
 	date, hasDate := kv["Date"]
 	tm, hasTime := kv["Time"]
 	if hasDate && hasTime {
-		parsed, err := time.Parse("01/02/2006 15:04:05", date+" "+tm)
+		parsed, err := parseAperioDateTime(date, tm)
 		if err != nil {
 			return md, fmt.Errorf("svs: parse Date/Time %q %q: %w", date, tm, err)
 		}
 		md.AcquisitionDateTime = parsed
 	}
 	return md, nil
+}
+
+// parseAperioDateTime accepts the Aperio MM/DD/YY or MM/DD/YYYY + HH:MM:SS
+// formats. Two-digit years are what real-world slides emit as of v11.2.1;
+// four-digit years are supported for forward compatibility.
+func parseAperioDateTime(date, tm string) (time.Time, error) {
+	layouts := []string{
+		"01/02/06 15:04:05",   // two-digit year (the observed real-world form)
+		"01/02/2006 15:04:05", // four-digit year (forward-compatible)
+	}
+	input := date + " " + tm
+	var lastErr error
+	for _, layout := range layouts {
+		t, err := time.Parse(layout, input)
+		if err == nil {
+			return t, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, lastErr
 }
 
 // splitKV parses "k1 = v1|k2 = v2|..." into a map. Whitespace around keys and
