@@ -65,6 +65,9 @@ func (e Entry) decodeInline(b *byteReader, cell []byte) ([]uint32, error) {
 // decodeExternal decodes values stored at e.valueOrOffset in the underlying file.
 func (e Entry) decodeExternal(b *byteReader) ([]uint32, error) {
 	n := int64(e.Count) * int64(e.Type.Size())
+	if n > int64(^uint(0)>>1) { // would truncate on int conversion
+		return nil, fmt.Errorf("tiff: tag %d: value size %d exceeds platform int range", e.Tag, n)
+	}
 	buf, err := b.bytes(int64(e.valueOrOffset), int(n))
 	if err != nil {
 		return nil, fmt.Errorf("tiff: tag %d: %w", e.Tag, err)
@@ -85,6 +88,10 @@ func (e Entry) Values(b *byteReader) ([]uint32, error) {
 // into uint32 values. Rational and unknown types return raw byte groups as
 // uint32s (use dedicated helpers for those cases).
 func (e Entry) decodeBuffer(b *byteReader, buf []byte) ([]uint32, error) {
+	need := int64(e.Count) * int64(e.Type.Size())
+	if int64(len(buf)) < need {
+		return nil, fmt.Errorf("tiff: tag %d: buffer %d < needed %d bytes", e.Tag, len(buf), need)
+	}
 	out := make([]uint32, 0, e.Count)
 	switch e.Type {
 	case DTByte, DTUndefined:

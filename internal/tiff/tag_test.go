@@ -76,3 +76,28 @@ func TestDecodeASCII(t *testing.T) {
 		t.Fatalf("got %q, want %q", s, "Aperio")
 	}
 }
+
+func TestDecodeBufferShortBuffer(t *testing.T) {
+	// Entry claims 3 DTShort values (6 bytes) but buffer is only 4.
+	// Without the bounds guard, this would panic in binary.ByteOrder.Uint16.
+	r := bytes.NewReader(make([]byte, 4))
+	b := newByteReader(r, true)
+	entry := Entry{Tag: 256, Type: DTShort, Count: 3}
+	_, err := entry.decodeBuffer(b, make([]byte, 4))
+	if err == nil {
+		t.Fatal("expected error for buffer shorter than Count*Size")
+	}
+}
+
+func TestDecodeInlineRejectsOversize(t *testing.T) {
+	// DTLong Count=2 needs 8 bytes but inline cell is 4; fitsInline false,
+	// and decodeInline must reject rather than pass through.
+	data := []byte{0, 0, 0, 0}
+	r := bytes.NewReader(data)
+	b := newByteReader(r, true)
+	entry := Entry{Tag: 324, Type: DTLong, Count: 2}
+	_, err := entry.decodeInline(b, data)
+	if err == nil {
+		t.Fatal("expected decodeInline to reject oversize value")
+	}
+}
