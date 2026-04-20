@@ -49,3 +49,19 @@ func TestParseDescriptionRejectsNonAperio(t *testing.T) {
 		t.Fatal("expected error on non-Aperio description")
 	}
 }
+
+func TestParseDescriptionRejectsGarbageAppMag(t *testing.T) {
+	desc := "Aperio Image Library v1.0\n1x1 (1x1)|AppMag = notanumber"
+	_, err := parseDescription(desc)
+	if err == nil {
+		t.Fatal("expected error on garbage AppMag")
+	}
+}
+
+func TestParseDescriptionRejectsGarbageMPP(t *testing.T) {
+	desc := "Aperio Image Library v1.0\n1x1 (1x1)|MPP = not_a_float"
+	_, err := parseDescription(desc)
+	if err == nil {
+		t.Fatal("expected error on garbage MPP")
+	}
+}

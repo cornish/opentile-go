@@ -2520,10 +2520,18 @@ func parseDescription(desc string) (Metadata, error) {
     kv := splitKV(body)
 
     if v, ok := kv["AppMag"]; ok {
-        md.Magnification, _ = strconv.ParseFloat(v, 64)
+        parsed, err := strconv.ParseFloat(v, 64)
+        if err != nil {
+            return md, fmt.Errorf("svs: parse AppMag %q: %w", v, err)
+        }
+        md.Magnification = parsed
     }
     if v, ok := kv["MPP"]; ok {
-        md.MPP, _ = strconv.ParseFloat(v, 64)
+        parsed, err := strconv.ParseFloat(v, 64)
+        if err != nil {
+            return md, fmt.Errorf("svs: parse MPP %q: %w", v, err)
+        }
+        md.MPP = parsed
     }
     if v, ok := kv["ScanScope ID"]; ok {
         md.ScannerSerial = v
@@ -2540,7 +2548,7 @@ func parseDescription(desc string) (Metadata, error) {
         if err != nil {
             return md, fmt.Errorf("svs: parse Date/Time %q %q: %w", date, tm, err)
         }
-        md.AcquisitionDateTime = parsed.UTC()
+        md.AcquisitionDateTime = parsed
     }
     return md, nil
 }

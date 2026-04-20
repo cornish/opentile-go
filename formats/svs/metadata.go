@@ -13,6 +13,11 @@ import (
 // Metadata is the SVS-specific slide metadata. It embeds opentile.Metadata so
 // type-asserting the return of opentile.Tiler.Metadata() exposes the Aperio
 // extras (MPP, software line, filename).
+//
+// AcquisitionDateTime on the embedded opentile.Metadata carries the Aperio
+// Date+Time fields parsed verbatim, with no timezone conversion; Aperio does
+// not record a timezone and callers should treat the value as local wall-clock
+// time from the scanner.
 type Metadata struct {
 	opentile.Metadata
 	MPP          float64 // microns per pixel
@@ -46,10 +51,18 @@ func parseDescription(desc string) (Metadata, error) {
 	kv := splitKV(body)
 
 	if v, ok := kv["AppMag"]; ok {
-		md.Magnification, _ = strconv.ParseFloat(v, 64)
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return md, fmt.Errorf("svs: parse AppMag %q: %w", v, err)
+		}
+		md.Magnification = parsed
 	}
 	if v, ok := kv["MPP"]; ok {
-		md.MPP, _ = strconv.ParseFloat(v, 64)
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return md, fmt.Errorf("svs: parse MPP %q: %w", v, err)
+		}
+		md.MPP = parsed
 	}
 	if v, ok := kv["ScanScope ID"]; ok {
 		md.ScannerSerial = v
@@ -66,7 +79,7 @@ func parseDescription(desc string) (Metadata, error) {
 		if err != nil {
 			return md, fmt.Errorf("svs: parse Date/Time %q %q: %w", date, tm, err)
 		}
-		md.AcquisitionDateTime = parsed.UTC()
+		md.AcquisitionDateTime = parsed
 	}
 	return md, nil
 }
