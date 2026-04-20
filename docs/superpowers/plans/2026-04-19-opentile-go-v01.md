@@ -1865,8 +1865,8 @@ package opentile
 import "time"
 
 // Metadata is the common subset of slide metadata surfaced across all formats.
-// Format packages embed this struct to add format-specific fields exposed via
-// type assertion on Tiler.Metadata().
+// Format packages embed this struct to add format-specific fields; consumers
+// access those extras via a per-format accessor (e.g. svs.MetadataOf(tiler)).
 type Metadata struct {
     Magnification       float64   // 0 if unknown
     ScannerManufacturer string
@@ -2485,8 +2485,12 @@ import (
 )
 
 // Metadata is the SVS-specific slide metadata. It embeds opentile.Metadata so
-// type-asserting the return of opentile.Tiler.Metadata() exposes the Aperio
-// extras (MPP, software line, filename).
+// the common fields (magnification, scanner identity, acquisition datetime)
+// are populated via the embedded struct; Aperio-specific fields (MPP,
+// SoftwareLine, Filename) live on the outer struct.
+//
+// Consumers read the common fields via opentile.Tiler.Metadata() as usual;
+// to read the Aperio-specific fields, pass the Tiler to svs.MetadataOf.
 type Metadata struct {
     opentile.Metadata
     MPP          float64 // microns per pixel
@@ -2899,6 +2903,24 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
         return nil, opentile.ErrLevelOutOfRange
     }
     return t.levels[i], nil
+}
+
+// MetadataOf returns the SVS-specific metadata if t is an SVS Tiler, otherwise
+// (nil, false). Use this to read the Aperio extras (MPP, SoftwareLine,
+// Filename) that are not visible through the common opentile.Metadata struct.
+//
+//	if md, ok := svs.MetadataOf(tiler); ok {
+//	    fmt.Println(md.MPP, md.SoftwareLine)
+//	}
+func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
+    svsT, ok := t.(*tiler)
+    if !ok {
+        return nil, false
+    }
+    // Return a pointer into the tiler's stored metadata. t.md is populated
+    // once at Open time and never mutated; the returned pointer is safe to
+    // hold for the lifetime of the Tiler.
+    return &svsT.md, true
 }
 ```
 

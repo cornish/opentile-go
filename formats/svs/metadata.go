@@ -11,8 +11,12 @@ import (
 )
 
 // Metadata is the SVS-specific slide metadata. It embeds opentile.Metadata so
-// type-asserting the return of opentile.Tiler.Metadata() exposes the Aperio
-// extras (MPP, software line, filename).
+// the common fields (magnification, scanner identity, acquisition datetime)
+// are populated via the embedded struct; Aperio-specific fields (MPP,
+// SoftwareLine, Filename) live on the outer struct.
+//
+// Consumers read the common fields via opentile.Tiler.Metadata() as usual;
+// to read the Aperio-specific fields, pass the Tiler to svs.MetadataOf.
 //
 // AcquisitionDateTime on the embedded opentile.Metadata carries the Aperio
 // Date+Time fields parsed verbatim, with no timezone conversion; Aperio does

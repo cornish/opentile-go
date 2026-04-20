@@ -170,7 +170,7 @@ type Metadata struct {
 }
 ```
 
-Format-specific metadata (e.g., `svs.Metadata` with Aperio-proprietary fields) is exposed via type assertion on the value returned by `Tiler.Metadata()` — the `Metadata` struct above carries the common fields, and format packages embed it.
+Format-specific metadata (e.g., `svs.Metadata` with Aperio-proprietary fields) is exposed via a per-format accessor function (`svs.MetadataOf(tiler)`). The common `Metadata` struct carries the cross-format fields and is returned by `Tiler.Metadata()`; format packages embed it in their own metadata struct and provide a typed `XxxOf(Tiler) (*XxxMetadata, bool)` accessor so consumers can import the format package directly when they need the extras. This avoids making `Metadata` an interface (and losing ergonomic field access) while still making format-specific data reachable from an `opentile.Tiler` handle.
 
 ### Design notes on the public surface
 

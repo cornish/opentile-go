@@ -204,3 +204,94 @@ func TestSvsLevelTileReader(t *testing.T) {
 		t.Fatalf("TileReader(1,1) bytes mismatch")
 	}
 }
+
+// truncatingReaderAt wraps an io.ReaderAt and returns (n, io.EOF) when a read
+// lands exactly at the reader's end, even if all requested bytes were delivered.
+// Mirrors bytes.Reader.ReadAt semantics on boundary reads.
+type truncatingReaderAt struct {
+	r    io.ReaderAt
+	size int64
+}
+
+func (t *truncatingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := t.r.ReadAt(p, off)
+	if err == nil && off+int64(n) == t.size {
+		return n, io.EOF
+	}
+	return n, err
+}
+
+func TestSvsLevelTileBenignEOF(t *testing.T) {
+	// Use a 2×1 grid so TileOffsets/TileByteCounts have count=2 and are stored
+	// externally (2*4=8 > 4 bytes inline limit). The second tile (x=1,y=0)
+	// occupies the very last bytes of the file, so the truncatingReaderAt wrapper
+	// surfaces (n=len(buf), io.EOF) on that read, exercising the benign-EOF path.
+	data, tiles := buildSVSTIFF(t, 16, 16, 2, 1, "")
+	// Wrap the reader so the final boundary read surfaces (n, io.EOF).
+	base := bytes.NewReader(data)
+	trunc := &truncatingReaderAt{r: base, size: int64(len(data))}
+	f, err := tiff.Open(trunc, int64(len(data)))
+	if err != nil {
+		t.Fatalf("tiff.Open: %v", err)
+	}
+	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer tiler.Close()
+	lvl, _ := tiler.Level(0)
+	// Tile (1,0) is the last tile and lands exactly at end-of-file.
+	got, err := lvl.Tile(1, 0)
+	if err != nil {
+		t.Fatalf("Tile: unexpected error (likely benign-EOF bug): %v", err)
+	}
+	if !bytes.Equal(got, tiles[1]) {
+		t.Fatal("tile bytes mismatch on benign-EOF path")
+	}
+}
+
+func TestMetadataOfExtractsAperioExtras(t *testing.T) {
+	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "AppMag = 40|MPP = 0.25|Filename = slide-x")
+	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer tiler.Close()
+
+	md, ok := MetadataOf(tiler)
+	if !ok {
+		t.Fatal("MetadataOf: expected ok=true for SVS tiler")
+	}
+	if md.MPP != 0.25 {
+		t.Errorf("MPP: got %v, want 0.25", md.MPP)
+	}
+	if md.Filename != "slide-x" {
+		t.Errorf("Filename: got %q, want slide-x", md.Filename)
+	}
+	if md.Magnification != 40 {
+		t.Errorf("Magnification: got %v, want 40", md.Magnification)
+	}
+}
+
+func TestMetadataOfRejectsNonSVSTiler(t *testing.T) {
+	// An arbitrary opentile.Tiler that is not *svs.tiler — use a zero-value
+	// fakeTiler implementation.
+	fake := &fakeNonSVSTiler{}
+	_, ok := MetadataOf(fake)
+	if ok {
+		t.Fatal("MetadataOf: expected ok=false for non-SVS Tiler")
+	}
+}
+
+type fakeNonSVSTiler struct{}
+
+func (f *fakeNonSVSTiler) Format() opentile.Format                { return opentile.Format("fake") }
+func (f *fakeNonSVSTiler) Levels() []opentile.Level               { return nil }
+func (f *fakeNonSVSTiler) Level(i int) (opentile.Level, error)    { return nil, opentile.ErrLevelOutOfRange }
+func (f *fakeNonSVSTiler) Associated() []opentile.AssociatedImage { return nil }
+func (f *fakeNonSVSTiler) Metadata() opentile.Metadata            { return opentile.Metadata{} }
+func (f *fakeNonSVSTiler) ICCProfile() []byte                     { return nil }
+func (f *fakeNonSVSTiler) Close() error                           { return nil }

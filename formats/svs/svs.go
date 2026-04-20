@@ -108,3 +108,21 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	}
 	return t.levels[i], nil
 }
+
+// MetadataOf returns the SVS-specific metadata if t is an SVS Tiler, otherwise
+// (nil, false). Use this to read the Aperio extras (MPP, SoftwareLine,
+// Filename) that are not visible through the common opentile.Metadata struct.
+//
+//	if md, ok := svs.MetadataOf(tiler); ok {
+//	    fmt.Println(md.MPP, md.SoftwareLine)
+//	}
+func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
+	svsT, ok := t.(*tiler)
+	if !ok {
+		return nil, false
+	}
+	// Return a pointer into the tiler's stored metadata. t.md is populated
+	// once at Open time and never mutated; the returned pointer is safe to
+	// hold for the lifetime of the Tiler.
+	return &svsT.md, true
+}
