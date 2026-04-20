@@ -6,6 +6,7 @@ package tiff
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -28,7 +29,7 @@ func newByteReader(r io.ReaderAt, littleEndian bool) *byteReader {
 func (b *byteReader) read(offset int64, n int) ([]byte, error) {
 	buf := make([]byte, n)
 	got, err := b.r.ReadAt(buf, offset)
-	if err != nil && !(err == io.EOF && got == n) {
+	if err != nil && !(errors.Is(err, io.EOF) && got == n) {
 		return nil, fmt.Errorf("tiff: read %d bytes at %d: %w", n, offset, err)
 	}
 	if got != n {
