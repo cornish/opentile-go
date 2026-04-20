@@ -1,0 +1,126 @@
+package tests_test
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	opentile "github.com/tcornish/opentile-go"
+	_ "github.com/tcornish/opentile-go/formats/all"
+	"github.com/tcornish/opentile-go/tests"
+)
+
+// slideCandidates lists SVS slides this integration suite knows about.
+// Each is tested only if both the on-disk SVS and the committed fixture
+// JSON are present; otherwise the slide is skipped.
+var slideCandidates = []string{
+	"CMU-1-Small-Region.svs",
+	"CMU-1.svs",
+	"JP2K-33003-1.svs",
+}
+
+// TestSVSParity reads each candidate slide, walks every (level, x, y), and
+// compares against the committed fixture. Slides without a fixture or without
+// an on-disk file are skipped — this lets developers iterate on a subset of
+// slides without hunting for failures.
+func TestSVSParity(t *testing.T) {
+	dir := tests.TestdataDir()
+	if dir == "" {
+		t.Skip("OPENTILE_TESTDIR not set; skipping integration test")
+	}
+	any := false
+	for _, name := range slideCandidates {
+		t.Run(name, func(t *testing.T) {
+			slide := filepath.Join(dir, name)
+			fixturePath := filepath.Join("fixtures", fixtureJSONFor(name))
+			if _, err := os.Stat(slide); err != nil {
+				t.Skipf("slide not present at %s", slide)
+			}
+			if _, err := os.Stat(fixturePath); err != nil {
+				t.Skipf("fixture not present at %s (generate with -generate)", fixturePath)
+			}
+			any = true
+			checkSlideAgainstFixture(t, slide, fixturePath)
+		})
+	}
+	if !any {
+		t.Log("no slide+fixture pairs found; run the generator to create fixtures")
+	}
+}
+
+func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
+	t.Helper()
+	fix, err := tests.LoadFixture(fixturePath)
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	tiler, err := opentile.OpenFile(slide)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer tiler.Close()
+
+	if string(tiler.Format()) != fix.Format {
+		t.Errorf("Format: got %q, want %q", tiler.Format(), fix.Format)
+	}
+	levels := tiler.Levels()
+	if len(levels) != len(fix.Levels) {
+		t.Fatalf("level count: got %d, want %d", len(levels), len(fix.Levels))
+	}
+	for i, lvl := range levels {
+		exp := fix.Levels[i]
+		if lvl.Size().W != exp.Size[0] || lvl.Size().H != exp.Size[1] {
+			t.Errorf("level %d size: got %v, want %v", i, lvl.Size(), exp.Size)
+		}
+		if lvl.TileSize().W != exp.TileSize[0] || lvl.TileSize().H != exp.TileSize[1] {
+			t.Errorf("level %d tile size: got %v, want %v", i, lvl.TileSize(), exp.TileSize)
+		}
+		if lvl.Grid().W != exp.Grid[0] || lvl.Grid().H != exp.Grid[1] {
+			t.Errorf("level %d grid: got %v, want %v", i, lvl.Grid(), exp.Grid)
+		}
+		if lvl.Compression().String() != exp.Compression {
+			t.Errorf("level %d compression: got %q, want %q", i, lvl.Compression(), exp.Compression)
+		}
+		// Tile hashes
+		for y := 0; y < lvl.Grid().H; y++ {
+			for x := 0; x < lvl.Grid().W; x++ {
+				b, err := lvl.Tile(x, y)
+				if err != nil {
+					t.Errorf("Tile(%d,%d) level %d: %v", x, y, i, err)
+					continue
+				}
+				sum := sha256.Sum256(b)
+				got := hex.EncodeToString(sum[:])
+				key := tests.TileKey(i, x, y)
+				want, ok := fix.TileSHA256[key]
+				if !ok {
+					t.Errorf("fixture missing key %s", key)
+					continue
+				}
+				if got != want {
+					t.Errorf("tile %s hash: got %s, want %s", key, got, want)
+				}
+			}
+		}
+	}
+
+	md := tiler.Metadata()
+	if md.Magnification != fix.Metadata.Magnification {
+		t.Errorf("magnification: got %v, want %v", md.Magnification, fix.Metadata.Magnification)
+	}
+}
+
+// fixtureJSONFor returns the fixture filename for a given slide filename by
+// swapping the .svs extension for .json.
+func fixtureJSONFor(slideFilename string) string {
+	base := filepath.Base(slideFilename)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	return stem + ".json"
+}
+
+// Silence the imports when the test file is compiled with no tests run.
+var _ = fmt.Sprintf
