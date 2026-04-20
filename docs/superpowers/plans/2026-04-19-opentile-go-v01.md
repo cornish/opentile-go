@@ -2854,19 +2854,26 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
         return nil, err
     }
 
-    // For v0.1, every page is treated as a Level. Thumbnail/label/overview
-    // classification is a v0.3 feature.
+    // Pyramid levels are tiled; non-tiled pages (thumbnail, label, macro)
+    // are the substrate for associated-image support (v0.3) and are skipped
+    // here. Level indices are contiguous (0..N-1) in pyramid order and do
+    // not correspond to physical page indices in the TIFF.
     levels := make([]opentile.Level, 0, len(pages))
     baseSize, err := pageSize(basePage)
     if err != nil {
         return nil, err
     }
-    for i, p := range pages {
-        lvl, err := newTiledImage(i, p, baseSize, md.MPP, file.ReaderAt(), cfg)
+    levelIdx := 0
+    for pageIdx, p := range pages {
+        if _, ok := p.TileWidth(); !ok {
+            continue // non-tiled page; defer to v0.3 associated-image support
+        }
+        lvl, err := newTiledImage(levelIdx, p, baseSize, md.MPP, file.ReaderAt(), cfg)
         if err != nil {
-            return nil, fmt.Errorf("svs: level %d: %w", i, err)
+            return nil, fmt.Errorf("svs: page %d (level %d): %w", pageIdx, levelIdx, err)
         }
         levels = append(levels, lvl)
+        levelIdx++
     }
     icc, _ := basePage.ICCProfile()
     return &tiler{md: md, levels: levels, icc: icc}, nil

@@ -295,3 +295,140 @@ func (f *fakeNonSVSTiler) Associated() []opentile.AssociatedImage { return nil }
 func (f *fakeNonSVSTiler) Metadata() opentile.Metadata            { return opentile.Metadata{} }
 func (f *fakeNonSVSTiler) ICCProfile() []byte                     { return nil }
 func (f *fakeNonSVSTiler) Close() error                           { return nil }
+
+// buildSVSTIFFWithStrippedPage builds a 2-page SVS-like TIFF where page 0 is
+// tiled (a normal level) and page 1 is non-tiled (simulates a thumbnail /
+// label / macro). The non-tiled page has ImageWidth/Length/Compression but
+// omits TileWidth/TileLength.
+func buildSVSTIFFWithStrippedPage(t *testing.T) (data []byte, tiles [][]byte) {
+	t.Helper()
+	// Build a 1-tile tiled page's worth of synthetic tile data first.
+	nTiles := 1
+	tiles = make([][]byte, nTiles)
+	for i := 0; i < nTiles; i++ {
+		buf := make([]byte, 16)
+		for j := range buf {
+			buf[j] = byte(i*3 + j)
+		}
+		tiles[i] = buf
+	}
+
+	desc := []byte("Aperio Test\x00")
+	stripBytes := []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22}
+
+	// Layout:
+	// Offset 0-7:    TIFF Header (II 42 0x08)
+	// Offset 8-121:  Page 0 IFD (9 entries, size 2+9*12+4=114)
+	// Offset 122-199: Page 1 IFD (6 entries, size 2+6*12+4=78)
+	// Offset 200+:   External data (description, TileByteCounts, TileOffsets, tiles, strips)
+
+	page0IFDOff := uint32(8)
+	page1IFDOff := page0IFDOff + 114 // 122
+	extDataOff := page1IFDOff + 78   // 200
+
+	descOff := extDataOff
+	descEnd := descOff + uint32(len(desc))
+
+	tileBCOff := descEnd
+	tileBCEnd := tileBCOff + 4*uint32(nTiles)
+
+	tileOffOff := tileBCEnd
+	tileOffEnd := tileOffOff + 4*uint32(nTiles)
+
+	tileDataOff := tileOffEnd
+	tileDataEnd := tileDataOff
+	tileOffsets := make([]uint32, nTiles)
+	for i := range tiles {
+		tileOffsets[i] = tileDataOff + uint32(i)*uint32(len(tiles[i]))
+		tileDataEnd = tileOffsets[i] + uint32(len(tiles[i]))
+	}
+
+	stripOff := tileDataEnd
+
+	buf := new(bytes.Buffer)
+	w16 := func(v uint16) { buf.WriteByte(byte(v)); buf.WriteByte(byte(v >> 8)) }
+	w32 := func(v uint32) {
+		buf.WriteByte(byte(v))
+		buf.WriteByte(byte(v >> 8))
+		buf.WriteByte(byte(v >> 16))
+		buf.WriteByte(byte(v >> 24))
+	}
+	entry := func(tag, typ uint16, count, voc uint32) {
+		w16(tag); w16(typ); w32(count); w32(voc)
+	}
+
+	// TIFF Header
+	buf.Write([]byte{'I', 'I', 42, 0})
+	w32(page0IFDOff)
+
+	// Page 0 IFD (tiled)
+	w16(9)
+	entry(256, 3, 1, 16)                         // ImageWidth = 16
+	entry(257, 3, 1, 16)                         // ImageLength = 16
+	entry(259, 3, 1, 7)                          // Compression = JPEG
+	entry(262, 3, 1, 6)                          // Photometric = YCbCr
+	entry(270, 2, uint32(len(desc)), descOff)    // ImageDescription
+	entry(322, 3, 1, 16)                         // TileWidth = 16
+	entry(323, 3, 1, 16)                         // TileLength = 16
+	// For nTiles=1: TileOffsets and TileByteCounts values fit inline (4 bytes each)
+	entry(324, 4, 1, tileOffsets[0])             // TileOffsets: single value inline
+	entry(325, 4, 1, uint32(len(tiles[0])))      // TileByteCounts: single value inline
+	w32(page1IFDOff)                             // offset to page 1 IFD
+
+	// Page 1 IFD (stripped—no TileWidth/TileLength)
+	w16(6)
+	entry(256, 3, 1, 32)                         // ImageWidth = 32
+	entry(257, 3, 1, 16)                         // ImageLength = 16
+	entry(259, 3, 1, 7)                          // Compression = JPEG
+	entry(262, 3, 1, 6)                          // Photometric = YCbCr
+	entry(273, 4, 1, stripOff)                   // StripOffsets
+	entry(279, 4, 1, uint32(len(stripBytes)))    // StripByteCounts
+	w32(0)                                       // next IFD = 0
+
+	// External data region
+	buf.Write(desc)
+	for _, tb := range tiles {
+		w32(uint32(len(tb)))
+	}
+	for _, o := range tileOffsets {
+		w32(o)
+	}
+	for _, tb := range tiles {
+		buf.Write(tb)
+	}
+	buf.Write(stripBytes)
+
+	return buf.Bytes(), tiles
+}
+
+func TestSvsTilerSkipsNonTiledPages(t *testing.T) {
+	data, tiles := buildSVSTIFFWithStrippedPage(t)
+	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("tiff.Open: %v", err)
+	}
+	if len(f.Pages()) != 2 {
+		t.Fatalf("expected 2 TIFF pages, got %d", len(f.Pages()))
+	}
+	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("Open: non-tiled page should not cause Open to fail: %v", err)
+	}
+	defer tiler.Close()
+	levels := tiler.Levels()
+	if len(levels) != 1 {
+		t.Fatalf("levels: got %d, want 1 (non-tiled page should be skipped)", len(levels))
+	}
+	lvl := levels[0]
+	if lvl.Index() != 0 {
+		t.Errorf("level Index: got %d, want 0 (contiguous level indexing)", lvl.Index())
+	}
+	got, err := lvl.Tile(0, 0)
+	if err != nil {
+		t.Fatalf("Tile: %v", err)
+	}
+	if !bytes.Equal(got, tiles[0]) {
+		t.Fatal("tile bytes mismatch on level 0 of mixed-page TIFF")
+	}
+}
