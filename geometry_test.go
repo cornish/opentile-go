@@ -37,8 +37,11 @@ func TestRegionContains(t *testing.T) {
 	}{
 		{Point{X: 5, Y: 5}, true},
 		{Point{X: 14, Y: 14}, true},
-		{Point{X: 15, Y: 14}, false},
-		{Point{X: 4, Y: 5}, false},
+		{Point{X: 15, Y: 14}, false}, // exclusive far X
+		{Point{X: 14, Y: 15}, false}, // exclusive far Y
+		{Point{X: 15, Y: 15}, false}, // both far edges
+		{Point{X: 4, Y: 5}, false},   // below-origin X
+		{Point{X: 5, Y: 4}, false},   // below-origin Y
 	}
 	for _, tt := range tests {
 		if got := r.Contains(tt.p); got != tt.want {
