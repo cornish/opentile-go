@@ -9,3 +9,7 @@
 
 # Local test data
 /testdata/slides/
+/sample_files/
+
+# macOS
+.DS_Store

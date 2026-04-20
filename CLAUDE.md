@@ -26,21 +26,27 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 - `io.ReaderAt` + `int64` size is the core input (stdlib `*os.File` satisfies concurrent-use semantics)
 - Public tile methods: `Level.Tile(x, y int)` returns raw compressed bytes; `Level.TileReader(x, y)` streams via `io.SectionReader`; `Level.Tiles(ctx)` is serial row-major via `iter.Seq2`
 
+## Sample slides
+
+Local slides live in `/sample_files/` (gitignored). v0.1 uses:
+- `sample_files/svs/CMU-1-Small-Region.svs` (1.9 MB, JPEG) — primary fixture
+- `sample_files/svs/CMU-1.svs` (177 MB, JPEG) — full-slide fixture
+- `sample_files/svs/JP2K-33003-1.svs` (63 MB, JPEG 2000 passthrough) — proves JP2K path works without a codec
+- `sample_files/ndpi/*.ndpi` — reserved for v0.2
+
 ## Commands
 
 ```sh
 # unit + existing tests
 go test ./... -race
 
-# integration test against a real slide (requires OPENTILE_TESTDIR)
-OPENTILE_TESTDIR="$PWD/testdata/slides" go test ./tests/... -v
+# integration test against real slides (requires OPENTILE_TESTDIR pointing at a
+# directory containing one or more of the committed fixture slides)
+OPENTILE_TESTDIR="$PWD/sample_files/svs" go test ./tests/... -v
 
-# regenerate parity fixtures from a real slide
-OPENTILE_TESTDIR="$PWD/testdata/slides" \
+# regenerate parity fixtures from real slides
+OPENTILE_TESTDIR="$PWD/sample_files/svs" \
   go test ./tests -tags generate -run TestGenerateFixtures -generate -v
-
-# download the reference slide
-OPENTILE_TESTDIR="$PWD/testdata/slides" go run ./tests/download -slide CMU-1-Small-Region
 ```
 
 ## Execution mode
