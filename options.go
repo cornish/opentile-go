@@ -16,6 +16,7 @@ type Option func(*config)
 // config is the aggregate of all Option values applied at Open time.
 type config struct {
 	tileSize    Size
+	hasTileSize bool
 	corruptTile CorruptTilePolicy
 }
 
@@ -34,7 +35,10 @@ func newConfig(opts []Option) *config {
 // default is used (SVS: native tile size from the TIFF). Required for formats
 // that have no native rectangular tiles (NDPI, v0.2+).
 func WithTileSize(w, h int) Option {
-	return func(c *config) { c.tileSize = Size{W: w, H: h} }
+	return func(c *config) {
+		c.tileSize = Size{W: w, H: h}
+		c.hasTileSize = true
+	}
 }
 
 // WithCorruptTilePolicy sets the behavior for corrupt-edge tiles. v0.1 supports
@@ -50,15 +54,21 @@ type Config struct {
 	c *config
 }
 
-// TileSize returns the requested output tile size. A zero Size means "format
-// default".
-func (c *Config) TileSize() Size { return c.c.tileSize }
+// TileSize returns the requested output tile size and whether the caller set
+// one. ok=false means "use format default"; callers must not treat the zero
+// Size as equivalent to "default" because (Size{}, true) is distinct from
+// (Size{}, false) — the former asserts an explicit 0x0 (which format packages
+// should reject as malformed input).
+func (c *Config) TileSize() (Size, bool) { return c.c.tileSize, c.c.hasTileSize }
 
 // CorruptTilePolicy returns the configured policy.
 func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile }
 
 // NewTestConfig constructs a Config for use in tests. It is not intended for
-// production callers, which should go through opentile.Open.
+// production callers, which should go through opentile.Open. A non-zero
+// tileSize is treated as explicitly set (TileSize ok=true); a zero Size is
+// treated as "use format default" (TileSize ok=false).
 func NewTestConfig(tileSize Size, policy CorruptTilePolicy) *Config {
-	return &Config{c: &config{tileSize: tileSize, corruptTile: policy}}
+	has := tileSize.W != 0 || tileSize.H != 0
+	return &Config{c: &config{tileSize: tileSize, hasTileSize: has, corruptTile: policy}}
 }
