@@ -42,3 +42,23 @@ func WithTileSize(w, h int) Option {
 func WithCorruptTilePolicy(p CorruptTilePolicy) Option {
 	return func(c *config) { c.corruptTile = p }
 }
+
+// Config is an opaque, read-only view of the configuration passed to a
+// FormatFactory. Format packages import opentile.Config rather than the
+// unexported config struct.
+type Config struct {
+	c *config
+}
+
+// TileSize returns the requested output tile size. A zero Size means "format
+// default".
+func (c *Config) TileSize() Size { return c.c.tileSize }
+
+// CorruptTilePolicy returns the configured policy.
+func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile }
+
+// NewTestConfig constructs a Config for use in tests. It is not intended for
+// production callers, which should go through opentile.Open.
+func NewTestConfig(tileSize Size, policy CorruptTilePolicy) *Config {
+	return &Config{c: &config{tileSize: tileSize, corruptTile: policy}}
+}

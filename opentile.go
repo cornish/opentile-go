@@ -16,7 +16,7 @@ import (
 type FormatFactory interface {
 	Format() Format
 	Supports(file *tiff.File) bool
-	Open(file *tiff.File, cfg *config) (Tiler, error)
+	Open(file *tiff.File, cfg *Config) (Tiler, error)
 }
 
 var (
@@ -56,7 +56,7 @@ func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 
 	for _, f := range factories {
 		if f.Supports(file) {
-			return f.Open(file, cfg)
+			return f.Open(file, &Config{c: cfg})
 		}
 	}
 	return nil, ErrUnsupportedFormat

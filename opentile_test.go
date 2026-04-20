@@ -20,7 +20,7 @@ func (f *fakeFactory) Supports(file *tiff.File) bool {
 	desc, _ := file.Pages()[0].ImageDescription()
 	return len(desc) >= 4 && desc[:4] == "FAKE"
 }
-func (f *fakeFactory) Open(file *tiff.File, cfg *config) (Tiler, error) {
+func (f *fakeFactory) Open(file *tiff.File, cfg *Config) (Tiler, error) {
 	f.openCalled = true
 	return &noopTiler{format: Format("fake")}, nil
 }
