@@ -14,6 +14,7 @@ import (
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
+
 // aperioPrefix is the literal prefix on the ImageDescription tag of Aperio SVS
 // files. Upstream opentile and openslide both key their detection off this.
 const aperioPrefix = "Aperio"
@@ -42,7 +43,68 @@ func (f *Factory) Supports(file *tiff.File) bool {
 }
 
 // Open constructs an SVS Tiler from a parsed TIFF file.
-// (Implementation completed in Task 16.)
 func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, error) {
-	return nil, fmt.Errorf("svs.Open: not yet implemented")
+	pages := file.Pages()
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("svs: file has no pages")
+	}
+	basePage := pages[0]
+	desc, ok := basePage.ImageDescription()
+	if !ok {
+		return nil, fmt.Errorf("svs: base page missing ImageDescription")
+	}
+	md, err := parseDescription(desc)
+	if err != nil {
+		return nil, err
+	}
+
+	// For v0.1, every page is treated as a Level. Thumbnail/label/overview
+	// classification is a v0.3 feature.
+	levels := make([]opentile.Level, 0, len(pages))
+	baseSize, err := pageSize(basePage)
+	if err != nil {
+		return nil, err
+	}
+	for i, p := range pages {
+		lvl, err := newTiledImage(i, p, baseSize, md.MPP, file.ReaderAt(), cfg)
+		if err != nil {
+			return nil, fmt.Errorf("svs: level %d: %w", i, err)
+		}
+		levels = append(levels, lvl)
+	}
+	icc, _ := basePage.ICCProfile()
+	return &tiler{md: md, levels: levels, icc: icc}, nil
+}
+
+// pageSize returns the (ImageWidth, ImageLength) as opentile.Size.
+func pageSize(p *tiff.Page) (opentile.Size, error) {
+	iw, ok := p.ImageWidth()
+	if !ok {
+		return opentile.Size{}, fmt.Errorf("ImageWidth missing")
+	}
+	il, ok := p.ImageLength()
+	if !ok {
+		return opentile.Size{}, fmt.Errorf("ImageLength missing")
+	}
+	return opentile.Size{W: int(iw), H: int(il)}, nil
+}
+
+// tiler is the SVS implementation of opentile.Tiler.
+type tiler struct {
+	md     Metadata
+	levels []opentile.Level
+	icc    []byte
+}
+
+func (t *tiler) Format() opentile.Format                { return opentile.FormatSVS }
+func (t *tiler) Levels() []opentile.Level               { return t.levels }
+func (t *tiler) Associated() []opentile.AssociatedImage { return nil }
+func (t *tiler) Metadata() opentile.Metadata            { return t.md.Metadata }
+func (t *tiler) ICCProfile() []byte                     { return t.icc }
+func (t *tiler) Close() error                           { return nil }
+func (t *tiler) Level(i int) (opentile.Level, error) {
+	if i < 0 || i >= len(t.levels) {
+		return nil, opentile.ErrLevelOutOfRange
+	}
+	return t.levels[i], nil
 }
