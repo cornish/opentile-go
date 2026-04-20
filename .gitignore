@@ -1,0 +1,11 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# Local test data
+/testdata/slides/
