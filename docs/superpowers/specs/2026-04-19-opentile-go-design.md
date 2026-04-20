@@ -35,7 +35,7 @@ opentile does **not** provide region reads (`get_region`). For that, users compo
 
 Direct port of the Python library, with the following adaptations:
 
-- Pure Go, no cgo. Viable because the core tile path never requires a raster codec — it is TIFF parsing plus JPEG marker manipulation.
+- Pure Go, no cgo. Viable because the core tile path never requires a raster codec — it is TIFF parsing plus (for NDPI in v0.2) JPEG marker manipulation. v0.1 is pure TIFF parsing; SVS tiles pass through unmodified.
 - Structured as three layers: a narrowly-scoped internal TIFF reader, a narrowly-scoped internal JPEG marker package, and format-specific packages layered on top. Upstream's `tiler`/`tiff_image`/`formats/*`/`jpeg/*` layout is preserved, but TIFF IFD parsing and JPEG segment manipulation are each made explicit subpackages with independent test suites.
 
 ## Module path and layout
@@ -62,10 +62,8 @@ opentile-go/
 │   ├── tag.go              # tag type decoders
 │   └── page.go             # TiffPage: tile offsets/lengths, jpegtables, compression
 │
-├── internal/jpeg/          # pure-Go JPEG marker/segment work (no codec)
-│   ├── marker.go           # SOI/EOI/SOS/SOF/DQT/DHT parse
-│   ├── tables.go           # JPEG tables extract/merge
-│   └── concat.go           # scan concatenation (for level-0 striped + NDPI)
+├── internal/jpeg/          # pure-Go JPEG marker/segment work (v0.2 with NDPI)
+│   └── ...                 # deferred in v0.1; not required for SVS pass-through
 │
 ├── formats/
 │   ├── svs/
@@ -81,7 +79,7 @@ opentile-go/
     └── oracle/             # //go:build parity — Python oracle harness
 ```
 
-`internal/tiff` is internal because its API is shaped for opentile's needs — raw compressed tile byte access, WSI vendor tag support — rather than as a general-purpose TIFF library. `internal/jpeg` is internal because its surface is a port-support utility, not a published API.
+`internal/tiff` is internal because its API is shaped for opentile's needs — raw compressed tile byte access, WSI vendor tag support — rather than as a general-purpose TIFF library. `internal/jpeg` (deferred to v0.2) will be internal for the same reason: a port-support utility, not a published API.
 
 Format subpackages are public so that consumers can import only what they need. The top-level `opentile.Open` discovers registered format tilers; registration is explicit (no `init()` side-effects) to keep binary size predictable. A convenience umbrella package `opentile/formats/all` registers every known format for users who want the kitchen sink.
 

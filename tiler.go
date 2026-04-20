@@ -15,7 +15,7 @@ type Tiler interface {
 	Format() Format
 	Levels() []Level
 	Level(i int) (Level, error)
-	Associated() []AssociatedImage
+	Associated() []AssociatedImage // v0.1: always returns nil; associated images land in v0.3
 	Metadata() Metadata
 	ICCProfile() []byte
 	Close() error

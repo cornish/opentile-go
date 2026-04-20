@@ -104,7 +104,14 @@ type tiler struct {
 }
 
 func (t *tiler) Format() opentile.Format                { return opentile.FormatSVS }
-func (t *tiler) Levels() []opentile.Level               { return t.levels }
+func (t *tiler) Levels() []opentile.Level {
+	// Return a fresh slice so callers cannot mutate the immutable internal
+	// state. The underlying Level pointers are shared; only the slice header
+	// is copied.
+	out := make([]opentile.Level, len(t.levels))
+	copy(out, t.levels)
+	return out
+}
 func (t *tiler) Associated() []opentile.AssociatedImage { return nil }
 func (t *tiler) Metadata() opentile.Metadata            { return t.md.Metadata }
 func (t *tiler) ICCProfile() []byte                     { return t.icc }
@@ -123,6 +130,11 @@ type tilerUnwrapper interface {
 	UnwrapTiler() opentile.Tiler
 }
 
+// maxTilerUnwrapHops caps the number of UnwrapTiler calls MetadataOf will make.
+// The realistic chain length is 1 (just *fileCloser); 16 is ample headroom
+// while still preventing infinite loops on a wrapper that cycles.
+const maxTilerUnwrapHops = 16
+
 // MetadataOf returns the SVS-specific metadata if t is an SVS Tiler, otherwise
 // (nil, false). It walks any number of wrappers (e.g., the *fileCloser
 // returned by opentile.OpenFile) before asserting on the concrete type.
@@ -131,7 +143,7 @@ type tilerUnwrapper interface {
 //	    fmt.Println(md.MPP, md.SoftwareLine)
 //	}
 func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
-	for t != nil {
+	for i := 0; t != nil && i <= maxTilerUnwrapHops; i++ {
 		if svsT, ok := t.(*tiler); ok {
 			return &svsT.md, true
 		}

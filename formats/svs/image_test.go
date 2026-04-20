@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	opentile "github.com/tcornish/opentile-go"
 	"github.com/tcornish/opentile-go/internal/tiff"
@@ -469,5 +470,28 @@ func TestMetadataOfUnwrapsWrappers(t *testing.T) {
 	}
 	if md.MPP != 0.25 {
 		t.Errorf("MPP through double wrapper: got %v, want 0.25", md.MPP)
+	}
+}
+
+// cyclicTiler is a pathological wrapper whose UnwrapTiler returns itself.
+// Used to verify MetadataOf does not spin forever.
+type cyclicTiler struct {
+	opentile.Tiler
+}
+
+func (c *cyclicTiler) UnwrapTiler() opentile.Tiler { return c }
+
+func TestMetadataOfHandlesCyclicUnwrap(t *testing.T) {
+	c := &cyclicTiler{}
+	done := make(chan struct{})
+	go func() {
+		_, _ = MetadataOf(c)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// good — MetadataOf terminated
+	case <-time.After(2 * time.Second):
+		t.Fatal("MetadataOf did not terminate on a cyclic wrapper")
 	}
 }

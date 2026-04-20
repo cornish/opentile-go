@@ -21,7 +21,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 - Module path: `github.com/tcornish/opentile-go`
 - Go 1.23+ (for `iter.Seq2`)
-- `internal/tiff` and `internal/jpeg` are internal — shaped for opentile's needs, not general-purpose libraries
+- `internal/tiff` is internal — shaped for opentile's needs, not a general-purpose TIFF library. `internal/jpeg` will join it in v0.2 alongside NDPI support.
 - Format subpackages (`formats/svs/`, `formats/ndpi/`, …) are public; `formats/all` is the umbrella registration package
 - `io.ReaderAt` + `int64` size is the core input (stdlib `*os.File` satisfies concurrent-use semantics)
 - Public tile methods: `Level.Tile(x, y int)` returns raw compressed bytes; `Level.TileReader(x, y)` streams via `io.SectionReader`; `Level.Tiles(ctx)` is serial row-major via `iter.Seq2`
