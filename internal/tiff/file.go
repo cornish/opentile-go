@@ -1,6 +1,7 @@
 package tiff
 
 import (
+	"encoding/binary"
 	"io"
 )
 
@@ -13,7 +14,9 @@ type File struct {
 }
 
 // Open parses the header and every IFD in r, producing a File ready for use by
-// format packages. Open does not read tile payloads.
+// format packages. Open does not read tile payloads. The caller retains
+// ownership of r; File does not close it (the io.ReaderAt contract does not
+// include Close).
 func Open(r io.ReaderAt) (*File, error) {
 	h, err := parseHeader(r)
 	if err != nil {
@@ -35,7 +38,7 @@ func Open(r io.ReaderAt) (*File, error) {
 func (f *File) Pages() []*Page { return f.pages }
 
 // LittleEndian reports whether the file is stored little-endian.
-func (f *File) LittleEndian() bool { return f.reader.order.String() == "LittleEndian" }
+func (f *File) LittleEndian() bool { return f.reader.order == binary.LittleEndian }
 
 // ReaderAt returns the underlying reader for use by format packages reading
 // tile byte ranges.
