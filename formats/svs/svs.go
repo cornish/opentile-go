@@ -116,20 +116,30 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	return t.levels[i], nil
 }
 
+// tilerUnwrapper is implemented by opentile wrapper types (e.g., *fileCloser
+// returned by OpenFile) that hold an inner Tiler. Kept unexported because it
+// is a coordination interface between opentile and its format packages.
+type tilerUnwrapper interface {
+	UnwrapTiler() opentile.Tiler
+}
+
 // MetadataOf returns the SVS-specific metadata if t is an SVS Tiler, otherwise
-// (nil, false). Use this to read the Aperio extras (MPP, SoftwareLine,
-// Filename) that are not visible through the common opentile.Metadata struct.
+// (nil, false). It walks any number of wrappers (e.g., the *fileCloser
+// returned by opentile.OpenFile) before asserting on the concrete type.
 //
 //	if md, ok := svs.MetadataOf(tiler); ok {
 //	    fmt.Println(md.MPP, md.SoftwareLine)
 //	}
 func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
-	svsT, ok := t.(*tiler)
-	if !ok {
-		return nil, false
+	for t != nil {
+		if svsT, ok := t.(*tiler); ok {
+			return &svsT.md, true
+		}
+		u, ok := t.(tilerUnwrapper)
+		if !ok {
+			return nil, false
+		}
+		t = u.UnwrapTiler()
 	}
-	// Return a pointer into the tiler's stored metadata. t.md is populated
-	// once at Open time and never mutated; the returned pointer is safe to
-	// hold for the lifetime of the Tiler.
-	return &svsT.md, true
+	return nil, false
 }

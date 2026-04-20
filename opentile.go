@@ -91,3 +91,9 @@ type fileCloser struct {
 func (fc *fileCloser) Close() error {
 	return errors.Join(fc.Tiler.Close(), fc.f.Close())
 }
+
+// UnwrapTiler exposes the wrapped Tiler so format packages can reach their
+// concrete implementation through type assertion via svs.MetadataOf (and
+// equivalent per-format accessors) when the consumer obtained the Tiler
+// through OpenFile rather than Open.
+func (fc *fileCloser) UnwrapTiler() Tiler { return fc.Tiler }

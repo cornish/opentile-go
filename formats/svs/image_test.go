@@ -432,3 +432,42 @@ func TestSvsTilerSkipsNonTiledPages(t *testing.T) {
 		t.Fatal("tile bytes mismatch on level 0 of mixed-page TIFF")
 	}
 }
+
+// wrapperTiler is a test double that wraps a Tiler through an UnwrapTiler
+// method. Used to verify MetadataOf unwraps arbitrary wrappers.
+type wrapperTiler struct {
+	opentile.Tiler
+}
+
+func (w *wrapperTiler) UnwrapTiler() opentile.Tiler { return w.Tiler }
+
+func TestMetadataOfUnwrapsWrappers(t *testing.T) {
+	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "MPP = 0.25")
+	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer tiler.Close()
+
+	// Wrap the concrete SVS tiler in one level of wrapper.
+	wrapped := &wrapperTiler{Tiler: tiler}
+	md, ok := MetadataOf(wrapped)
+	if !ok {
+		t.Fatal("MetadataOf: expected ok=true through one wrapper")
+	}
+	if md.MPP != 0.25 {
+		t.Errorf("MPP through wrapper: got %v, want 0.25", md.MPP)
+	}
+
+	// Wrap twice to confirm it walks multiple layers.
+	doubleWrapped := &wrapperTiler{Tiler: wrapped}
+	md, ok = MetadataOf(doubleWrapped)
+	if !ok {
+		t.Fatal("MetadataOf: expected ok=true through two wrappers")
+	}
+	if md.MPP != 0.25 {
+		t.Errorf("MPP through double wrapper: got %v, want 0.25", md.MPP)
+	}
+}

@@ -61,6 +61,8 @@
     "magnification": 40,
     "scanner_manufacturer": "Aperio",
     "scanner_serial": "SS1283",
+    "software_line": "Aperio Image Library v10.0.50\r",
+    "mpp_um": 0.2498,
     "acquisition_rfc3339": "2009-07-16T18:15:06Z"
   },
   "tiles": {
