@@ -7,6 +7,7 @@ func TestCompressionString(t *testing.T) {
 		c    Compression
 		want string
 	}{
+		{CompressionUnknown, "unknown"},
 		{CompressionNone, "none"},
 		{CompressionJPEG, "jpeg"},
 		{CompressionJP2K, "jp2k"},

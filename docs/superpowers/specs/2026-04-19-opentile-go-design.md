@@ -148,7 +148,8 @@ type TileResult struct {
 
 type Compression uint8
 const (
-    CompressionNone Compression = iota
+    CompressionUnknown Compression = iota // zero value; unset or unrecognized
+    CompressionNone
     CompressionJPEG
     CompressionJP2K
 )

@@ -313,6 +313,7 @@ func TestCompressionString(t *testing.T) {
         c    Compression
         want string
     }{
+        {CompressionUnknown, "unknown"},
         {CompressionNone, "none"},
         {CompressionJPEG, "jpeg"},
         {CompressionJP2K, "jp2k"},
@@ -329,7 +330,7 @@ func TestCompressionString(t *testing.T) {
 - [ ] **Step 2: Run test to verify failure**
 
 Run: `go test ./...`
-Expected: FAIL — undefined: `Compression`, `CompressionNone`, etc.
+Expected: FAIL — undefined: `Compression`, `CompressionUnknown`, `CompressionNone`, etc.
 
 - [ ] **Step 3: Implement `compression.go`**
 
@@ -343,16 +344,22 @@ import "fmt"
 // opentile-go returns tile bytes in the compression format of the source TIFF
 // without decoding them. Consumers that need decoded pixels should pass the
 // bytes to a codec appropriate for the reported compression.
+//
+// The zero value is CompressionUnknown: a forgotten-to-initialize field
+// surfaces loudly rather than masquerading as a known compression.
 type Compression uint8
 
 const (
-    CompressionNone Compression = iota
+    CompressionUnknown Compression = iota // zero value; unset or unrecognized
+    CompressionNone
     CompressionJPEG
     CompressionJP2K
 )
 
 func (c Compression) String() string {
     switch c {
+    case CompressionUnknown:
+        return "unknown"
     case CompressionNone:
         return "none"
     case CompressionJPEG:
@@ -2976,7 +2983,7 @@ func mapCompression(code uint32) opentile.Compression {
     case 33003, 33005:
         return opentile.CompressionJP2K
     default:
-        return opentile.CompressionNone // callers should not assume; inspect Compression() explicitly if needed
+        return opentile.CompressionUnknown
     }
 }
 
