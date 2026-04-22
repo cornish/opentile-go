@@ -141,6 +141,34 @@ func equalU32(a, b []uint32) bool {
 	return true
 }
 
+func TestTileOffsets64Compatibility(t *testing.T) {
+	// Existing LONG TileOffsets via buildPageTIFF still round-trip through
+	// the uint64 accessor.
+	data := buildPageTIFF(t)
+	f, _ := Open(bytes.NewReader(data), int64(len(data)))
+	p := f.Pages()[0]
+	offs, err := p.TileOffsets64()
+	if err != nil {
+		t.Fatalf("TileOffsets64: %v", err)
+	}
+	want := []uint64{1000, 2000, 3000, 4000}
+	if !equalU64(offs, want) {
+		t.Errorf("got %v, want %v", offs, want)
+	}
+}
+
+func equalU64(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestTileGridCeilDivPartialEdge(t *testing.T) {
 	// Use the existing buildPageTIFF fixture (1024x768, 256 tiles), but
 	// also verify ceil behavior with a computation unit test against the

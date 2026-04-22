@@ -122,6 +122,32 @@ func (p *Page) arrayU32(tag uint16) ([]uint32, error) {
 	return e.Values(p.br)
 }
 
+// TileOffsets64 returns the TileOffsets array as uint64 values; supports both
+// LONG (classic TIFF) and LONG8 (BigTIFF) encodings.
+func (p *Page) TileOffsets64() ([]uint64, error) {
+	return p.arrayU64(TagTileOffsets)
+}
+
+// TileByteCounts64 returns the TileByteCounts array as uint64 values.
+func (p *Page) TileByteCounts64() ([]uint64, error) {
+	return p.arrayU64(TagTileByteCounts)
+}
+
+// ScalarArrayU64 returns the value array for an arbitrary tag as uint64s.
+// Generalizes TileOffsets64/TileByteCounts64 for callers that need other
+// array-valued tags (e.g., SVS StripOffsets, NDPI vendor arrays).
+func (p *Page) ScalarArrayU64(tag uint16) ([]uint64, error) {
+	return p.arrayU64(tag)
+}
+
+func (p *Page) arrayU64(tag uint16) ([]uint64, error) {
+	e, ok := p.ifd.get(tag)
+	if !ok {
+		return nil, fmt.Errorf("tiff: tag %d missing", tag)
+	}
+	return e.Values64(p.br)
+}
+
 // XResolution returns the X resolution as a numerator/denominator rational.
 func (p *Page) XResolution() (num, den uint32, ok bool) {
 	return p.rationalFirst(TagXResolution)
