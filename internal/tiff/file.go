@@ -13,6 +13,7 @@ type File struct {
 	reader  *byteReader
 	pages   []*Page
 	bigTIFF bool // true when file uses BigTIFF (magic 43, 8-byte offsets)
+	ndpi    bool // true when file was detected as Hamamatsu NDPI via SourceLens sniff
 }
 
 // Open parses the header and every IFD in r, producing a File ready for use by
@@ -26,7 +27,21 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 		return nil, err
 	}
 	br := newByteReader(r, h.littleEndian)
-	ifds, err := walkIFDs(br, int64(h.firstIFD), h.bigTIFF)
+	mode := modeClassic
+	if h.bigTIFF {
+		mode = modeBigTIFF
+	} else {
+		// Classic header: sniff first IFD for NDPI signature.
+		isNDPI, sniffErr := sniffNDPI(br, int64(h.firstIFD))
+		if sniffErr != nil {
+			return nil, sniffErr
+		}
+		if isNDPI {
+			mode = modeNDPI
+			h.ndpi = true
+		}
+	}
+	ifds, err := walkIFDs(br, int64(h.firstIFD), mode)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +49,7 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 	for _, i := range ifds {
 		pages = append(pages, newPage(i, br))
 	}
-	return &File{r: r, size: size, reader: br, pages: pages, bigTIFF: h.bigTIFF}, nil
+	return &File{r: r, size: size, reader: br, pages: pages, bigTIFF: h.bigTIFF, ndpi: h.ndpi}, nil
 }
 
 // Pages returns the pages in IFD order. The slice is owned by File; do not mutate.
@@ -45,6 +60,10 @@ func (f *File) LittleEndian() bool { return f.reader.order == binary.LittleEndia
 
 // BigTIFF reports whether the file uses BigTIFF (magic 43, 8-byte offsets).
 func (f *File) BigTIFF() bool { return f.bigTIFF }
+
+// NDPI reports whether the file was detected as a Hamamatsu NDPI file via
+// the presence of the SourceLens tag (65420) in the first IFD.
+func (f *File) NDPI() bool { return f.ndpi }
 
 // ReaderAt returns the underlying reader for use by format packages reading
 // tile byte ranges.

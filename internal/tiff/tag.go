@@ -160,7 +160,14 @@ func (e Entry) Values64(b *byteReader) ([]uint64, error) {
 	need := int64(e.Count) * int64(e.Type.Size())
 	var buf []byte
 	if e.fitsInline() {
-		// valueBytes is the raw inline cell; use the first `need` bytes.
+		if e.Count == 1 && e.Type.Size() <= 8 {
+			// Use valueOrOffset directly: it holds the fully-reconstructed
+			// scalar value for all TIFF dialects (classic uint32-widened,
+			// BigTIFF uint64, and NDPI 64-bit-extended). This avoids losing
+			// high bits that NDPI stores out-of-band from the raw inline cell.
+			return []uint64{e.valueOrOffset}, nil
+		}
+		// Multi-value inline: decode from the raw cell bytes.
 		buf = append([]byte(nil), e.valueBytes[:need]...)
 	} else {
 		if need > int64(^uint(0)>>1) {

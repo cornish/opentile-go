@@ -18,6 +18,7 @@ var ErrUnsupportedTIFF = errors.New("tiff: unsupported TIFF variant")
 type header struct {
 	littleEndian bool
 	bigTIFF      bool   // true when magic 43 (BigTIFF); false for magic 42 (classic)
+	ndpi         bool   // set after sniffing first IFD in classic mode for SourceLens tag
 	firstIFD     uint64 // uint64 for BigTIFF; classic TIFF offsets widen safely
 }
 

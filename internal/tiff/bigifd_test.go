@@ -41,7 +41,11 @@ func TestWalkBigIFDs(t *testing.T) {
 		t.Fatal("expected bigTIFF=true")
 	}
 	b := newByteReader(r, h.littleEndian)
-	ifds, err := walkIFDs(b, int64(h.firstIFD), h.bigTIFF)
+	mode := modeClassic
+	if h.bigTIFF {
+		mode = modeBigTIFF
+	}
+	ifds, err := walkIFDs(b, int64(h.firstIFD), mode)
 	if err != nil {
 		t.Fatalf("walkIFDs: %v", err)
 	}

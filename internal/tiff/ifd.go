@@ -17,14 +17,28 @@ func (i *ifd) get(tag uint16) (Entry, bool) {
 // maxIFDs guards against pathological inputs with circular or excessive IFD chains.
 const maxIFDs = 1024
 
-// walkIFDs walks the IFD chain starting at offset. bigTIFF selects the
-// classic (magic 42, uint16 count, 12-byte entries, uint32 offsets) vs
-// BigTIFF (magic 43, uint64 count, 20-byte entries, uint64 offsets) layout.
-func walkIFDs(b *byteReader, offset int64, bigTIFF bool) ([]*ifd, error) {
-	if bigTIFF {
+// tiffMode selects the TIFF dialect to parse.
+type tiffMode int
+
+const (
+	modeClassic tiffMode = iota
+	modeBigTIFF
+	modeNDPI
+)
+
+// walkIFDs walks the IFD chain starting at offset using the given dialect.
+// modeClassic: magic 42, uint16 count, 12-byte entries, uint32 offsets.
+// modeBigTIFF: magic 43, uint64 count, 20-byte entries, uint64 offsets.
+// modeNDPI:    magic 42 with Hamamatsu high-bits extension for 64-bit offsets.
+func walkIFDs(b *byteReader, offset int64, mode tiffMode) ([]*ifd, error) {
+	switch mode {
+	case modeBigTIFF:
 		return walkBigIFDs(b, offset)
+	case modeNDPI:
+		return walkNDPIIFDs(b, offset)
+	default:
+		return walkClassicIFDs(b, offset)
 	}
-	return walkClassicIFDs(b, offset)
 }
 
 // walkClassicIFDs reads the classic TIFF IFD chain starting at offset.
