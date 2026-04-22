@@ -87,3 +87,38 @@ func BuildSOF(s *SOF) []byte {
 	}
 	return out
 }
+
+// ReplaceSOFDimensions returns a copy of jpg with the SOF0 segment's width
+// and height fields rewritten. Other bytes are unchanged; the encoded scan
+// coefficients are not interpreted. This is the operation needed to "pad"
+// a JPEG to MCU-aligned dimensions before a lossless crop: the header
+// advertises the MCU-rounded size even though the scan data is the same.
+//
+// Note: SOF0 could appear inside entropy-coded scan data (byte-stuffed as FF 00 C0).
+// However, in a valid JPEG, SOF0 appears BEFORE SOS, and SOS is the last marker-framed
+// segment before scan data starts. Searching from the start, the first FF C0 is
+// guaranteed to be the SOF0 marker — no need to walk segments properly.
+func ReplaceSOFDimensions(jpg []byte, width, height uint16) ([]byte, error) {
+	// Locate the SOF0 marker.
+	sofStart := -1
+	for i := 0; i < len(jpg)-1; i++ {
+		if jpg[i] == 0xFF && Marker(jpg[i+1]) == SOF0 {
+			sofStart = i
+			break
+		}
+	}
+	if sofStart < 0 {
+		return nil, fmt.Errorf("%w: no SOF0 in bitstream", ErrBadJPEG)
+	}
+	// SOF payload begins at sofStart+4 (2 marker bytes + 2 length bytes).
+	payloadStart := sofStart + 4
+	if payloadStart+5 > len(jpg) {
+		return nil, fmt.Errorf("%w: SOF truncated", ErrBadJPEG)
+	}
+	out := make([]byte, len(jpg))
+	copy(out, jpg)
+	// Height at payloadStart+1, width at payloadStart+3 (big-endian).
+	binary.BigEndian.PutUint16(out[payloadStart+1:payloadStart+3], height)
+	binary.BigEndian.PutUint16(out[payloadStart+3:payloadStart+5], width)
+	return out, nil
+}

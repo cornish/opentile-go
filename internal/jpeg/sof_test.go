@@ -69,3 +69,46 @@ func TestBuildSOFRoundTrip(t *testing.T) {
 		t.Error("BuildSOF not deterministic on round-trip")
 	}
 }
+
+func TestReplaceSOFDimensions(t *testing.T) {
+	// Full minimal JPEG: SOI + SOF0(512x256) + SOS(empty) + EOI.
+	sof := BuildSOF(&SOF{
+		Precision: 8, Width: 512, Height: 256,
+		Components: []SOFComponent{
+			{ID: 1, SamplingH: 1, SamplingV: 1, QuantTableID: 0},
+		},
+	})
+	jpg := append([]byte{0xFF, 0xD8}, sof...)
+	jpg = append(jpg, 0xFF, 0xDA, 0x00, 0x08, 1, 1, 0, 0, 0x3F, 0x00) // SOS
+	jpg = append(jpg, 0xFF, 0xD9)
+
+	got, err := ReplaceSOFDimensions(jpg, 1024, 768)
+	if err != nil {
+		t.Fatalf("ReplaceSOFDimensions: %v", err)
+	}
+	// Find the new SOF, parse it, confirm dims.
+	var newSOF *SOF
+	for seg, err := range Scan(bytes.NewReader(got)) {
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if seg.Marker == SOF0 {
+			newSOF, _ = ParseSOF(seg.Payload)
+			break
+		}
+	}
+	if newSOF == nil {
+		t.Fatal("SOF not found in rewritten JPEG")
+	}
+	if newSOF.Width != 1024 || newSOF.Height != 768 {
+		t.Errorf("dims: got %dx%d, want 1024x768", newSOF.Width, newSOF.Height)
+	}
+}
+
+func TestReplaceSOFDimensionsRejectsMissingSOF(t *testing.T) {
+	jpg := []byte{0xFF, 0xD8, 0xFF, 0xD9} // SOI + EOI, no SOF
+	_, err := ReplaceSOFDimensions(jpg, 1, 1)
+	if err == nil {
+		t.Fatal("expected error when no SOF present")
+	}
+}
