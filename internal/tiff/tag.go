@@ -15,6 +15,9 @@ const (
 	DTLong      DataType = 4
 	DTRational  DataType = 5
 	DTUndefined DataType = 7
+	DTIFD       DataType = 13 // NEW — uint32 offset to sub-IFD
+	DTLong8     DataType = 16 // NEW — uint64 (BigTIFF)
+	DTIFD8      DataType = 18 // NEW — uint64 offset to sub-IFD (BigTIFF)
 )
 
 // Size returns the byte size of a single value of the given data type.
@@ -27,34 +30,39 @@ func (d DataType) Size() int {
 		return 1
 	case DTShort:
 		return 2
-	case DTLong:
+	case DTLong, DTIFD:
 		return 4
-	case DTRational:
+	case DTRational, DTLong8, DTIFD8:
 		return 8
 	default:
 		return 1
 	}
 }
 
-// Entry is a raw IFD entry: tag id, type, count, and a 4-byte
-// value-or-offset cell. The cell is a little/big-endian encoded uint32 as
-// stored in the file; whether it carries the value inline or an external
-// offset depends on Count * Type.Size().
+// Entry is a raw IFD entry: tag id, type, count, and a value-or-offset cell.
+// For classic TIFF the cell is 4 bytes wide; for BigTIFF it is 8 bytes wide.
+// inlineCap controls which interpretation applies: 0 (uninitialized) is treated
+// as 4 (classic TIFF semantics); 8 selects BigTIFF semantics.
 type Entry struct {
 	Tag           uint16
 	Type          DataType
-	Count         uint32
-	valueOrOffset uint32
-	valueBytes    [4]byte // raw 4-byte cell, preserving byte order
+	Count         uint64  // CHANGED from uint32 — BigTIFF entries carry uint64 counts
+	valueOrOffset uint64  // CHANGED from uint32 — BigTIFF cell carries 8-byte value/offset
+	valueBytes    [8]byte // CHANGED from [4]byte — inline cell is 8 bytes wide in BigTIFF
+	inlineCap     int     // NEW — 4 for classic (default 0 treated as 4), 8 for BigTIFF
 }
 
-// fitsInline reports whether the tag value fits in the 4-byte inline cell.
+// fitsInline reports whether the tag value fits in the inline cell.
 func (e Entry) fitsInline() bool {
-	return int64(e.Count)*int64(e.Type.Size()) <= 4
+	cap := e.inlineCap
+	if cap == 0 {
+		cap = 4 // defensive: treat uninitialized as classic TIFF
+	}
+	return int64(e.Count)*int64(e.Type.Size()) <= int64(cap)
 }
 
-// decodeInline decodes the inline 4-byte cell (cell) as a slice of uint32 values
-// according to the entry's Type. cell must be the raw 4 bytes in file order.
+// decodeInline decodes the inline cell (cell) as a slice of uint32 values
+// according to the entry's Type. cell must be the raw bytes in file order.
 func (e Entry) decodeInline(b *byteReader, cell []byte) ([]uint32, error) {
 	if !e.fitsInline() {
 		return nil, fmt.Errorf("tiff: tag %d: value does not fit inline", e.Tag)
@@ -84,7 +92,7 @@ func (e Entry) Values(b *byteReader) ([]uint32, error) {
 	return e.decodeExternal(b)
 }
 
-// decodeBuffer decodes buf (which must be exactly Count*Type.Size() bytes)
+// decodeBuffer decodes buf (which must be at least Count*Type.Size() bytes)
 // into uint32 values. Rational and unknown types return raw byte groups as
 // uint32s (use dedicated helpers for those cases).
 func (e Entry) decodeBuffer(b *byteReader, buf []byte) ([]uint32, error) {
@@ -99,11 +107,11 @@ func (e Entry) decodeBuffer(b *byteReader, buf []byte) ([]uint32, error) {
 			out = append(out, uint32(v))
 		}
 	case DTShort:
-		for i := uint32(0); i < e.Count; i++ {
+		for i := uint64(0); i < e.Count; i++ {
 			out = append(out, uint32(b.order.Uint16(buf[i*2:])))
 		}
-	case DTLong:
-		for i := uint32(0); i < e.Count; i++ {
+	case DTLong, DTIFD:
+		for i := uint64(0); i < e.Count; i++ {
 			out = append(out, b.order.Uint32(buf[i*4:]))
 		}
 	default:
@@ -113,7 +121,7 @@ func (e Entry) decodeBuffer(b *byteReader, buf []byte) ([]uint32, error) {
 }
 
 // decodeASCII reads the string value for an ASCII entry.
-// cell is the 4-byte inline cell used when the value fits inline.
+// cell is the inline cell used when the value fits inline.
 func (e Entry) decodeASCII(b *byteReader, cell []byte) (string, error) {
 	var data []byte
 	if e.fitsInline() {
@@ -137,10 +145,50 @@ func (e Entry) decodeRational(b *byteReader) ([][2]uint32, error) {
 		return nil, err
 	}
 	out := make([][2]uint32, 0, e.Count)
-	for i := uint32(0); i < e.Count; i++ {
+	for i := uint64(0); i < e.Count; i++ {
 		num := b.order.Uint32(buf[i*8:])
 		den := b.order.Uint32(buf[i*8+4:])
 		out = append(out, [2]uint32{num, den})
+	}
+	return out, nil
+}
+
+// Values64 returns decoded values as []uint64, accepting Short, Long, Long8,
+// IFD, and IFD8 entry types. Prefer this over Values for entries that might
+// carry BigTIFF LONG8 data (tile offsets, for instance).
+func (e Entry) Values64(b *byteReader) ([]uint64, error) {
+	need := int64(e.Count) * int64(e.Type.Size())
+	var buf []byte
+	if e.fitsInline() {
+		// valueBytes is the raw inline cell; use the first `need` bytes.
+		buf = append([]byte(nil), e.valueBytes[:need]...)
+	} else {
+		if need > int64(^uint(0)>>1) {
+			return nil, fmt.Errorf("tiff: tag %d: value size %d exceeds platform int range", e.Tag, need)
+		}
+		payload, err := b.bytes(int64(e.valueOrOffset), int(need))
+		if err != nil {
+			return nil, fmt.Errorf("tiff: tag %d: %w", e.Tag, err)
+		}
+		buf = payload
+	}
+	out := make([]uint64, 0, e.Count)
+	size := e.Type.Size()
+	switch size {
+	case 2:
+		for i := uint64(0); i < e.Count; i++ {
+			out = append(out, uint64(b.order.Uint16(buf[i*2:])))
+		}
+	case 4:
+		for i := uint64(0); i < e.Count; i++ {
+			out = append(out, uint64(b.order.Uint32(buf[i*4:])))
+		}
+	case 8:
+		for i := uint64(0); i < e.Count; i++ {
+			out = append(out, b.order.Uint64(buf[i*8:]))
+		}
+	default:
+		return nil, fmt.Errorf("tiff: tag %d: unsupported type %d for uint64 decode", e.Tag, e.Type)
 	}
 	return out, nil
 }

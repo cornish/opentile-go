@@ -78,8 +78,8 @@ func readEntry(b *byteReader, offset int64) (Entry, error) {
 	var e Entry
 	e.Tag = tag
 	e.Type = DataType(typ)
-	e.Count = count
-	e.valueOrOffset = vo
+	e.Count = uint64(count)
+	e.valueOrOffset = uint64(vo)
 	copy(e.valueBytes[:], cell)
 	return e, nil
 }

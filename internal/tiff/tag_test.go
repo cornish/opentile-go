@@ -101,3 +101,38 @@ func TestDecodeInlineRejectsOversize(t *testing.T) {
 		t.Fatal("expected decodeInline to reject oversize value")
 	}
 }
+
+func TestDataTypeSizeV02(t *testing.T) {
+	tests := []struct {
+		dt   DataType
+		want int
+	}{
+		{DTLong8, 8},
+		{DTIFD, 4},
+		{DTIFD8, 8},
+	}
+	for _, tt := range tests {
+		if got := tt.dt.Size(); got != tt.want {
+			t.Errorf("%v.Size() = %d, want %d", tt.dt, got, tt.want)
+		}
+	}
+}
+
+func TestDecodeLong8(t *testing.T) {
+	// Entry count=2 LONG8 (16 bytes), stored at offset 16.
+	data := make([]byte, 32)
+	copy(data[16:], []byte{
+		0x01, 0, 0, 0, 0, 0, 0, 0,
+		0x02, 0, 0, 0, 0, 0, 0, 0,
+	})
+	r := bytes.NewReader(data)
+	b := newByteReader(r, true)
+	entry := Entry{Tag: 324, Type: DTLong8, Count: 2, valueOrOffset: 16}
+	vals, err := entry.Values64(b)
+	if err != nil {
+		t.Fatalf("Values64: %v", err)
+	}
+	if len(vals) != 2 || vals[0] != 1 || vals[1] != 2 {
+		t.Fatalf("vals: got %v, want [1 2]", vals)
+	}
+}
