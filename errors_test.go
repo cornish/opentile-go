@@ -54,3 +54,28 @@ func TestTileErrorWrapsIO(t *testing.T) {
 		t.Fatal("should unwrap to io.ErrUnexpectedEOF")
 	}
 }
+
+func TestV02Sentinels(t *testing.T) {
+	sentinels := []error{
+		ErrBadJPEGBitstream,
+		ErrMCUAlignment,
+		ErrCGORequired,
+		ErrTileSizeRequired,
+	}
+	seen := make(map[string]bool)
+	for _, e := range sentinels {
+		if e == nil {
+			t.Fatal("sentinel is nil")
+		}
+		if seen[e.Error()] {
+			t.Errorf("duplicate sentinel text: %q", e.Error())
+		}
+		seen[e.Error()] = true
+	}
+
+	// Confirm the new sentinels wrap cleanly through TileError.
+	te := &TileError{Level: 0, X: 1, Y: 2, Err: ErrBadJPEGBitstream}
+	if !errors.Is(te, ErrBadJPEGBitstream) {
+		t.Fatal("TileError should unwrap to ErrBadJPEGBitstream")
+	}
+}
