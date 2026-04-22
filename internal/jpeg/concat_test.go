@@ -134,3 +134,55 @@ func TestConcatenateScansColorspaceFix(t *testing.T) {
 		t.Errorf("first two markers: got %X %X, want SOI APP14", markers[0], markers[1])
 	}
 }
+
+// fakeScanWithAPP constructs a fragment that includes an APPn segment whose
+// payload happens to contain 0xFF 0xDA bytes — the old byte-scan extractor
+// would false-match on this. The proper segment walk skips the APP payload
+// and locates the actual SOS correctly.
+func fakeScanWithAPP(t *testing.T, width, height uint16, scanData []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.Write([]byte{0xFF, 0xD8}) // SOI
+	// APP1 segment with a payload that contains FF DA (which would fool
+	// a byte-level scanner into thinking it found SOS here).
+	// APP1 marker = 0xE1. Length = 2 + 4 = 6. Payload: 0x00 0xFF 0xDA 0x00
+	buf.Write([]byte{0xFF, 0xE1, 0x00, 0x06, 0x00, 0xFF, 0xDA, 0x00})
+	// Real DQT + DHT + SOF + SOS + scan + EOI after the trap.
+	buf.Write([]byte{0xFF, 0xDB, 0x00, 0x03, 0x00})
+	buf.Write([]byte{0xFF, 0xC4, 0x00, 0x03, 0x10})
+	sof := BuildSOF(&SOF{
+		Precision: 8, Width: width, Height: height,
+		Components: []SOFComponent{
+			{ID: 1, SamplingH: 1, SamplingV: 1, QuantTableID: 0},
+		},
+	})
+	buf.Write(sof)
+	buf.Write([]byte{0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00})
+	buf.Write(scanData)
+	buf.Write([]byte{0xFF, 0xD9})
+	return buf.Bytes()
+}
+
+func TestExtractScanDataSkipsAPPnPayload(t *testing.T) {
+	frag := fakeScanWithAPP(t, 16, 8, []byte{0xAB, 0xCD})
+	// Sanity: the fragment contains an FF DA inside APP1 payload AND an FF DA
+	// SOS marker. Our extractor must locate the real SOS and return the
+	// scan data, not the bytes that follow the APP1's decoy.
+	jpegtables := []byte{
+		0xFF, 0xD8,
+		0xFF, 0xDB, 0x00, 0x03, 0x55,
+		0xFF, 0xC4, 0x00, 0x03, 0x20,
+		0xFF, 0xD9,
+	}
+	out, err := ConcatenateScans([][]byte{frag}, ConcatOpts{Width: 16, Height: 8, JPEGTables: jpegtables})
+	if err != nil {
+		t.Fatalf("ConcatenateScans: %v", err)
+	}
+	// The output must contain the real scan data (AB CD) and EOI.
+	if !bytes.Contains(out, []byte{0xAB, 0xCD}) {
+		t.Fatal("real scan data not found in output — false-matched APP1 decoy?")
+	}
+	if out[len(out)-2] != 0xFF || out[len(out)-1] != 0xD9 {
+		t.Error("output does not end with EOI")
+	}
+}

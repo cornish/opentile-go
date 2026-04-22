@@ -7,11 +7,30 @@ import (
 )
 
 // ConcatOpts controls how ConcatenateScans assembles the output JPEG.
+//
+// Fragment-level APPn segments are discarded during assembly; only DQT/DHT
+// from JPEGTables and the caller-supplied ColorspaceFix APP14 are included
+// in the output header.
+//
+// When RestartInterval > 0, ConcatenateScans expects each input fragment's
+// scan data to contain exactly one restart interval (no internal RSTn
+// markers), because the inter-fragment RST codes are assigned via a global
+// cycle 0xD0..0xD7 indexed by fragment position. Fragments with multiple
+// internal restart intervals will cause cycle drift at boundaries and a
+// malformed output bitstream. NDPI and SVS associated-image stripes are
+// both single-interval in practice, which is the intended use case.
+//
+// When RestartInterval == 0, scan data is concatenated verbatim with no
+// separator. This is almost never what a caller wants for multi-fragment
+// input: the decoder's DC-coefficient predictor carries state across the
+// boundary, producing color drift unless the fragments are a single
+// continuous scan. Use 0 only for single-fragment input or when the caller
+// has independently ensured predictor continuity.
 type ConcatOpts struct {
 	Width, Height   uint16 // output SOF dimensions
 	JPEGTables      []byte // raw TIFF JPEGTables value; DQT/DHT extracted via SplitJPEGTables
 	ColorspaceFix   bool   // if true, emit an APP14 "Adobe" segment signalling RGB (for SVS non-standard RGB JPEGs)
-	RestartInterval int    // 0 = no DRI; otherwise emit DRI and insert RST markers between fragment scans
+	RestartInterval int    // see godoc above: 0 means no DRI and verbatim concat; >0 means one restart interval per fragment
 }
 
 // ConcatenateScans builds a single valid JPEG from one or more TIFF-embedded
@@ -118,31 +137,15 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// extractScanData walks frag, finds the SOS marker by byte scan, and returns
-// the entropy-coded bytes up to (but not including) the trailing EOI. Byte
-// stuffing is preserved. This byte-level approach avoids chained-reader issues
-// that arise when using Scan (which wraps its io.Reader in a new bufio.Reader
-// internally) followed by ReadScan.
+// extractScanData walks frag as a sequence of JPEG segments, locates the SOS,
+// and returns the entropy-coded scan data that follows it (up to and not
+// including the trailing EOI). The walk parses each marker segment's length
+// and skips its payload, so it cannot false-match on APPn payload bytes that
+// happen to look like marker codes.
 func extractScanData(frag []byte) ([]byte, error) {
-	// Find SOS marker by byte scan.
-	pos := -1
-	for i := 0; i < len(frag)-1; i++ {
-		if frag[i] == 0xFF && Marker(frag[i+1]) == SOS {
-			pos = i
-			break
-		}
-	}
-	if pos < 0 {
-		return nil, fmt.Errorf("%w: no SOS found", ErrBadJPEG)
-	}
-	// SOS header: 2 marker bytes + 2-byte length + payload.
-	if pos+4 > len(frag) {
-		return nil, fmt.Errorf("%w: SOS truncated", ErrBadJPEG)
-	}
-	sosLen := int(binary.BigEndian.Uint16(frag[pos+2 : pos+4]))
-	scanStart := pos + 2 + sosLen
-	if scanStart > len(frag) {
-		return nil, fmt.Errorf("%w: scan start past frag end", ErrBadJPEG)
+	scanStart, err := findSOSScanStart(frag)
+	if err != nil {
+		return nil, err
 	}
 	data, end, err := ReadScan(bytes.NewReader(frag[scanStart:]))
 	if err != nil {
@@ -152,4 +155,66 @@ func extractScanData(frag []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: scan ended with 0x%X, want EOI", ErrBadJPEG, end)
 	}
 	return data, nil
+}
+
+// findSOSScanStart walks frag segment-by-segment and returns the byte offset
+// of the first byte of entropy-coded scan data (immediately after the SOS
+// segment's length-prefixed payload).
+func findSOSScanStart(frag []byte) (int, error) {
+	// JPEG segments start at offset 0 with SOI (FF D8) or may have fill bytes.
+	pos := 0
+	for pos < len(frag) {
+		// Skip fill bytes and locate the marker code.
+		for pos < len(frag) && frag[pos] != 0xFF {
+			// A non-FF byte outside segment framing is malformed.
+			return 0, fmt.Errorf("%w: unexpected byte 0x%02X at pos %d", ErrBadJPEG, frag[pos], pos)
+		}
+		for pos < len(frag) && frag[pos] == 0xFF {
+			pos++
+		}
+		if pos >= len(frag) {
+			return 0, fmt.Errorf("%w: truncated before marker code", ErrBadJPEG)
+		}
+		code := Marker(frag[pos])
+		pos++
+		if code == 0x00 {
+			return 0, fmt.Errorf("%w: 0xFF00 outside scan data", ErrBadJPEG)
+		}
+		if code == SOS {
+			// Read 2-byte length, skip payload, return next position.
+			if pos+2 > len(frag) {
+				return 0, fmt.Errorf("%w: SOS truncated length at pos %d", ErrBadJPEG, pos)
+			}
+			sosLen := int(binary.BigEndian.Uint16(frag[pos : pos+2]))
+			if sosLen < 2 {
+				return 0, fmt.Errorf("%w: SOS length %d < 2", ErrBadJPEG, sosLen)
+			}
+			scanStart := pos + sosLen
+			if scanStart > len(frag) {
+				return 0, fmt.Errorf("%w: scan start past frag end", ErrBadJPEG)
+			}
+			return scanStart, nil
+		}
+		if code.isStandalone() {
+			// SOI, EOI, RSTn: no length, no payload. But we shouldn't hit
+			// EOI before SOS — that would mean no scan.
+			if code == EOI {
+				return 0, fmt.Errorf("%w: EOI before SOS", ErrBadJPEG)
+			}
+			continue
+		}
+		// Length-prefixed segment: read length, skip payload.
+		if pos+2 > len(frag) {
+			return 0, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
+		}
+		segLen := int(binary.BigEndian.Uint16(frag[pos : pos+2]))
+		if segLen < 2 {
+			return 0, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
+		}
+		pos += segLen
+		if pos > len(frag) {
+			return 0, fmt.Errorf("%w: segment past frag end", ErrBadJPEG)
+		}
+	}
+	return 0, fmt.Errorf("%w: no SOS found", ErrBadJPEG)
 }
