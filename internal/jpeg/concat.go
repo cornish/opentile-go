@@ -73,15 +73,16 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	var out bytes.Buffer
 	out.Write([]byte{0xFF, 0xD8}) // SOI
 	if opts.ColorspaceFix {
-		// APP14 "Adobe\0" segment identifying RGB-encoded JPEG.
-		// Payload: "Adobe" (5 bytes) + 0x00 + version (2 bytes) + flags0 (2) + flags1 (2) + transform (1).
+		// Adobe APP14 segment: 16 bytes total (FF EE + length 00 0E + 12 data
+		// bytes). The "Adobe" identifier has NO null terminator; the length
+		// field counts itself (2) + the 12 data bytes = 14.
 		app14 := []byte{
 			0xFF, 0xEE, 0x00, 0x0E,
-			'A', 'd', 'o', 'b', 'e', 0x00,
-			0x64, 0x00, // version
-			0x00, 0x00, // flags0
-			0x00, 0x00, // flags1
-			0x00, // transform = 0 (RGB)
+			'A', 'd', 'o', 'b', 'e',
+			0x64, 0x00, // DCTEncodeVersion
+			0x00, 0x00, // APP14Flags0
+			0x00, 0x00, // APP14Flags1
+			0x00,       // ColorTransform = 0 (RGB)
 		}
 		out.Write(app14)
 	}

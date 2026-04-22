@@ -85,3 +85,52 @@ func TestConcatenateScansRejectsEmptyFragments(t *testing.T) {
 		t.Fatal("expected error on empty fragments")
 	}
 }
+
+func TestConcatenateScansColorspaceFix(t *testing.T) {
+	// Verify the APP14 Adobe segment is emitted correctly when
+	// ColorspaceFix is true.
+	frag := fakeScan(t, 16, 8, []byte{0x11, 0x22})
+	jpegtables := []byte{
+		0xFF, 0xD8,
+		0xFF, 0xDB, 0x00, 0x03, 0x00,
+		0xFF, 0xC4, 0x00, 0x03, 0x10,
+		0xFF, 0xD9,
+	}
+	out, err := ConcatenateScans(
+		[][]byte{frag},
+		ConcatOpts{Width: 16, Height: 8, JPEGTables: jpegtables, ColorspaceFix: true},
+	)
+	if err != nil {
+		t.Fatalf("ConcatenateScans: %v", err)
+	}
+	// The APP14 segment should appear immediately after SOI.
+	// Bytes 0..1 = SOI, bytes 2..17 = APP14 (16 bytes).
+	wantAPP14 := []byte{
+		0xFF, 0xEE, 0x00, 0x0E,
+		'A', 'd', 'o', 'b', 'e',
+		0x64, 0x00,
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00,
+	}
+	if len(out) < 18 {
+		t.Fatalf("output too short: %d bytes", len(out))
+	}
+	if !bytes.Equal(out[2:18], wantAPP14) {
+		t.Errorf("APP14 segment mismatch:\n got: %X\nwant: %X", out[2:18], wantAPP14)
+	}
+	// Walk segments; first two should be SOI then APP14.
+	var markers []Marker
+	for seg, err := range Scan(bytes.NewReader(out)) {
+		if err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		markers = append(markers, seg.Marker)
+		if len(markers) == 2 {
+			break
+		}
+	}
+	if markers[0] != SOI || markers[1] != APP14 {
+		t.Errorf("first two markers: got %X %X, want SOI APP14", markers[0], markers[1])
+	}
+}
