@@ -40,7 +40,7 @@ func TestWalkIFDs(t *testing.T) {
 	}
 	b := newByteReader(r, h.littleEndian)
 
-	ifds, err := walkIFDs(b, int64(h.firstIFD))
+	ifds, err := walkIFDs(b, int64(h.firstIFD), h.bigTIFF)
 	if err != nil {
 		t.Fatalf("walkIFDs: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestWalkIFDsMultiple(t *testing.T) {
 	r := bytes.NewReader(data)
 	h, _ := parseHeader(r)
 	b := newByteReader(r, h.littleEndian)
-	ifds, err := walkIFDs(b, int64(h.firstIFD))
+	ifds, err := walkIFDs(b, int64(h.firstIFD), h.bigTIFF)
 	if err != nil {
 		t.Fatalf("walkIFDs: %v", err)
 	}

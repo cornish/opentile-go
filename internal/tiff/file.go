@@ -8,10 +8,11 @@ import (
 // File is a parsed TIFF file: a list of pages in IFD order, plus the reader
 // and byte order needed to decode tag values and read tile payloads.
 type File struct {
-	r      io.ReaderAt
-	size   int64
-	reader *byteReader
-	pages  []*Page
+	r       io.ReaderAt
+	size    int64
+	reader  *byteReader
+	pages   []*Page
+	bigTIFF bool // true when file uses BigTIFF (magic 43, 8-byte offsets)
 }
 
 // Open parses the header and every IFD in r, producing a File ready for use by
@@ -25,7 +26,7 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 		return nil, err
 	}
 	br := newByteReader(r, h.littleEndian)
-	ifds, err := walkIFDs(br, int64(h.firstIFD))
+	ifds, err := walkIFDs(br, int64(h.firstIFD), h.bigTIFF)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 	for _, i := range ifds {
 		pages = append(pages, newPage(i, br))
 	}
-	return &File{r: r, size: size, reader: br, pages: pages}, nil
+	return &File{r: r, size: size, reader: br, pages: pages, bigTIFF: h.bigTIFF}, nil
 }
 
 // Pages returns the pages in IFD order. The slice is owned by File; do not mutate.
@@ -41,6 +42,9 @@ func (f *File) Pages() []*Page { return f.pages }
 
 // LittleEndian reports whether the file is stored little-endian.
 func (f *File) LittleEndian() bool { return f.reader.order == binary.LittleEndian }
+
+// BigTIFF reports whether the file uses BigTIFF (magic 43, 8-byte offsets).
+func (f *File) BigTIFF() bool { return f.bigTIFF }
 
 // ReaderAt returns the underlying reader for use by format packages reading
 // tile byte ranges.

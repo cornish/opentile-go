@@ -17,10 +17,20 @@ func (i *ifd) get(tag uint16) (Entry, bool) {
 // maxIFDs guards against pathological inputs with circular or excessive IFD chains.
 const maxIFDs = 1024
 
-// walkIFDs reads the IFD chain starting at offset and returns every IFD.
+// walkIFDs walks the IFD chain starting at offset. bigTIFF selects the
+// classic (magic 42, uint16 count, 12-byte entries, uint32 offsets) vs
+// BigTIFF (magic 43, uint64 count, 20-byte entries, uint64 offsets) layout.
+func walkIFDs(b *byteReader, offset int64, bigTIFF bool) ([]*ifd, error) {
+	if bigTIFF {
+		return walkBigIFDs(b, offset)
+	}
+	return walkClassicIFDs(b, offset)
+}
+
+// walkClassicIFDs reads the classic TIFF IFD chain starting at offset.
 // The chain terminates when next-IFD-offset is zero or maxIFDs is reached
 // (returning an error in the latter case).
-func walkIFDs(b *byteReader, offset int64) ([]*ifd, error) {
+func walkClassicIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 	var out []*ifd
 	seen := make(map[int64]bool)
 	for offset != 0 {
@@ -43,6 +53,7 @@ func walkIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 			if err != nil {
 				return nil, err
 			}
+			entry.inlineCap = 4
 			ifd.entries[entry.Tag] = entry
 			pos += 12
 		}
