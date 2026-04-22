@@ -54,6 +54,14 @@ func (b *byteReader) uint32(offset int64) (uint32, error) {
 	return b.order.Uint32(buf), nil
 }
 
+func (b *byteReader) uint64(offset int64) (uint64, error) {
+	buf, err := b.read(offset, 8)
+	if err != nil {
+		return 0, err
+	}
+	return b.order.Uint64(buf), nil
+}
+
 func (b *byteReader) bytes(offset int64, n int) ([]byte, error) {
 	return b.read(offset, n)
 }

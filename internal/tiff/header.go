@@ -17,11 +17,11 @@ var ErrUnsupportedTIFF = errors.New("tiff: unsupported TIFF variant")
 
 type header struct {
 	littleEndian bool
-	firstIFD     uint32
+	bigTIFF      bool   // true when magic 43 (BigTIFF); false for magic 42 (classic)
+	firstIFD     uint64 // uint64 for BigTIFF; classic TIFF offsets widen safely
 }
 
-// parseHeader reads the 8-byte TIFF header. BigTIFF (magic 43) is reported as
-// ErrUnsupportedTIFF; v0.1 only targets classic TIFF, which covers SVS.
+// parseHeader reads the 8-byte TIFF header (classic) or 16-byte header (BigTIFF).
 func parseHeader(r io.ReaderAt) (header, error) {
 	var buf [4]byte
 	if _, err := r.ReadAt(buf[:], 0); err != nil {
@@ -43,15 +43,14 @@ func parseHeader(r io.ReaderAt) (header, error) {
 	}
 	switch magic {
 	case 42:
-		// classic TIFF
+		offset, err := b.uint32(4)
+		if err != nil {
+			return header{}, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
+		}
+		return header{littleEndian: le, bigTIFF: false, firstIFD: uint64(offset)}, nil
 	case 43:
-		return header{}, fmt.Errorf("%w: BigTIFF", ErrUnsupportedTIFF)
+		return parseBigTIFFHeader(b, le)
 	default:
 		return header{}, fmt.Errorf("%w: magic %d", ErrInvalidTIFF, magic)
 	}
-	offset, err := b.uint32(4)
-	if err != nil {
-		return header{}, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
-	}
-	return header{littleEndian: le, firstIFD: offset}, nil
 }

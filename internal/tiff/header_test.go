@@ -11,19 +11,22 @@ func TestParseHeader(t *testing.T) {
 		name       string
 		bytes      []byte
 		wantLE     bool
-		wantOffset uint32
+		wantBig    bool
+		wantOffset uint64
 		wantErr    error
 	}{
 		{
 			name:       "little-endian classic",
 			bytes:      []byte{'I', 'I', 42, 0, 0x08, 0, 0, 0},
 			wantLE:     true,
+			wantBig:    false,
 			wantOffset: 8,
 		},
 		{
 			name:       "big-endian classic",
 			bytes:      []byte{'M', 'M', 0, 42, 0, 0, 0, 0x10},
 			wantLE:     false,
+			wantBig:    false,
 			wantOffset: 16,
 		},
 		{
@@ -37,9 +40,11 @@ func TestParseHeader(t *testing.T) {
 			wantErr: ErrInvalidTIFF,
 		},
 		{
-			name:    "bigtiff (unsupported v0.1)",
-			bytes:   []byte{'I', 'I', 43, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0},
-			wantErr: ErrUnsupportedTIFF,
+			name:       "bigtiff",
+			bytes:      []byte{'I', 'I', 43, 0, 8, 0, 0, 0, 0x20, 0, 0, 0, 0, 0, 0, 0},
+			wantLE:     true,
+			wantBig:    true,
+			wantOffset: 0x20,
 		},
 		{
 			name:    "short",
@@ -61,6 +66,9 @@ func TestParseHeader(t *testing.T) {
 			}
 			if h.littleEndian != tt.wantLE {
 				t.Errorf("littleEndian: got %v, want %v", h.littleEndian, tt.wantLE)
+			}
+			if h.bigTIFF != tt.wantBig {
+				t.Errorf("bigTIFF: got %v, want %v", h.bigTIFF, tt.wantBig)
 			}
 			if h.firstIFD != tt.wantOffset {
 				t.Errorf("firstIFD: got %d, want %d", h.firstIFD, tt.wantOffset)

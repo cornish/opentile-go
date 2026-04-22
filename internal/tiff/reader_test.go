@@ -38,3 +38,18 @@ func TestByteReaderShort(t *testing.T) {
 		t.Fatal("expected error for short read")
 	}
 }
+
+func TestByteReaderUint64(t *testing.T) {
+	data := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	r := bytes.NewReader(data)
+	bl := newByteReader(r, true)
+	v, err := bl.uint64(0)
+	if err != nil || v != 0x0807060504030201 {
+		t.Fatalf("uint64 LE: got %x, err %v; want 0x0807060504030201", v, err)
+	}
+	bb := newByteReader(r, false)
+	v, err = bb.uint64(0)
+	if err != nil || v != 0x0102030405060708 {
+		t.Fatalf("uint64 BE: got %x, err %v", v, err)
+	}
+}
