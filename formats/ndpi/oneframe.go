@@ -140,7 +140,7 @@ func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 		return nil, fmt.Errorf("one-frame page expected 1 offset/count, got %d/%d", len(offsets), len(counts))
 	}
 	buf := make([]byte, counts[0])
-	if _, err := l.reader.ReadAt(buf, int64(offsets[0])); err != nil {
+	if err := tiff.ReadAtFull(l.reader, buf, int64(offsets[0])); err != nil {
 		return nil, fmt.Errorf("read one-frame JPEG: %w", err)
 	}
 	// Determine MCU size from SOF inside buf.

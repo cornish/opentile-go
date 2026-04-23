@@ -169,7 +169,7 @@ func (l *stripedImage) readStripeFragments(x, y int) ([][]byte, error) {
 			off := int64(l.stripeOffsets[idx])
 			length := int(l.stripeCounts[idx])
 			buf := make([]byte, length)
-			if _, err := l.reader.ReadAt(buf, off); err != nil {
+			if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
 				return nil, fmt.Errorf("read stripe (%d,%d) [idx=%d]: %w", sx, sy, idx, err)
 			}
 			fragments = append(fragments, buf)

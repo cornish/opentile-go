@@ -70,7 +70,7 @@ func (a *stripedJPEGAssociated) Bytes() ([]byte, error) {
 	fragments := make([][]byte, len(a.stripOffsets))
 	for i := range a.stripOffsets {
 		buf := make([]byte, a.stripCounts[i])
-		if _, err := a.reader.ReadAt(buf, int64(a.stripOffsets[i])); err != nil {
+		if err := tiff.ReadAtFull(a.reader, buf, int64(a.stripOffsets[i])); err != nil {
 			return nil, fmt.Errorf("svs: read associated strip %d: %w", i, err)
 		}
 		fragments[i] = buf
@@ -173,7 +173,7 @@ func (a *stripedLabel) Bytes() ([]byte, error) {
 		return nil, fmt.Errorf("svs: label has no strips")
 	}
 	buf := make([]byte, a.stripCounts[0])
-	if _, err := a.reader.ReadAt(buf, int64(a.stripOffsets[0])); err != nil {
+	if err := tiff.ReadAtFull(a.reader, buf, int64(a.stripOffsets[0])); err != nil {
 		return nil, fmt.Errorf("svs: read label strip 0: %w", err)
 	}
 	return buf, nil

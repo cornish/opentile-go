@@ -57,7 +57,7 @@ func (o *overviewImage) Compression() opentile.Compression { return o.compressio
 
 func (o *overviewImage) Bytes() ([]byte, error) {
 	buf := make([]byte, o.length)
-	if _, err := o.reader.ReadAt(buf, int64(o.offset)); err != nil {
+	if err := tiff.ReadAtFull(o.reader, buf, int64(o.offset)); err != nil {
 		return nil, fmt.Errorf("ndpi: read overview: %w", err)
 	}
 	return buf, nil

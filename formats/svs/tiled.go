@@ -2,7 +2,6 @@ package svs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -130,10 +129,7 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	}
 	off := int64(l.offsets[idx])
 	buf := make([]byte, length)
-	n, err := l.reader.ReadAt(buf, off)
-	// io.ReaderAt allows returning (len(buf), io.EOF) when the read lands
-	// exactly at end-of-data. Treat that as success.
-	if err != nil && !(errors.Is(err, io.EOF) && n == len(buf)) {
+	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 	}
 	return buf, nil
