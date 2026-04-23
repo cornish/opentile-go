@@ -126,7 +126,7 @@ func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 	if l.paddedJPEGOnce {
 		return l.paddedJPEG, nil
 	}
-	// NDPI one-frame level pages use StripOffsets (278) / StripByteCounts (279)
+	// NDPI one-frame level pages use StripOffsets (273) / StripByteCounts (279)
 	// rather than TileOffsets (324) / TileByteCounts (325).
 	offsets, err := l.page.ScalarArrayU64(tagStripOffsets)
 	if err != nil {

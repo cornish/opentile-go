@@ -20,11 +20,12 @@ type overviewImage struct {
 	reader      io.ReaderAt
 }
 
-// tagStripOffsets and tagStripByteCounts are the standard TIFF strip tags.
-// NDPI Macro (overview) pages store the JPEG payload as a single strip
-// rather than as a tile.
+// tagStripOffsets and tagStripByteCounts are the standard TIFF strip tags
+// per TIFF 6.0. NDPI Macro (overview) pages and one-frame pyramid levels
+// both store their JPEG payload as a single strip rather than as a tile.
+// Tag 278 is RowsPerStrip — a different tag; do not use it here.
 const (
-	tagStripOffsets    uint16 = 278
+	tagStripOffsets    uint16 = 273
 	tagStripByteCounts uint16 = 279
 )
 
@@ -37,7 +38,7 @@ func newOverviewImage(p *tiff.Page, r io.ReaderAt) (*overviewImage, error) {
 	if !ok {
 		return nil, fmt.Errorf("ndpi: overview ImageLength missing")
 	}
-	// NDPI Macro pages use StripOffsets (278) / StripByteCounts (279) rather
+	// NDPI Macro pages use StripOffsets (273) / StripByteCounts (279) rather
 	// than TileOffsets (324) / TileByteCounts (325).
 	offsets, err := p.ScalarArrayU64(tagStripOffsets)
 	if err != nil {
