@@ -2,6 +2,7 @@ package tiff
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -39,6 +40,12 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 		if isNDPI {
 			mode = modeNDPI
 			h.ndpi = true
+			// NDPI first-IFD offset is 8 bytes, not 4. Re-read as uint64.
+			fullOffset, err := br.uint64(4)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
+			}
+			h.firstIFD = fullOffset
 		}
 	}
 	ifds, err := walkIFDs(br, int64(h.firstIFD), mode)

@@ -9,21 +9,14 @@ import "fmt"
 const ndpiSourceLensTag uint16 = 65420
 
 // walkNDPIIFDs walks an NDPI-extended IFD chain. NDPI files use classic TIFF
-// magic 42 but embed 64-bit offsets via a per-tag 4-byte high-bits extension
-// block placed after the standard 12-byte tag entries (with an 8-byte
-// padding block between).
+// magic 42 but embed 64-bit offsets:
 //
-// Per-IFD layout:
-//
-//	tagno   : uint16
-//	entries : 12 bytes * tagno   (standard classic entry: tag u16, type u16, count u32, valueOrOffset u32)
-//	padding : 8 bytes
-//	hibits  : 4 bytes * tagno    (high 32 bits of valueOrOffset)
-//	nextLow : uint32
-//	nextHi  : uint32
-//
-// For each tag, the full 64-bit valueOrOffset is reconstructed as
-// (hibits << 32) | low.
+//   - First-IFD offset in the header is 8 bytes (uint64), which for <4GB
+//     files has upper 4 bytes = 0 (compatible with classic 4-byte reading).
+//   - Within each IFD: tagno (u16) + 12-byte standard entries + 8-byte
+//     next-IFD offset (uint64) + 4 × tagno hi-bits extension.
+//   - Each tag's effective valueOrOffset is reconstructed as
+//     (hi_bits << 32) | low (the 4-byte inline cell from the standard entry).
 func walkNDPIIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 	var out []*ifd
 	seen := make(map[int64]bool)
@@ -42,12 +35,17 @@ func walkNDPIIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 		}
 		count := uint64(count16)
 
-		cur := &ifd{entries: make(map[uint16]Entry, count)}
-		// Standard entries start at offset + 2.
-		entriesBase := offset + 2
-		// High-bits block starts at offset + 2 + 12*count + 8 (8-byte padding).
-		hibitsBase := entriesBase + int64(12*count) + 8
+		ifd := &ifd{entries: make(map[uint16]Entry, count)}
 
+		// Layout:
+		//   offset + 2                                    → standard entries (12 * count bytes)
+		//   offset + 2 + 12*count                         → next-IFD offset (8 bytes, uint64)
+		//   offset + 2 + 12*count + 8                     → hi-bits extension (4 * count bytes)
+		entriesBase := offset + 2
+		nextIFDOff := entriesBase + int64(12*count)
+		hibitsBase := nextIFDOff + 8
+
+		// Read standard entries and high-bits to build Entry values.
 		for i := uint64(0); i < count; i++ {
 			entryOff := entriesBase + int64(12*i)
 			hibitsOff := hibitsBase + int64(4*i)
@@ -80,33 +78,21 @@ func walkNDPIIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 			e.Type = DataType(typ)
 			e.Count = uint64(countLow)
 			e.valueOrOffset = fullValue
-			// Store the full reconstructed 64-bit value in valueBytes so that
-			// Values64 (which reads valueBytes when fitsInline) returns the
-			// correct high bits. valueBytes is [8]byte, so this is safe.
-			// Values (uint32) reads valueBytes[:4] which yields the low 32 bits
-			// — correct for inline scalar values that fit in uint32.
-			b.order.PutUint64(e.valueBytes[:], fullValue)
-			// NDPI's inline cell is still 4 bytes (the 32-bit low word of the
-			// value); the high 4 bytes live out-of-band in the extension block.
-			// Mark inlineCap=4.
+			copy(e.valueBytes[:], cell)
+			// NDPI inline cell is 4 bytes (the low word of the 8-byte value).
+			// The high 4 bytes live in the extension block out-of-band.
 			e.inlineCap = 4
-			cur.entries[tag] = e
+			ifd.entries[tag] = e
 		}
 
-		out = append(out, cur)
+		out = append(out, ifd)
 
-		// Next-IFD offset: 4 low + 4 high immediately after the high-bits
-		// block for this IFD.
-		nextLowOff := hibitsBase + int64(4*count)
-		nextLow, err := b.uint32(nextLowOff)
+		// Read next-IFD offset as a single uint64 LE.
+		next, err := b.uint64(nextIFDOff)
 		if err != nil {
-			return nil, fmt.Errorf("tiff: NDPI next IFD low: %w", err)
+			return nil, fmt.Errorf("tiff: NDPI next IFD at %d: %w", nextIFDOff, err)
 		}
-		nextHi, err := b.uint32(nextLowOff + 4)
-		if err != nil {
-			return nil, fmt.Errorf("tiff: NDPI next IFD high: %w", err)
-		}
-		offset = int64((uint64(nextHi) << 32) | uint64(nextLow))
+		offset = int64(next)
 	}
 	return out, nil
 }

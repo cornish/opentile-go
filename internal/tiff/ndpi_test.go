@@ -6,32 +6,29 @@ import (
 	"testing"
 )
 
-// buildNDPITIFF constructs a tiny TIFF formatted as NDPI: magic 42, but the
-// IFD has an 8-byte padding block and a high-bits extension after the normal
-// 12-byte tag entries. Each tag's effective valueOrOffset is (high << 32) | low.
+// buildNDPITIFF constructs a tiny TIFF formatted as NDPI: magic 42, classic
+// 12-byte tag entries, then an 8-byte next-IFD offset (uint64), then a 4-byte
+// high-bits extension per tag.
 func buildNDPITIFF(t *testing.T, tags []ndpiTag) []byte {
 	t.Helper()
 	buf := new(bytes.Buffer)
-	// Header: II 42 0x00000008 (IFD at offset 8).
-	buf.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0})
-	// IFD: tagno(u16), 12*tagno bytes, 8-byte padding, 4*tagno high bits, next-IFD (4 low + 4 high).
+	// Header: II 42 firstIFD (8 bytes uint64 for NDPI).
+	buf.Write([]byte{'I', 'I', 42, 0})
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0x0C)) // firstIFD = 0x0C
+	// IFD starts at 0x0C. Layout: tagno(2), 12*n tags, 8-byte next-IFD, 4*n hi-bits.
 	_ = binary.Write(buf, binary.LittleEndian, uint16(len(tags)))
 	for _, tag := range tags {
 		_ = binary.Write(buf, binary.LittleEndian, tag.Tag)
 		_ = binary.Write(buf, binary.LittleEndian, tag.Type)
-		_ = binary.Write(buf, binary.LittleEndian, uint32(tag.Count)) // low 32 of count
+		_ = binary.Write(buf, binary.LittleEndian, uint32(tag.Count))
 		_ = binary.Write(buf, binary.LittleEndian, uint32(tag.ValueOrOffset&0xFFFFFFFF))
 	}
-	// 8-byte padding
-	buf.Write(make([]byte, 8))
-	// High-bits extension: 4 bytes per tag. We're encoding only value high bits;
-	// NDPI's extension format also affects Count but for most tags Count fits in uint32.
+	// Next-IFD (uint64, 0 = end of chain)
+	_ = binary.Write(buf, binary.LittleEndian, uint64(0))
+	// High-bits extension: 4 bytes per tag.
 	for _, tag := range tags {
 		_ = binary.Write(buf, binary.LittleEndian, uint32(tag.ValueOrOffset>>32))
 	}
-	// Next IFD (low 4 + high 4) = 0 for end of chain.
-	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
-	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
 	return buf.Bytes()
 }
 
