@@ -32,20 +32,39 @@ func Open(r io.ReaderAt, size int64) (*File, error) {
 	if h.bigTIFF {
 		mode = modeBigTIFF
 	} else {
-		// Classic header: sniff first IFD for NDPI signature.
+		// Classic magic 42 header. File may be classic TIFF, <4GB NDPI, or
+		// >4GB NDPI. Try the classic-offset sniff first.
 		isNDPI, sniffErr := sniffNDPI(br, int64(h.firstIFD))
 		if sniffErr != nil {
-			return nil, sniffErr
+			isNDPI = false // classic sniff failed; fall through
 		}
 		if isNDPI {
+			// <4GB NDPI or a small NDPI file. The 4-byte classic offset is
+			// correct, but re-read as uint64 so the upper 4 bytes (expected
+			// to be zero here) are captured for any downstream bookkeeping.
 			mode = modeNDPI
 			h.ndpi = true
-			// NDPI first-IFD offset is 8 bytes, not 4. Re-read as uint64.
 			fullOffset, err := br.uint64(4)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
 			}
 			h.firstIFD = fullOffset
+		} else if size > (1 << 32) {
+			// File is >4GB; the classic 4-byte first-IFD read would have
+			// truncated. Re-read as uint64 (NDPI places an 8-byte offset
+			// there) and sniff at the full offset.
+			fullOffset, err := br.uint64(4)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
+			}
+			if int64(fullOffset) > 0 && int64(fullOffset) < size {
+				isNDPILarge, sniffErr2 := sniffNDPI(br, int64(fullOffset))
+				if sniffErr2 == nil && isNDPILarge {
+					mode = modeNDPI
+					h.ndpi = true
+					h.firstIFD = fullOffset
+				}
+			}
 		}
 	}
 	ifds, err := walkIFDs(br, int64(h.firstIFD), mode)
