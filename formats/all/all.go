@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	opentile "github.com/tcornish/opentile-go"
+	"github.com/tcornish/opentile-go/formats/ndpi"
 	"github.com/tcornish/opentile-go/formats/svs"
 )
 
@@ -25,6 +26,7 @@ var once sync.Once
 func Register() {
 	once.Do(func() {
 		opentile.Register(svs.New())
+		opentile.Register(ndpi.New())
 	})
 }
 
