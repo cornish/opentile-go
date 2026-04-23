@@ -113,20 +113,10 @@ func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
 	return nil, false
 }
 
-// tiler is the NDPI implementation of opentile.Tiler; fully defined in
-// Task 20. Declared here so MetadataOf compiles.
+// tiler is the NDPI implementation of opentile.Tiler; method set lives in tiler.go.
 type tiler struct {
 	md         Metadata
 	levels     []opentile.Level
 	associated []opentile.AssociatedImage
 	icc        []byte
 }
-
-// Interface satisfaction stubs for Task 20 implementation.
-func (t *tiler) Format() opentile.Format                { return opentile.FormatNDPI }
-func (t *tiler) Levels() []opentile.Level               { return nil }
-func (t *tiler) Level(i int) (opentile.Level, error)    { return nil, nil }
-func (t *tiler) Associated() []opentile.AssociatedImage { return nil }
-func (t *tiler) Metadata() opentile.Metadata            { return t.md.Metadata }
-func (t *tiler) ICCProfile() []byte                     { return t.icc }
-func (t *tiler) Close() error                           { return nil }

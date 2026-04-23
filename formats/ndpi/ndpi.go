@@ -41,7 +41,99 @@ func (f *Factory) Supports(file *tiff.File) bool {
 	return ok
 }
 
-// Open is replaced in Task 20 with the real NDPI opener.
+// Open constructs an NDPI Tiler from a parsed TIFF file.
 func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, error) {
-	return nil, fmt.Errorf("ndpi.Open: not yet implemented")
+	pages := file.Pages()
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("ndpi: file has no pages")
+	}
+	md, err := parseMetadata(pages[0])
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve the requested tile size and snap to stripe width.
+	reqSize := opentile.Size{W: 512, H: 512}
+	if sz, set := cfg.TileSize(); set {
+		if sz.W != sz.H {
+			return nil, fmt.Errorf("ndpi: tile size must be square, got %v", sz)
+		}
+		reqSize = sz
+	}
+	smallestStripe := smallestStripeWidth(pages)
+	adjusted := AdjustTileSize(reqSize.W, smallestStripe)
+
+	var levels []opentile.Level
+	var associated []opentile.AssociatedImage
+	var overview *overviewImage
+	levelIdx := 0
+	for _, p := range pages {
+		kind := classifyPage(p)
+		switch kind {
+		case pageStripedLevel:
+			lvl, err := newStripedImage(levelIdx, p, adjusted, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("ndpi: level %d: %w", levelIdx, err)
+			}
+			levels = append(levels, lvl)
+			levelIdx++
+		case pageOneFrameLevel:
+			lvl, err := newOneFrameImage(levelIdx, p, adjusted, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("ndpi: level %d: %w", levelIdx, err)
+			}
+			levels = append(levels, lvl)
+			levelIdx++
+		case pageMacro:
+			ov, err := newOverviewImage(p, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("ndpi: overview: %w", err)
+			}
+			overview = ov
+			associated = append(associated, ov)
+		}
+	}
+	if overview != nil {
+		// Default label crop: 0 → 30% of macro width. MCU sizes default to
+		// 16x16 (YCbCr 4:2:0 — Hamamatsu standard).
+		associated = append(associated, newLabelImage(overview, 0.3, 16, 16))
+	}
+	return &tiler{md: md, levels: levels, associated: associated}, nil
+}
+
+// pageKind classifies an NDPI TIFF page by role.
+type pageKind int
+
+const (
+	pageSkip pageKind = iota
+	pageStripedLevel
+	pageOneFrameLevel
+	pageMacro
+)
+
+// classifyPage maps an NDPI TIFF page to its semantic role.
+func classifyPage(p *tiff.Page) pageKind {
+	if desc, ok := p.ImageDescription(); ok && desc == "Macro" {
+		return pageMacro
+	}
+	if _, ok := p.TileWidth(); ok {
+		return pageStripedLevel
+	}
+	return pageOneFrameLevel
+}
+
+// smallestStripeWidth walks all tiled pages and returns the smallest
+// TileWidth found, or 0 if no pages are tiled.
+func smallestStripeWidth(pages []*tiff.Page) int {
+	smallest := 0
+	for _, p := range pages {
+		tw, ok := p.TileWidth()
+		if !ok {
+			continue
+		}
+		if smallest == 0 || int(tw) < smallest {
+			smallest = int(tw)
+		}
+	}
+	return smallest
 }
