@@ -48,6 +48,12 @@ func (p *Page) scalarU32(tag uint16) (uint32, bool) {
 	return vals[0], true
 }
 
+// ScalarU32 returns the first value of an arbitrary tag as uint32, or
+// (0, false) if the tag is absent. Exposed so format packages can read
+// vendor-private tags without the internal helpers gaining per-tag
+// accessors.
+func (p *Page) ScalarU32(tag uint16) (uint32, bool) { return p.scalarU32(tag) }
+
 func (p *Page) ImageWidth() (uint32, bool)       { return p.scalarU32(TagImageWidth) }
 func (p *Page) ImageLength() (uint32, bool)      { return p.scalarU32(TagImageLength) }
 func (p *Page) TileWidth() (uint32, bool)        { return p.scalarU32(TagTileWidth) }
