@@ -59,18 +59,30 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	}
 
 	// Pyramid levels are tiled; non-tiled pages (thumbnail, label, macro)
-	// are the substrate for associated-image support (v0.3) and are skipped
-	// here. Level indices are contiguous (0..N-1) in pyramid order and do
-	// not correspond to physical page indices in the TIFF.
+	// are classified and exposed via Tiler.Associated(). Level indices are
+	// contiguous (0..N-1) in pyramid order and do not correspond to physical
+	// page indices in the TIFF.
 	levels := make([]opentile.Level, 0, len(pages))
 	baseSize, err := pageSize(basePage)
 	if err != nil {
 		return nil, err
 	}
 	levelIdx := 0
+	var associated []opentile.AssociatedImage
 	for pageIdx, p := range pages {
-		if _, ok := p.TileWidth(); !ok {
-			continue // non-tiled page; defer to v0.3 associated-image support
+		_, tiled := p.TileWidth()
+		subfileType, _ := p.ScalarU32(tiff.TagNewSubfileType)
+		kind := classifyAssociatedKind(pageIdx, subfileType, tiled)
+		if kind != "" {
+			a, err := newAssociatedImage(kind, p, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("svs: associated %s (page %d): %w", kind, pageIdx, err)
+			}
+			associated = append(associated, a)
+			continue
+		}
+		if !tiled {
+			continue // non-associated, non-tiled page — skip
 		}
 		lvl, err := newTiledImage(levelIdx, p, baseSize, md.MPP, file.ReaderAt(), cfg)
 		if err != nil {
@@ -80,7 +92,7 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		levelIdx++
 	}
 	icc, _ := basePage.ICCProfile()
-	return &tiler{md: md, levels: levels, icc: icc}, nil
+	return &tiler{md: md, levels: levels, associated: associated, icc: icc}, nil
 }
 
 // pageSize returns the (ImageWidth, ImageLength) as opentile.Size.
@@ -98,9 +110,10 @@ func pageSize(p *tiff.Page) (opentile.Size, error) {
 
 // tiler is the SVS implementation of opentile.Tiler.
 type tiler struct {
-	md     Metadata
-	levels []opentile.Level
-	icc    []byte
+	md         Metadata
+	levels     []opentile.Level
+	associated []opentile.AssociatedImage
+	icc        []byte
 }
 
 func (t *tiler) Format() opentile.Format                { return opentile.FormatSVS }
@@ -112,7 +125,7 @@ func (t *tiler) Levels() []opentile.Level {
 	copy(out, t.levels)
 	return out
 }
-func (t *tiler) Associated() []opentile.AssociatedImage { return nil }
+func (t *tiler) Associated() []opentile.AssociatedImage { return t.associated }
 func (t *tiler) Metadata() opentile.Metadata            { return t.md.Metadata }
 func (t *tiler) ICCProfile() []byte                     { return t.icc }
 func (t *tiler) Close() error                           { return nil }

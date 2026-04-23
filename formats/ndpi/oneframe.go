@@ -128,11 +128,11 @@ func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 	}
 	// NDPI one-frame level pages use StripOffsets (273) / StripByteCounts (279)
 	// rather than TileOffsets (324) / TileByteCounts (325).
-	offsets, err := l.page.ScalarArrayU64(tagStripOffsets)
+	offsets, err := l.page.ScalarArrayU64(tiff.TagStripOffsets)
 	if err != nil {
 		return nil, fmt.Errorf("one-frame page missing StripOffsets: %w", err)
 	}
-	counts, err := l.page.ScalarArrayU64(tagStripByteCounts)
+	counts, err := l.page.ScalarArrayU64(tiff.TagStripByteCounts)
 	if err != nil {
 		return nil, fmt.Errorf("one-frame page missing StripByteCounts: %w", err)
 	}

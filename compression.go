@@ -17,6 +17,7 @@ const (
 	CompressionNone
 	CompressionJPEG
 	CompressionJP2K
+	CompressionLZW // TIFF tag 259 value 5 (Aperio SVS label is commonly LZW)
 )
 
 func (c Compression) String() string {
@@ -29,6 +30,8 @@ func (c Compression) String() string {
 		return "jpeg"
 	case CompressionJP2K:
 		return "jp2k"
+	case CompressionLZW:
+		return "lzw"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(c))
 	}

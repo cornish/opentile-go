@@ -70,7 +70,7 @@ func newTiledImage(
 		return nil, fmt.Errorf("tile table length mismatch: offsets=%d counts=%d grid=%dx%d", len(offsets), len(counts), gx, gy)
 	}
 	comp, _ := p.Compression()
-	ocomp := mapCompression(comp)
+	ocomp := tiffCompressionToOpentile(comp)
 
 	// Pyramid index: log2(baseSize.W / iw), rounded to nearest int.
 	var pyr int
@@ -100,20 +100,6 @@ func newTiledImage(
 		reader:      r,
 		cfg:         cfg,
 	}, nil
-}
-
-// mapCompression translates TIFF compression codes into opentile.Compression.
-func mapCompression(code uint32) opentile.Compression {
-	switch code {
-	case 1:
-		return opentile.CompressionNone
-	case 7:
-		return opentile.CompressionJPEG
-	case 33003, 33005:
-		return opentile.CompressionJP2K
-	default:
-		return opentile.CompressionUnknown
-	}
 }
 
 func (l *tiledImage) Index() int                        { return l.index }

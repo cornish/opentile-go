@@ -82,6 +82,15 @@ Caught by the three-slide integration tests or during implementation. The librar
 - **Severity:** Suggestion
 - **Detail:** Per-call `tjInitTransform`/`tjDestroy` is safe for goroutine-parallel `Crop` calls per libjpeg-turbo's threading model, but no test proves it. A simple `t.Parallel()` loop running 1000 crops across 32 goroutines would lock the contract in. Not blocking.
 
+### L10 — SVS LZW label returns only strip 0
+- **Source:** Task 21 implementation (feat/v0.2)
+- **Severity:** Limitation (v0.2 upstream-parity behavior)
+- **Detail:** `formats/svs.stripedLabel.Bytes()` returns the raw bytes of strip 0 of the TIFF label page, not a stitched or re-encoded full-image LZW stream. For the multi-strip labels in the CMU fixtures (67/67, 67/67, 71/71 strips), this means consumers receive a valid LZW blob representing only `RowsPerStrip` rows (7 in most fixtures) of the ~463-row label — a ~1.5% vertical sliver.
+
+  *Why this is the v0.2 behavior:* matches Python opentile's `SvsLabelImage.get_tile((0,0))` which returns `_read_frame(0)` unconditionally. Parity with upstream is the v0.2 correctness bar; stitching here would diverge from the parity oracle (Task 25-26) and from `wsidicomizer`'s expected byte stream.
+
+  *How to fix in v0.3:* decode each strip via a TIFF-aware LZW codec (Go stdlib `compress/lzw` with `Order=MSB`, or a ported tifffile codec), raster-concatenate, re-encode as a single LZW stream covering the full image height, and rewrite the LZW-specific TIFF metadata to match. Requires a full LZW codec path. Also update Python opentile with the same fix so the parity oracle continues to compare like for like, or gate the oracle on non-label images.
+
 ---
 
 ## 3. Reviewer suggestions accepted but not applied

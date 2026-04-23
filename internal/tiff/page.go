@@ -7,13 +7,17 @@ import (
 
 // Well-known TIFF tag IDs used by opentile-go.
 const (
+	TagNewSubfileType    uint16 = 254
 	TagImageWidth        uint16 = 256
 	TagImageLength       uint16 = 257
 	TagBitsPerSample     uint16 = 258
 	TagCompression       uint16 = 259
 	TagPhotometric       uint16 = 262
 	TagImageDescription  uint16 = 270
+	TagStripOffsets      uint16 = 273
 	TagSamplesPerPixel   uint16 = 277
+	TagRowsPerStrip      uint16 = 278
+	TagStripByteCounts   uint16 = 279
 	TagXResolution       uint16 = 282
 	TagYResolution       uint16 = 283
 	TagResolutionUnit    uint16 = 296
