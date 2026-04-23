@@ -2,6 +2,7 @@ package tiff
 
 import (
 	"fmt"
+	"math"
 )
 
 // Well-known TIFF tag IDs used by opentile-go.
@@ -180,6 +181,31 @@ func (p *Page) rationalFirst(tag uint16) (uint32, uint32, bool) {
 		return 0, 0, false
 	}
 	return vals[0][0], vals[0][1], true
+}
+
+// Float32 returns the first value of a FLOAT-typed tag (TIFF data type 11,
+// IEEE 754 single-precision). Returns (0, false) if the tag is missing or
+// not a FLOAT type. NDPI's Magnification tag (65421) uses this type.
+func (p *Page) Float32(tag uint16) (float32, bool) {
+	e, ok := p.ifd.get(tag)
+	if !ok {
+		return 0, false
+	}
+	if e.Type != DTFloat {
+		return 0, false
+	}
+	// FLOAT is 4 bytes per value. Count must be ≥ 1; read the first.
+	var bits uint32
+	if e.fitsInline() {
+		bits = p.br.order.Uint32(e.valueBytes[:4])
+	} else {
+		buf, err := p.br.bytes(int64(e.valueOrOffset), 4)
+		if err != nil {
+			return 0, false
+		}
+		bits = p.br.order.Uint32(buf)
+	}
+	return math.Float32frombits(bits), true
 }
 
 // TileGrid returns the tile grid dimensions (tiles in X, tiles in Y).

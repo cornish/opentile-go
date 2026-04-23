@@ -20,6 +20,14 @@ type overviewImage struct {
 	reader      io.ReaderAt
 }
 
+// tagStripOffsets and tagStripByteCounts are the standard TIFF strip tags.
+// NDPI Macro (overview) pages store the JPEG payload as a single strip
+// rather than as a tile.
+const (
+	tagStripOffsets    uint16 = 278
+	tagStripByteCounts uint16 = 279
+)
+
 func newOverviewImage(p *tiff.Page, r io.ReaderAt) (*overviewImage, error) {
 	iw, ok := p.ImageWidth()
 	if !ok {
@@ -29,16 +37,18 @@ func newOverviewImage(p *tiff.Page, r io.ReaderAt) (*overviewImage, error) {
 	if !ok {
 		return nil, fmt.Errorf("ndpi: overview ImageLength missing")
 	}
-	offsets, err := p.TileOffsets64()
+	// NDPI Macro pages use StripOffsets (278) / StripByteCounts (279) rather
+	// than TileOffsets (324) / TileByteCounts (325).
+	offsets, err := p.ScalarArrayU64(tagStripOffsets)
 	if err != nil {
 		return nil, fmt.Errorf("ndpi: overview offsets: %w", err)
 	}
-	counts, err := p.TileByteCounts64()
+	counts, err := p.ScalarArrayU64(tagStripByteCounts)
 	if err != nil {
 		return nil, fmt.Errorf("ndpi: overview counts: %w", err)
 	}
 	if len(offsets) != 1 || len(counts) != 1 {
-		return nil, fmt.Errorf("ndpi: overview expected 1 tile, got %d", len(offsets))
+		return nil, fmt.Errorf("ndpi: overview expected 1 strip, got offsets=%d counts=%d", len(offsets), len(counts))
 	}
 	return &overviewImage{
 		size:        opentile.Size{W: int(iw), H: int(il)},

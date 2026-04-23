@@ -7,14 +7,14 @@ import (
 
 func TestParseMetadataFromFields(t *testing.T) {
 	got := parseFromFields(metadataFields{
-		SourceLens:              20,
-		Model:                   "NanoZoomer 2.0-HT",
-		DateTime:                "2014:01:07 11:22:33",
-		XResolution:             [2]uint32{100000, 1},
-		YResolution:             [2]uint32{100000, 1},
-		ResolutionUnit:          3, // centimeters
-		ZOffsetFromSlideCenter:  2500, // nm
-		Reference:               "SN-1234",
+		Magnification:          20.0,
+		Model:                  "NanoZoomer 2.0-HT",
+		DateTime:               "2014:01:07 11:22:33",
+		XResolution:            [2]uint32{100000, 1},
+		YResolution:            [2]uint32{100000, 1},
+		ResolutionUnit:         3,    // centimeters
+		ZOffsetFromSlideCenter: 2500, // nm
+		Reference:              "SN-1234",
 	})
 	if got.Magnification != 20 {
 		t.Errorf("Magnification: got %v, want 20", got.Magnification)

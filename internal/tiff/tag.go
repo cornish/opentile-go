@@ -15,9 +15,14 @@ const (
 	DTLong      DataType = 4
 	DTRational  DataType = 5
 	DTUndefined DataType = 7
-	DTIFD       DataType = 13 // NEW — uint32 offset to sub-IFD
-	DTLong8     DataType = 16 // NEW — uint64 (BigTIFF)
-	DTIFD8      DataType = 18 // NEW — uint64 offset to sub-IFD (BigTIFF)
+	DTSShort    DataType = 8  // signed 16-bit integer
+	DTSLong     DataType = 9  // signed 32-bit integer (NDPI XOffset, etc.)
+	DTSRational DataType = 10 // signed rational (two SLONGs)
+	DTFloat     DataType = 11 // IEEE 754 single-precision (NDPI Magnification)
+	DTDouble    DataType = 12 // IEEE 754 double-precision
+	DTIFD       DataType = 13 // uint32 offset to sub-IFD
+	DTLong8     DataType = 16 // uint64 (BigTIFF)
+	DTIFD8      DataType = 18 // uint64 offset to sub-IFD (BigTIFF)
 )
 
 // Size returns the byte size of a single value of the given data type.
@@ -28,11 +33,11 @@ func (d DataType) Size() int {
 	switch d {
 	case DTByte, DTASCII, DTUndefined:
 		return 1
-	case DTShort:
+	case DTShort, DTSShort:
 		return 2
-	case DTLong, DTIFD:
+	case DTLong, DTIFD, DTSLong, DTFloat:
 		return 4
-	case DTRational, DTLong8, DTIFD8:
+	case DTRational, DTLong8, DTIFD8, DTSRational, DTDouble:
 		return 8
 	default:
 		return 1

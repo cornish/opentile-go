@@ -8,34 +8,34 @@ import (
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
-// buildNDPIStub returns a tiny classic-TIFF with a SourceLens tag (65420).
-// For this test we don't need the full NDPI 64-bit extension layout because
-// we're only testing the Supports detection (which relies on the tiff.File
-// already being parsed correctly by internal/tiff).
+// buildNDPIStub returns a tiny NDPI-layout TIFF with:
+//   - FileFormat (65420, SHORT=1) — detection marker
+//   - Magnification (65421, FLOAT=20.0) — page classification via tag 65421
+//   - Make (271, ASCII="Hamamatsu") — required by Supports (per tifffile line 10608)
+//   - TileOffsets / TileByteCounts so Open's newStripedImage can parse the page
+//
+// Image: 1024×768, TileWidth=640, TileLength=8 → 1×96 stripes.
 func buildNDPIStub(t *testing.T) []byte {
 	t.Helper()
-	// Build an NDPI-layout TIFF with 7 tags including TileOffsets/TileByteCounts
-	// so that Open's newStripedImage can parse the page fully.
+	// NDPI IFD layout at offset 12:
+	//   2 bytes:  tagno (9)
+	//   9×12=108 bytes: entries
+	//   8 bytes:  next-IFD (uint64)
+	//   9×4=36 bytes:   hi-bits extension
+	//   IFD end = 12+2+108+8+36 = 166
 	//
-	// Layout (all little-endian):
-	//   header (12 bytes):       II 42 00 <firstIFD uint64>
-	//   IFD at offset 12:        tagno u16 = 7
-	//                            7 × 12-byte entries (84 bytes)
-	//                            8-byte next-IFD = 0
-	//                            7 × 4-byte hi-bits = 0
-	//   IFD end = 12+2+84+8+28 = 134
-	//   TileOffsets data:        96 × uint32 at offset 134 (384 bytes)
-	//   TileByteCounts data:     96 × uint32 at offset 518 (384 bytes)
-	//
-	// Image: 640×768, TileWidth=640, TileLength=8 → grid 1×96 = 96 native stripes.
-	// Tile offsets and counts are zero (tiles are never read in the Open test).
+	// External data:
+	//   "Hamamatsu\0" (10 bytes) at 166  → Make tag
+	//   TileOffsets: 96×uint32 at 176    (384 bytes)
+	//   TileByteCounts: 96×uint32 at 560 (384 bytes)
 	const (
-		nTags   = 7
-		nTiles  = 96 // ceil(768/8) = 96 stripes
-		ifdBase = 12
-		// ifdEnd = ifdBase + 2 + nTags*12 + 8 + nTags*4 = 12+2+84+8+28 = 134
-		offsetsDataOff = 134
-		countsDataOff  = offsetsDataOff + nTiles*4 // 134 + 384 = 518
+		nTags          = 9
+		nTiles         = 96 // ceil(768/8)
+		ifdBase        = 12
+		makeStrOff     = 166 // "Hamamatsu\0" lives here
+		makeStrLen     = 10
+		offsetsDataOff = makeStrOff + makeStrLen // 176
+		countsDataOff  = offsetsDataOff + nTiles*4 // 560
 	)
 	buf := new(bytes.Buffer)
 	w16 := func(v uint16) {
@@ -52,26 +52,30 @@ func buildNDPIStub(t *testing.T) []byte {
 		w32(uint32(v))
 		w32(uint32(v >> 32))
 	}
-	// Header (12 bytes — NDPI uses 8-byte first-IFD)
+	// Header (12 bytes — NDPI uses 8-byte first-IFD pointer)
 	buf.Write([]byte{'I', 'I', 42, 0})
-	w64(ifdBase) // firstIFD = 12
-	// IFD at offset 12
-	w16(nTags) // tagno = 7
-	// Tag entries (12 bytes each): tag(u16) type(u16) count(u32) value/offset(u32)
-	w16(256); w16(3); w32(1); w32(1024)                // ImageWidth SHORT
-	w16(257); w16(3); w32(1); w32(768)                 // ImageLength SHORT
-	w16(322); w16(3); w32(1); w32(640)                 // TileWidth SHORT
-	w16(323); w16(3); w32(1); w32(8)                   // TileLength SHORT (8-pixel stripes)
-	w16(324); w16(4); w32(nTiles); w32(offsetsDataOff) // TileOffsets LONG[96]
-	w16(325); w16(4); w32(nTiles); w32(countsDataOff)  // TileByteCounts LONG[96]
-	w16(65420); w16(3); w32(1); w32(20)                // SourceLens SHORT = 20x
+	w64(ifdBase)
+	// IFD
+	w16(nTags)
+	// Entries (sorted by tag, 12 bytes each: tag u16, type u16, count u32, value/offset u32)
+	w16(256); w16(3); w32(1); w32(1024)                    // ImageWidth SHORT
+	w16(257); w16(3); w32(1); w32(768)                     // ImageLength SHORT
+	w16(271); w16(2); w32(makeStrLen); w32(makeStrOff)     // Make ASCII -> "Hamamatsu\0"
+	w16(322); w16(3); w32(1); w32(640)                     // TileWidth SHORT
+	w16(323); w16(3); w32(1); w32(8)                       // TileLength SHORT (8-pixel stripes)
+	w16(324); w16(4); w32(nTiles); w32(offsetsDataOff)     // TileOffsets LONG[96]
+	w16(325); w16(4); w32(nTiles); w32(countsDataOff)      // TileByteCounts LONG[96]
+	w16(65420); w16(3); w32(1); w32(1)                     // FileFormat SHORT = 1 (sentinel)
+	w16(65421); w16(11); w32(1); w32(0x41A00000)           // Magnification FLOAT = 20.0
 	// Next-IFD (8 bytes uint64) = 0
 	w64(0)
-	// Hi-bits extension (4 bytes × nTags) = all zeros for a small fixture
+	// Hi-bits extension (4 bytes × nTags) = all zeros
 	for i := 0; i < nTags; i++ {
 		w32(0)
 	}
-	// TileOffsets data: 96 × uint32 = 0 (tiles are never read in Open test)
+	// External data: Make string "Hamamatsu\0"
+	buf.Write([]byte("Hamamatsu\x00"))
+	// TileOffsets data: 96 × uint32 = 0 (tiles never read in Open test)
 	for i := 0; i < nTiles; i++ {
 		w32(0)
 	}
@@ -89,7 +93,7 @@ func TestSupportsDetectsNDPI(t *testing.T) {
 		t.Fatalf("tiff.Open: %v", err)
 	}
 	if !New().Supports(f) {
-		t.Fatal("Supports: expected true for SourceLens-bearing TIFF")
+		t.Fatal("Supports: expected true for FileFormat+Make-bearing NDPI TIFF")
 	}
 }
 
@@ -155,7 +159,7 @@ func TestNdpiOpenClassifiesPages(t *testing.T) {
 	if !ok {
 		t.Fatal("MetadataOf returned ok=false")
 	}
-	if md.SourceLens != 20 {
-		t.Errorf("SourceLens: got %v, want 20", md.SourceLens)
+	if md.SourceLens != 20.0 {
+		t.Errorf("SourceLens: got %v, want 20.0", md.SourceLens)
 	}
 }

@@ -11,18 +11,22 @@ import (
 // cross-format fields (Magnification, scanner info, AcquisitionDateTime).
 type Metadata struct {
 	opentile.Metadata
-	SourceLens  float64 // objective magnification from Hamamatsu SourceLens tag (65420)
-	FocalDepth  float64 // mm, from FocalDepth tag (if present)
-	FocalOffset float64 // mm, from ZOffsetFromSlideCenter tag (nanometers → mm)
-	Reference   string  // scanner reference/serial
+	SourceLens  float64 // objective magnification from tag 65421 (equivalent to Magnification)
+	FocalOffset float64 // mm, from ZOffsetFromSlideCenter tag 65424 (nanometers → mm)
+	Reference   string  // scanner serial, tag 65442
 }
 
-// NDPI vendor-private tag IDs.
+// NDPI vendor-private tag IDs (verified against cgohlke/tifffile NDPI_TAGS registry).
 const (
-	tagSourceLens             uint16 = 65420
-	tagZOffsetFromSlideCenter uint16 = 65427
-	tagFocalDepth             uint16 = 65432
-	tagReference              uint16 = 65442
+	tagFileFormat             uint16 = 65420 // present iff NDPI; version marker
+	tagMagnification          uint16 = 65421 // FLOAT; -1 = Macro, -2 = Map, >0 = source lens
+	tagXOffsetFromSlideCenter uint16 = 65422 // SLONG
+	tagYOffsetFromSlideCenter uint16 = 65423 // SLONG
+	tagZOffsetFromSlideCenter uint16 = 65424 // SLONG (nanometers; focal plane)
+	tagTissueIndex            uint16 = 65425
+	tagSlideLabel             uint16 = 65427 // ASCII
+	tagCaptureMode            uint16 = 65441
+	tagReference              uint16 = 65442 // ScannerSerialNumber (ASCII)
 )
 
 // Standard TIFF tag IDs used by the NDPI metadata parser.
@@ -35,22 +39,21 @@ const (
 // Production paths populate it from *tiff.Page via parseMetadata; tests
 // construct it directly.
 type metadataFields struct {
-	SourceLens             uint32
+	Magnification          float32 // from tag 65421; may be negative for Macro/Map
 	Model                  string
 	DateTime               string
 	XResolution            [2]uint32
 	YResolution            [2]uint32
 	ResolutionUnit         uint32
-	ZOffsetFromSlideCenter uint32
-	FocalDepth             uint32
+	ZOffsetFromSlideCenter int32 // SLONG, nanometers (note: signed)
 	Reference              string
 }
 
 // parseMetadata reads NDPI metadata from the first TIFF page.
 func parseMetadata(p *tiff.Page) (Metadata, error) {
 	var f metadataFields
-	if v, ok := p.ScalarU32(tagSourceLens); ok {
-		f.SourceLens = v
+	if v, ok := p.Float32(tagMagnification); ok {
+		f.Magnification = v
 	}
 	f.Model, _ = p.ASCII(tagModel)
 	f.DateTime, _ = p.ASCII(tagDateTime)
@@ -63,11 +66,10 @@ func parseMetadata(p *tiff.Page) (Metadata, error) {
 	if v, ok := p.ResolutionUnit(); ok {
 		f.ResolutionUnit = v
 	}
+	// ZOffsetFromSlideCenter is SLONG (signed). Use the raw uint32 value
+	// reinterpreted as int32.
 	if v, ok := p.ScalarU32(tagZOffsetFromSlideCenter); ok {
-		f.ZOffsetFromSlideCenter = v
-	}
-	if v, ok := p.ScalarU32(tagFocalDepth); ok {
-		f.FocalDepth = v
+		f.ZOffsetFromSlideCenter = int32(v)
 	}
 	f.Reference, _ = p.ASCII(tagReference)
 	return parseFromFields(f), nil
@@ -78,12 +80,16 @@ func parseMetadata(p *tiff.Page) (Metadata, error) {
 // needing a *tiff.Page.
 func parseFromFields(f metadataFields) Metadata {
 	md := Metadata{
-		SourceLens:  float64(f.SourceLens),
-		FocalOffset: float64(f.ZOffsetFromSlideCenter) / 1_000_000.0,
-		FocalDepth:  float64(f.FocalDepth) / 1_000_000.0,
+		FocalOffset: float64(f.ZOffsetFromSlideCenter) / 1_000_000.0, // nm → mm
 		Reference:   f.Reference,
 	}
-	md.Magnification = float64(f.SourceLens)
+	// NDPI magnification may be negative for associated-image pages (-1 Macro,
+	// -2 Map). For the pyramid-level metadata path we clamp to >=0, so a
+	// negative value means "not a real magnification" and Magnification stays 0.
+	if f.Magnification > 0 {
+		md.Magnification = float64(f.Magnification)
+		md.SourceLens = float64(f.Magnification)
+	}
 	md.ScannerManufacturer = "Hamamatsu"
 	md.ScannerModel = f.Model
 	if f.Model != "" {

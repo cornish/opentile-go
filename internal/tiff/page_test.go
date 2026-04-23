@@ -169,6 +169,40 @@ func equalU64(a, b []uint64) bool {
 	return true
 }
 
+func TestPageFloat32(t *testing.T) {
+	// Build a minimal TIFF with one FLOAT tag: tag=65421, type=11, count=1,
+	// value (inline) = 20.0 → IEEE 754 bits 0x41A00000.
+	buf := new(bytes.Buffer)
+	buf.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0})
+	w16 := func(v uint16) { buf.WriteByte(byte(v)); buf.WriteByte(byte(v >> 8)) }
+	w32 := func(v uint32) {
+		buf.WriteByte(byte(v)); buf.WriteByte(byte(v >> 8))
+		buf.WriteByte(byte(v >> 16)); buf.WriteByte(byte(v >> 24))
+	}
+	w16(1)                                       // tagno=1
+	w16(65421); w16(11); w32(1); w32(0x41A00000) // Magnification FLOAT
+	w32(0)                                       // next IFD = 0
+	data := buf.Bytes()
+
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	p := f.Pages()[0]
+	got, ok := p.Float32(65421)
+	if !ok {
+		t.Fatal("Float32: expected ok=true")
+	}
+	if got != 20.0 {
+		t.Errorf("Float32: got %v, want 20.0", got)
+	}
+	// Missing tag → ok=false.
+	_, ok = p.Float32(65422)
+	if ok {
+		t.Error("Float32 on missing tag: expected ok=false")
+	}
+}
+
 func TestTileGridCeilDivPartialEdge(t *testing.T) {
 	// Use the existing buildPageTIFF fixture (1024x768, 256 tiles), but
 	// also verify ceil behavior with a computation unit test against the
