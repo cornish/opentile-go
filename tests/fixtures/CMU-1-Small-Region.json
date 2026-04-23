@@ -160,5 +160,34 @@
     "0:9:7": "0ccdedee086e47394e4924dc7303e16d16b11be103fceae4d2232571818c6ea8",
     "0:9:8": "3a0df299b218a42837f8ebc2878fc658a850cdf81e29f2ebc14579e6e84820f6",
     "0:9:9": "1d7cc09bb8e671046abcd1c5f566968ccb8b1b24ff3567af740c8b4413e293f5"
-  }
+  },
+  "associated": [
+    {
+      "kind": "thumbnail",
+      "size": [
+        574,
+        768
+      ],
+      "compression": "jpeg",
+      "sha256": "42f76c0c20386c5d79703f7286d1e7ce7ad2dd501084c65e8784f32c696e5ff0"
+    },
+    {
+      "kind": "label",
+      "size": [
+        387,
+        463
+      ],
+      "compression": "lzw",
+      "sha256": "84ff007cd98608be83edf7c275591a4cafd9da95063ccb64ecdc0a85d69cd4b8"
+    },
+    {
+      "kind": "overview",
+      "size": [
+        1280,
+        431
+      ],
+      "compression": "jpeg",
+      "sha256": "e32f434ebede2c4ee4260749e78ab275b9611dd911cb5f1aef03f0b75396eb49"
+    }
+  ]
 }

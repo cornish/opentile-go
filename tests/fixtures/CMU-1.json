@@ -24879,5 +24879,34 @@
     "2:9:6": "b20c3425503b551dcd31b9cd2e328d15f5d877e4fccedd8148f60c584563c295",
     "2:9:7": "4e2587364a479d18484b1f1754e04f241b51c6e1f3153c9b136cef4b17cb3ef5",
     "2:9:8": "5218cfaa5481afa0c810345eeee02d66c81d592debb7cc8255695ad487046f2b"
-  }
+  },
+  "associated": [
+    {
+      "kind": "thumbnail",
+      "size": [
+        1024,
+        732
+      ],
+      "compression": "jpeg",
+      "sha256": "da48788d815d86f9aa99fb2eb0d146d275a0088ec593b36d7cdd9bb507891f16"
+    },
+    {
+      "kind": "label",
+      "size": [
+        387,
+        463
+      ],
+      "compression": "lzw",
+      "sha256": "84ff007cd98608be83edf7c275591a4cafd9da95063ccb64ecdc0a85d69cd4b8"
+    },
+    {
+      "kind": "overview",
+      "size": [
+        1280,
+        431
+      ],
+      "compression": "jpeg",
+      "sha256": "2bd1d98bd7b89f17adeb78467c31ff1129002121ea9d6ace87b369843a4cacfb"
+    }
+  ]
 }

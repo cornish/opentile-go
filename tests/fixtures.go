@@ -9,14 +9,23 @@ import (
 	"path/filepath"
 )
 
+// AssociatedFixture is the per-associated-image portion of a fixture.
+type AssociatedFixture struct {
+	Kind        string `json:"kind"`
+	Size        [2]int `json:"size"`
+	Compression string `json:"compression"`
+	SHA256      string `json:"sha256"`
+}
+
 // Fixture is the on-disk schema for a single-slide parity fixture.
 type Fixture struct {
-	Slide            string            `json:"slide"`
-	Format           string            `json:"format"`
-	Levels           []LevelFixture    `json:"levels"`
-	Metadata         MetadataFixture   `json:"metadata"`
-	TileSHA256       map[string]string `json:"tiles"` // key: "level:x:y", value: hex sha256
-	ICCProfileSHA256 string            `json:"icc_profile_sha256,omitempty"`
+	Slide            string              `json:"slide"`
+	Format           string              `json:"format"`
+	Levels           []LevelFixture      `json:"levels"`
+	Metadata         MetadataFixture     `json:"metadata"`
+	TileSHA256       map[string]string   `json:"tiles"` // key: "level:x:y", value: hex sha256
+	ICCProfileSHA256 string              `json:"icc_profile_sha256,omitempty"`
+	AssociatedImages []AssociatedFixture `json:"associated,omitempty"`
 }
 
 type LevelFixture struct {

@@ -14,8 +14,8 @@ import (
 	"github.com/tcornish/opentile-go/tests"
 )
 
-// slideCandidates lists SVS slides this integration suite knows about.
-// Each is tested only if both the on-disk SVS and the committed fixture
+// slideCandidates lists SVS and NDPI slides this integration suite knows about.
+// Each is tested only if both the on-disk slide and the committed fixture
 // JSON are present; otherwise the slide is skipped.
 var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
@@ -23,11 +23,11 @@ var slideCandidates = []string{
 	"JP2K-33003-1.svs",
 }
 
-// TestSVSParity reads each candidate slide, walks every (level, x, y), and
+// TestSlideParity reads each candidate slide, walks every (level, x, y), and
 // compares against the committed fixture. Slides without a fixture or without
 // an on-disk file are skipped — this lets developers iterate on a subset of
 // slides without hunting for failures.
-func TestSVSParity(t *testing.T) {
+func TestSlideParity(t *testing.T) {
 	dir := tests.TestdataDir()
 	if dir == "" {
 		t.Skip("OPENTILE_TESTDIR not set; skipping integration test")
@@ -111,6 +111,33 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 	md := tiler.Metadata()
 	if md.Magnification != fix.Metadata.Magnification {
 		t.Errorf("magnification: got %v, want %v", md.Magnification, fix.Metadata.Magnification)
+	}
+
+	associated := tiler.Associated()
+	if len(associated) != len(fix.AssociatedImages) {
+		t.Errorf("associated count: got %d, want %d", len(associated), len(fix.AssociatedImages))
+	} else {
+		for i, a := range associated {
+			exp := fix.AssociatedImages[i]
+			if a.Kind() != exp.Kind {
+				t.Errorf("associated[%d] kind: got %q, want %q", i, a.Kind(), exp.Kind)
+			}
+			if a.Compression().String() != exp.Compression {
+				t.Errorf("associated[%d] compression: got %q, want %q", i, a.Compression(), exp.Compression)
+			}
+			if a.Size().W != exp.Size[0] || a.Size().H != exp.Size[1] {
+				t.Errorf("associated[%d] size: got %v, want %v", i, a.Size(), exp.Size)
+			}
+			b, err := a.Bytes()
+			if err != nil {
+				t.Errorf("associated[%d] Bytes: %v", i, err)
+				continue
+			}
+			sum := sha256.Sum256(b)
+			if got := hex.EncodeToString(sum[:]); got != exp.SHA256 {
+				t.Errorf("associated[%d] sha256: got %s, want %s", i, got, exp.SHA256)
+			}
+		}
 	}
 }
 
