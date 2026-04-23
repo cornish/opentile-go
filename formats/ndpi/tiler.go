@@ -4,8 +4,13 @@ import (
 	opentile "github.com/tcornish/opentile-go"
 )
 
-// The tiler struct itself is declared in metadata.go (because MetadataOf
-// needs to compile against it). This file holds the method set.
+// tiler is the NDPI implementation of opentile.Tiler.
+type tiler struct {
+	md         Metadata
+	levels     []opentile.Level
+	associated []opentile.AssociatedImage
+	icc        []byte
+}
 
 func (t *tiler) Format() opentile.Format { return opentile.FormatNDPI }
 

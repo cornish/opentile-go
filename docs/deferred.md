@@ -1,6 +1,6 @@
 # Deferred Issues
 
-Running log of items that are intentionally out of scope for v0.1 or were raised during code review and parked for later. Once this branch lands on a hosting service, triage everything below into real tracked issues and delete the entries as they are filed.
+Running log of items that are intentionally out of scope for the current milestone or were raised during code review and parked for later. Once this branch lands on a hosting service, triage everything below into real tracked issues and delete the entries as they are filed.
 
 Format per item:
 - **ID** — short descriptor
@@ -12,22 +12,23 @@ Format per item:
 
 ## 1. Roadmap items (scope-deferred by design)
 
-These were excluded from v0.1 in the brainstorming / design phase. They are not bugs; the library intentionally does not address them yet.
+Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a prior or current milestone).
 
-| ID | Feature | Target |
-|----|---------|--------|
-| R1 | NDPI format support (Hamamatsu) | v0.2 |
-| R2 | `internal/jpeg` marker package (needed for NDPI stripe concatenation) | v0.2 |
-| R3 | SVS associated images — label, overview, thumbnail | v0.3 |
-| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v1.0 |
-| R5 | Philips TIFF (sparse-tile filler) | v0.4 |
-| R6 | 3DHistech TIFF | v0.5 |
-| R7 | OME TIFF | v0.5 |
-| R8 | BigTIFF support (currently rejected as `ErrUnsupportedTIFF`) | when a format needs it |
-| R9 | JPEG 2000 decode/encode (native tiles pass through today; decoding is needed only if associated-image re-encoding lands) | v0.3+ |
-| R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply their own `io.ReaderAt` |
-| R11 | Python parity oracle under `//go:build parity` | v0.2 (lands with NDPI) |
-| R12 | CLI wrapper | out-of-scope for v1 |
+| ID | Feature | Target | Status |
+|----|---------|--------|--------|
+| R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ in flight on feat/v0.2 |
+| R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
+| R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | in flight (Task 21) |
+| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v1.0 | deferred |
+| R5 | Philips TIFF (sparse-tile filler) | v0.4 | deferred |
+| R6 | 3DHistech TIFF | v0.5 | deferred |
+| R7 | OME TIFF | v0.5 | deferred |
+| R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
+| R9 | JPEG 2000 decode/encode (native tiles pass through; decoding only matters once associated-image re-encoding lands) | v0.3+ | deferred |
+| R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
+| R11 | Python parity oracle under `//go:build parity` | v0.2 | in flight (Batch 7) |
+| R12 | CLI wrapper | out-of-scope for v1 | permanent |
+| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.3+ | deferred (currently dropped in classifier) |
 
 ---
 
@@ -55,6 +56,31 @@ Caught by the three-slide integration tests or during implementation. The librar
 - **Source:** diagnostic run during Task 20
 - **Severity:** Limitation (slide-dependent)
 - **Detail:** CMU-1 embeds `MPP = 0.4990` in its ImageDescription, but not every Aperio slide does. When absent, `svs.Metadata.MPP` is zero and every Level's `MPP()` returns `SizeMm{0, 0}`. No bug, but a caller who expects non-zero MPP should check `SizeMm.IsZero()` rather than assuming a value.
+
+### L5 — `internal/tiff` peeks at NDPI-specific tag to select IFD layout
+- **Source:** Architecture audit (post-Batch 4)
+- **Severity:** Limitation (cross-cutting)
+- **Detail:** `internal/tiff` is conceptually format-agnostic, but `File.Open` reads tag 65420 (Hamamatsu NDPI FileFormat) in the first IFD to decide whether to dispatch the NDPI-layout IFD walker. Necessary because NDPI files have classic TIFF magic 42 with no header-level distinguisher. A cleaner split would have `tiff.Open` expose a generic "layout" hint and let format packages drive selection — but that requires callers to know NDPI exists. Acceptable for v0.2; revisit when adding Philips/OME or any other format with its own TIFF dialect.
+
+### L6 — NDPI Map pages (`mag == -2.0`) are silently dropped
+- **Source:** NDPI classifier port (post-Batch 4)
+- **Severity:** Limitation (v0.2 scope)
+- **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image. No known real-world consumer of Map content, but if users ask for it we'd add it as an `AssociatedImage` with `Kind() == "map"`. Tracked as R13.
+
+### L7 — NDPI overview cropping assumes MCU 16×16
+- **Source:** Task 19 plan note
+- **Severity:** Limitation (format-assumption)
+- **Detail:** `newLabelImage` receives hard-coded `mcuW=16, mcuH=16` from `Factory.Open`, assuming Hamamatsu always uses YCbCr 4:2:0. If a macro page ever uses 4:4:4 (MCU 8×8) or 4:2:2 (MCU 16×8), the crop region computed with 16×16 may not be MCU-aligned and `TJXOPT_PERFECT` will reject the crop. Refinement: read each macro page's SOF and use its actual MCU size. Not observed on any of the three local NDPI slides, but worth fixing when the first real user reports it.
+
+### L8 — SVS v0.1 page classifier was guessed, not ported from upstream
+- **Source:** Architecture audit (post-Batch 4)
+- **Severity:** Limitation (needs verification in Task 21)
+- **Detail:** `formats/svs/svs.go` skips non-tiled pages (v0.1 scope) and Task 21's plan had a classifier based on `ImageDescription == "label"`/`"macro"`. Upstream tifffile's SVS detection derives series names from the first line of `ImageDescription` (Aperio's format embeds markers there). Before implementing Task 21, read `cgohlke/tifffile`'s `_series_svs` or similar and `imi-bigpicture/opentile`'s SVS tiler, then port whatever the real classification logic is. Do not carry forward v0.1's guess.
+
+### L9 — Concurrency stress on `internal/jpegturbo.Crop` is undocumented
+- **Source:** Batch 3 quality review (suggestion 7)
+- **Severity:** Suggestion
+- **Detail:** Per-call `tjInitTransform`/`tjDestroy` is safe for goroutine-parallel `Crop` calls per libjpeg-turbo's threading model, but no test proves it. A simple `t.Parallel()` loop running 1000 crops across 32 goroutines would lock the contract in. Not blocking.
 
 ---
 
@@ -93,9 +119,22 @@ Non-blocking items raised during per-task spec / quality review. Categorized by 
 
 - **I1** — `indexOf` in `tiledImage` could fold the `length == 0` corrupt-tile check in so `Tile` and `TileReader` don't duplicate it. Minor. (Source: Task 16 review.)
 - **I2** — `walkIFDs` does not detect overlapping IFDs (an IFD starting inside a previous IFD's body). The seen-offset map catches exact matches only. Acceptable for v0.1; worth a comment. (Source: Task 8 review.)
+- **I3** — `internal/jpeg.Scan` wraps its `io.Reader` unconditionally in `bufio.NewReader`, preventing callers from chaining `Scan` → `ReadScan` on the same underlying position. Current workaround: `extractScanData` byte-scans for SOS rather than calling `Scan` then `ReadScan`. If we ever want to eliminate the duplicate parser, either have `Scan` detect an existing `*bufio.Reader` (like `ReadScan` does) or expose the buffered reader via an iterator context. (Source: Batch 2 quality review, suggestion 2.)
+- **I4** — `internal/jpeg.ConcatenateScans` rebuilds `SplitJPEGTables` + first-fragment SOF/SOS per call. For 24K-tile slide levels this reparses the same JPEGTables blob 24K times. An `Assembler` struct pre-computing the header prefix once would cut per-tile work measurably. Deferred until profiling on real slides identifies it as a bottleneck. (Source: Batch 2 quality review, suggestion 1.)
+- **I5** — `ConcatOpts.RestartInterval > 0` assumes each input fragment contains exactly one restart interval (no internal RSTn markers). Documented in godoc; correct for NDPI and SVS associated-image stripes. Formats that violate this would silently produce a malformed bitstream. Consider a defensive check that counts RSTn markers in each fragment. (Source: Batch 2 quality review, concern C1.)
+- **I6** — `Scan` uses literal `0xD0..0xD7` in `isStandalone` alongside the `RST0` constant. Prefer a ranged check (`m >= RST0 && m <= RST0+7`) to avoid drift if constants ever change. (Source: Batch 2 quality review, suggestion 3.)
+- **I7** — `internal/jpeg.ReplaceSOFDimensions` finds SOF0 via linear byte scan from the start of the buffer. In well-formed JPEGs this is safe because SOF0 precedes SOS and thus precedes any entropy-coded scan data. Worth a comment in the code noting the assumption. (Source: Task 10 review.)
+- **I8** — `oneFrameImage.paddedJPEGOnce` is a plain bool, not `sync.Once` / atomic. Concurrent first-calls may both rebuild the padded JPEG; output is byte-identical so this is benign, but the contract should be documented in the godoc rather than buried in a comment. (Source: Task 18 plan note.)
 
 ---
 
-## 4. Process note
+## 4. v0.2 session learnings (process notes)
 
-Once `feat/v0.1` lands on a remote, every item above should be triaged into a tracked issue (GitHub, Linear, etc.) — scope items become roadmap epics, limitations become user-facing docs, reviewer suggestions become individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as v0.1 polish, v0.2, and ongoing maintenance retire each item.
+These are not deferred items — they're observations about how v0.2 development went, kept here so future sessions have context.
+
+- **The "don't guess — read upstream" rule was established mid-session** (commit `993289e`). It's codified in CLAUDE.md and in the cross-session memory system (`feedback_no_guessing.md`). The rule was prompted by three separate "guess-and-regret" debugging cycles in v0.2: NDPI IFD layout, NDPI metadata tag numbers, and the StripOffsets tag number. Each was eventually fixed by reading the relevant upstream source (tifffile / opentile) directly. Future format work should budget time to read upstream FIRST and commit behavior from there.
+- **Architecture audit at end of Batch 4** (this doc) — three minor cleanups landed (NDPI tiler struct consolidated into `tiler.go`, SVS `image.go` renamed to `tiled.go`, stale debug artifacts removed). Full decision trail in the commit that introduced this section.
+
+## 5. Triage process
+
+Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

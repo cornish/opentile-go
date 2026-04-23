@@ -118,11 +118,3 @@ func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
 	}
 	return nil, false
 }
-
-// tiler is the NDPI implementation of opentile.Tiler; method set lives in tiler.go.
-type tiler struct {
-	md         Metadata
-	levels     []opentile.Level
-	associated []opentile.AssociatedImage
-	icc        []byte
-}
