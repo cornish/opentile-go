@@ -2,19 +2,22 @@
 
 Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.1
+## Current milestone — v0.2
 
-- **Scope:** Aperio SVS tiled-level passthrough only.
-- **Deferred:** NDPI (v0.2), SVS associated images — label/overview/thumbnail (v0.3), SVS corrupt-edge reconstruct fix (v1.0), BigTIFF (ship when first format needs it), `internal/jpeg` marker work (ships with NDPI).
-- **Design:** `docs/superpowers/specs/2026-04-19-opentile-go-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-19-opentile-go-v01.md`
-- **Work branch:** `feat/v0.1`
+- **Scope:** Hamamatsu NDPI (including the 64-bit offset extension for >4GB files), BigTIFF parsing, associated-image support for both SVS and NDPI, Python parity oracle under `//go:build parity`.
+- **Deferred:** SVS corrupt-edge reconstruct fix (v1.0), Philips/Histech/OME (v0.4+).
+- **Design:** `docs/superpowers/specs/2026-04-21-opentile-go-v02-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-21-opentile-go-v02.md`
+- **Work branch:** `feat/v0.2`
 
 ## Invariants
 
-- **Pure Go, no cgo.** The SVS v0.1 tile hot path is TIFF parsing + byte-range reads; no image codec is required. Defer any cgo consideration until profiling on realistic slides justifies it.
+- **Don't guess format behavior — read upstream.** This is a **direct port** of Python opentile (which delegates format details to tifffile). Whenever classification, layout, tag semantics, or edge-case handling is unclear: **read `imi-bigpicture/opentile` first, then `cgohlke/tifffile`**. Guessed behavior has cost us two debugging cycles already (NDPI IFD layout, NDPI page classification). The rule: if you catch yourself reasoning from first principles about a WSI format quirk, stop and find the upstream code that handles it. Port directly, adapt for Go idioms, but preserve the logic.
+- **No cutting corners; no active users yet.** Complete things we know are broken before moving on. When a bug is identified, the rule is: fix it, don't defer. Plan thoroughly for v0.3+ rather than race.
+- **Architectural placement of ported logic:** format-specific quirks belong in the format package (`formats/ndpi/`, `formats/svs/`), not `internal/tiff`. `internal/tiff` stays a generic TIFF/BigTIFF/NDPI-IFD parser. Examples: NDPI page-series grouping, SVS ImageDescription quirks, Philips sparse-tile filling.
+- **cgo is narrowly scoped.** `internal/jpegturbo/` is the only package linking libjpeg-turbo. Under `nocgo` build tag, format paths that need it return `ErrCGORequired`; the rest works.
 - **Direct port under Apache 2.0** with attribution retained in `NOTICE`. Not affiliated with or endorsed by Sectra AB or the BigPicture project.
-- **Parity with upstream is the correctness bar.** Upstream's pytest cases are ported to Go tests; a fixture-backed integration suite compares tile bytes against a committed snapshot. An opt-in `//go:build parity` harness that shells out to Python opentile is planned for v0.2.
+- **Parity with upstream is the correctness bar.** Upstream's pytest cases are ported to Go tests; a fixture-backed integration suite compares tile bytes against a committed snapshot. An opt-in `//go:build parity` harness that shells out to Python opentile is v0.2.
 - **Lock-free hot path.** All internal caches (parsed IFDs, per-tile offset/length arrays, metadata) are populated at `Open()` time and immutable thereafter. `Tile()` is safe to call concurrently from many goroutines.
 
 ## Conventions
@@ -28,11 +31,13 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 ## Sample slides
 
-Local slides live in `/sample_files/` (gitignored). v0.1 uses:
+Local slides live in `/sample_files/` (gitignored). v0.2 uses:
 - `sample_files/svs/CMU-1-Small-Region.svs` (1.9 MB, JPEG) — primary fixture
 - `sample_files/svs/CMU-1.svs` (177 MB, JPEG) — full-slide fixture
 - `sample_files/svs/JP2K-33003-1.svs` (63 MB, JPEG 2000 passthrough) — proves JP2K path works without a codec
-- `sample_files/ndpi/*.ndpi` — reserved for v0.2
+- `sample_files/ndpi/CMU-1.ndpi` (188 MB) — small NDPI fixture
+- `sample_files/ndpi/OS-2.ndpi` (931 MB) — medium NDPI with multiple series
+- `sample_files/ndpi/Hamamatsu-1.ndpi` (6.6 GB) — **NDPI 64-bit offset extension**; forces us to handle the Hamamatsu proprietary large-file path
 
 ## Commands
 
