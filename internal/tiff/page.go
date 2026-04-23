@@ -64,9 +64,10 @@ func (p *Page) SamplesPerPixel() (uint32, bool)  { return p.scalarU32(TagSamples
 func (p *Page) BitsPerSample() (uint32, bool)    { return p.scalarU32(TagBitsPerSample) }
 func (p *Page) ResolutionUnit() (uint32, bool)   { return p.scalarU32(TagResolutionUnit) }
 
-// ImageDescription returns the ASCII ImageDescription tag if present.
-func (p *Page) ImageDescription() (string, bool) {
-	e, ok := p.ifd.get(TagImageDescription)
+// ASCII returns an ASCII-typed tag's string value (NUL-stripped), or
+// ("", false) if missing.
+func (p *Page) ASCII(tag uint16) (string, bool) {
+	e, ok := p.ifd.get(tag)
 	if !ok {
 		return "", false
 	}
@@ -75,6 +76,11 @@ func (p *Page) ImageDescription() (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+// ImageDescription returns the ASCII ImageDescription tag if present.
+func (p *Page) ImageDescription() (string, bool) {
+	return p.ASCII(TagImageDescription)
 }
 
 // JPEGTables returns the JPEG tables blob used as a prefix for tiles, if present.
