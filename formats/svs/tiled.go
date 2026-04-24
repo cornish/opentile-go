@@ -1,6 +1,7 @@
 package svs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -8,11 +9,18 @@ import (
 	"math"
 
 	opentile "github.com/tcornish/opentile-go"
+	"github.com/tcornish/opentile-go/internal/jpeg"
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
-// tiledImage is the SVS Level implementation for tiled pages. v0.1 passes
-// through the raw compressed TIFF tile bytes unmodified; no JPEG manipulation.
+// tiledImage is the SVS Level implementation for tiled pages.
+//
+// v0.2 returns each tile as a standalone valid JPEG: for JPEG-compressed
+// tiles the shared JPEGTables (DQT/DHT) are spliced before SOS and an APP14
+// "Adobe" segment is inserted to advertise the non-standard RGB colorspace
+// Aperio uses. Matches Python opentile's SvsTiledImage.get_tile output
+// byte-for-byte. JP2K-compressed tiles are passthrough (self-contained
+// codestream, no shared tables).
 type tiledImage struct {
 	index       int
 	size        opentile.Size
@@ -22,9 +30,10 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets []uint32
-	counts  []uint32
-	reader  io.ReaderAt
+	offsets    []uint32
+	counts     []uint32
+	jpegTables []byte // TIFF tag 347 payload (SOI..DQT/DHT..EOI); nil for non-JPEG pages
+	reader     io.ReaderAt
 
 	cfg *opentile.Config
 }
@@ -71,6 +80,16 @@ func newTiledImage(
 	comp, _ := p.Compression()
 	ocomp := tiffCompressionToOpentile(comp)
 
+	// Cache JPEGTables (tag 347) once; only populated for JPEG-compressed
+	// pages. JP2K pages have no shared tables — every codestream is
+	// self-contained.
+	var jpegTables []byte
+	if ocomp == opentile.CompressionJPEG {
+		if tb, ok := p.JPEGTables(); ok {
+			jpegTables = tb
+		}
+	}
+
 	// Pyramid index: log2(baseSize.W / iw), rounded to nearest int.
 	var pyr int
 	if baseSize.W > 0 {
@@ -96,6 +115,7 @@ func newTiledImage(
 		pyrIndex:    pyr,
 		offsets:     offsets,
 		counts:      counts,
+		jpegTables:  jpegTables,
 		reader:      r,
 		cfg:         cfg,
 	}, nil
@@ -117,7 +137,14 @@ func (l *tiledImage) indexOf(x, y int) (int, error) {
 	return y*l.grid.W + x, nil
 }
 
-// Tile returns the raw compressed tile bytes at (x, y).
+// Tile returns the tile at (x, y) as a standalone valid JPEG (for
+// JPEG-compressed pages) or the raw JP2K codestream (for JP2K pages).
+//
+// For JPEG pages, the per-tile TIFF payload is an abbreviated scan without
+// DQT/DHT tables — usable only alongside the page-level JPEGTables tag.
+// Tile() splices tables[2:-2] and an Adobe APP14 RGB colorspace marker
+// before SOS so the returned bytes decode as a self-contained JPEG. The
+// output matches Python opentile's SvsTiledImage.get_tile byte-for-byte.
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	idx, err := l.indexOf(x, y)
 	if err != nil {
@@ -132,11 +159,23 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 	}
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		out, err := jpeg.InsertTablesAndAPP14(buf, l.jpegTables)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		return out, nil
+	}
 	return buf, nil
 }
 
-// TileReader returns an io.ReadCloser backed by an io.SectionReader so the
-// tile bytes are streamed without buffering.
+// TileReader returns an io.ReadCloser carrying the same bytes as Tile.
+//
+// For JP2K pages this is a zero-copy io.SectionReader over the underlying
+// TIFF file. For JPEG pages it is a bytes.Reader over the spliced buffer —
+// the JPEGTables + APP14 splice is an unavoidable pre-pend that cannot be
+// expressed as a pure offset/length window, so streaming buys nothing
+// compared to Tile(). Deliberate v0.2 correctness trade-off.
 func (l *tiledImage) TileReader(x, y int) (io.ReadCloser, error) {
 	idx, err := l.indexOf(x, y)
 	if err != nil {
@@ -145,6 +184,13 @@ func (l *tiledImage) TileReader(x, y int) (io.ReadCloser, error) {
 	length := l.counts[idx]
 	if length == 0 {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrCorruptTile}
+	}
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		b, err := l.Tile(x, y)
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(bytes.NewReader(b)), nil
 	}
 	sr := io.NewSectionReader(l.reader, int64(l.offsets[idx]), int64(length))
 	return io.NopCloser(sr), nil
