@@ -70,6 +70,9 @@ import (
 // Concurrency: Crop creates and destroys a fresh tjhandle per call, so
 // concurrent invocations from different goroutines do not share mutable
 // state. libjpeg-turbo's tjInitTransform/tjDestroy are reentrant.
+//
+// See CropWithBackground for a variant that tolerates out-of-bounds crops
+// by filling the OOB blocks with a background color.
 func Crop(src []byte, r Region) ([]byte, error) {
 	if len(src) == 0 {
 		return nil, fmt.Errorf("jpegturbo: empty source")
@@ -104,4 +107,14 @@ func Crop(src []byte, r Region) ([]byte, error) {
 	}
 	out := C.GoBytes(unsafe.Pointer(dst), C.int(dstSize))
 	return out, nil
+}
+
+// CropWithBackground behaves like Crop but tolerates crop regions that
+// extend past the source image. In v0.2 this is a stub that delegates to
+// Crop when the region fits inside the image and returns an error otherwise;
+// the real DCT-callback-based implementation lands in a follow-up commit.
+func CropWithBackground(src []byte, r Region) ([]byte, error) {
+	// Scaffold: v0.2 intentionally falls through to Crop. The real body
+	// (fill_background CUSTOMFILTER callback) ships in the next commit.
+	return Crop(src, r)
 }

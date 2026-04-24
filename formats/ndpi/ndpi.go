@@ -59,7 +59,10 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		return nil, err
 	}
 
-	// Resolve the requested tile size and snap to stripe width.
+	// Resolve the requested tile size and snap to native stripe width.
+	// Native stripe dimensions are only discoverable by parsing the embedded
+	// JPEG header (via readStripes), so we do a lightweight first pass to
+	// find the smallest stripe width across all pyramid-level pages.
 	reqSize := opentile.Size{W: 512, H: 512}
 	if sz, set := cfg.TileSize(); set {
 		if sz.W != sz.H {
@@ -67,7 +70,28 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		}
 		reqSize = sz
 	}
-	smallestStripe := smallestStripeWidth(pages)
+
+	// Pre-read each pyramid-level page's StripeInfo so we can (a) compute the
+	// smallest-stripe-width needed for AdjustTileSize and (b) reuse the
+	// parsed header when constructing the level.
+	stripeInfos := make(map[*tiff.Page]*StripeInfo, len(pages))
+	smallestStripe := 0
+	for _, p := range pages {
+		if classifyPage(p) != pageLevel {
+			continue
+		}
+		si, err := readStripes(p, file.ReaderAt())
+		if err != nil {
+			return nil, fmt.Errorf("ndpi: read stripes for page: %w", err)
+		}
+		if si == nil {
+			continue // non-striped level (one-frame); doesn't constrain tile size
+		}
+		stripeInfos[p] = si
+		if smallestStripe == 0 || si.StripeW < smallestStripe {
+			smallestStripe = si.StripeW
+		}
+	}
 	adjusted := AdjustTileSize(reqSize.W, smallestStripe)
 
 	var levels []opentile.Level
@@ -78,9 +102,11 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		kind := classifyPage(p)
 		switch kind {
 		case pageLevel:
-			// Distinguish striped from one-frame: tiled pages have TileWidth.
-			if _, tiled := p.TileWidth(); tiled {
-				lvl, err := newStripedImage(levelIdx, p, adjusted, file.ReaderAt())
+			// Striped vs one-frame: NDPI tag 65426 (McuStarts) is the
+			// authoritative discriminator — present iff the level stores
+			// per-stripe RSTn offsets inside the page's single JPEG.
+			if si := stripeInfos[p]; si != nil {
+				lvl, err := newStripedImage(levelIdx, p, adjusted, si, file.ReaderAt())
 				if err != nil {
 					return nil, fmt.Errorf("ndpi: level %d: %w", levelIdx, err)
 				}
@@ -115,18 +141,3 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	return &tiler{md: md, levels: levels, associated: associated}, nil
 }
 
-// smallestStripeWidth walks all tiled pages and returns the smallest
-// TileWidth found, or 0 if no pages are tiled.
-func smallestStripeWidth(pages []*tiff.Page) int {
-	smallest := 0
-	for _, p := range pages {
-		tw, ok := p.TileWidth()
-		if !ok {
-			continue
-		}
-		if smallest == 0 || int(tw) < smallest {
-			smallest = int(tw)
-		}
-	}
-	return smallest
-}
