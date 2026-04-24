@@ -30,7 +30,10 @@ def main() -> int:
     from opentile import OpenTile
 
     tile_size = int(os.environ.get("OPENTILE_TILE_SIZE", "1024"))
-    tiler = OpenTile.open(slide, (tile_size, tile_size))
+    # Python opentile 0.20.0 takes tile_size as int (see OpenTile.open
+    # signature), not a tuple; passing a tuple trips NdpiTiler's tile-size
+    # adjuster with a TypeError.
+    tiler = OpenTile.open(slide, tile_size)
     try:
         lvl = tiler.get_level(level)
         data = lvl.get_tile((x, y))
