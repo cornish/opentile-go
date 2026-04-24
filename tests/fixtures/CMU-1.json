@@ -24888,7 +24888,7 @@
         732
       ],
       "compression": "jpeg",
-      "sha256": "da48788d815d86f9aa99fb2eb0d146d275a0088ec593b36d7cdd9bb507891f16"
+      "sha256": "3a1ee41197380645658237ec3b284c410bb112c76c9cf9e527b92c23d378c156"
     },
     {
       "kind": "label",
@@ -24906,7 +24906,7 @@
         431
       ],
       "compression": "jpeg",
-      "sha256": "2bd1d98bd7b89f17adeb78467c31ff1129002121ea9d6ace87b369843a4cacfb"
+      "sha256": "fd883a44b063f1285b65743a319becec04ad8fe65095b01ae95a008aa88c7578"
     }
   ]
 }
