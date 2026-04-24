@@ -1,0 +1,5 @@
+opentile==0.20.0
+tifffile>=2023.12.9,<2024
+PyTurboJPEG>=1.7.5
+imagecodecs>=2025.3.30
+defusedxml>=0.7.1
