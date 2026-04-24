@@ -8,206 +8,330 @@ import (
 
 // ConcatOpts controls how ConcatenateScans assembles the output JPEG.
 //
-// Fragment-level APPn segments are discarded during assembly; only DQT/DHT
-// from JPEGTables and the caller-supplied ColorspaceFix APP14 are included
-// in the output header.
+// The output is constructed by appending each input fragment's bytes in
+// order (the first whole, subsequent ones starting after their SOS
+// header), then patching the in-place SOF size to the accumulated
+// dimensions and splicing the JPEGTables' DQT/DHT (plus an optional Adobe
+// APP14 marker) immediately before the first SOS. This mirrors Python
+// opentile's Jpeg.concatenate_scans byte-for-byte on SVS-style input.
 //
-// When RestartInterval > 0, ConcatenateScans expects each input fragment's
-// scan data to contain exactly one restart interval (no internal RSTn
-// markers), because the inter-fragment RST codes are assigned via a global
-// cycle 0xD0..0xD7 indexed by fragment position. Fragments with multiple
-// internal restart intervals will cause cycle drift at boundaries and a
-// malformed output bitstream. NDPI and SVS associated-image stripes are
-// both single-interval in practice, which is the intended use case.
+// Semantics:
 //
-// When RestartInterval == 0, scan data is concatenated verbatim with no
-// separator. This is almost never what a caller wants for multi-fragment
-// input: the decoder's DC-coefficient predictor carries state across the
-// boundary, producing color drift unless the fragments are a single
-// continuous scan. Use 0 only for single-fragment input or when the caller
-// has independently ensured predictor continuity.
+//   - Width/Height are the accumulated image dimensions written into the
+//     SOF. When they are zero, the dimensions are derived from the input
+//     (first fragment width; sum of all fragment heights) to match
+//     Python's default behavior. Callers who know the final dimensions
+//     (e.g. SVS associated images where the TIFF ImageLength is
+//     authoritative) may set them explicitly; the value is the exact
+//     uint16 pair written into the output SOF.
+//
+//   - JPEGTables is the raw TIFF JPEGTables tag value (a mini-JPEG of
+//     "SOI DQT DHT EOI"). Its inner bytes (tables[2:-2]) are spliced
+//     before the first SOS. If JPEGTables is nil or empty, no splice
+//     happens — callers are expected to pass non-empty tables when
+//     using ConcatenateScans.
+//
+//   - ColorspaceFix: when true, emit an Adobe APP14 segment signaling
+//     RGB colorspace (ColorTransform=0) immediately after the inserted
+//     tables. Required for Aperio SVS non-standard RGB JPEGs. The exact
+//     bytes come from the shared adobeAPP14 literal in insert_tables.go.
+//
+//   - RestartInterval: when >0, either (a) update the existing DRI
+//     payload if one is present in the fragment header, or (b) insert a
+//     new DRI marker immediately before the first SOS (after the
+//     inserted tables/APP14). Python opentile always sets this from
+//     "MCUs per scan" so RSTn markers inserted between fragments line
+//     up with the decoder's expectation. When 0, no DRI is emitted; in
+//     that case RSTn markers are still inserted between fragments
+//     (matching Python's behavior), which is correct for inputs whose
+//     scan boundary happens to coincide with the natural MCU row
+//     boundary.
+//
+// Fragment-level APPn segments are left untouched in the first fragment
+// and dropped from subsequent fragments (which contribute only their
+// entropy-coded scan data plus trailing EOI marker). This matches the
+// upstream Python behavior of appending `scan[scan_start:]` where
+// `scan_start` is past the first-SOS header.
 type ConcatOpts struct {
-	Width, Height   uint16 // output SOF dimensions
-	JPEGTables      []byte // raw TIFF JPEGTables value; DQT/DHT extracted via SplitJPEGTables
-	ColorspaceFix   bool   // if true, emit an APP14 "Adobe" segment signalling RGB (for SVS non-standard RGB JPEGs)
-	RestartInterval int    // see godoc above: 0 means no DRI and verbatim concat; >0 means one restart interval per fragment
+	Width, Height   uint16 // output SOF dimensions; 0 means "derive from input"
+	JPEGTables      []byte // raw TIFF JPEGTables value, inserted as tables[2:-2]
+	ColorspaceFix   bool   // if true, splice adobeAPP14 after the inserted tables
+	RestartInterval int    // 0 = no DRI; >0 = DRI payload value
 }
 
-// ConcatenateScans builds a single valid JPEG from one or more TIFF-embedded
-// JPEG fragments. Each fragment is a mini-JPEG (SOI ... SOS + scan + EOI);
-// the assembled output uses the tables from opts.JPEGTables and its own SOF
-// derived from opts.Width/Height, with the scan data of each fragment
-// concatenated in order and optionally separated by restart markers.
+// ConcatenateScans produces a JPEG byte stream byte-for-byte identical to
+// Python opentile's Jpeg.concatenate_scans for the same inputs.
+//
+// Direct port of opentile/jpeg/jpeg.py:concatenate_scans (opentile 0.20.0).
+// The algorithm:
+//
+//  1. Accumulate the frame by appending each fragment in order: the first
+//     fragment whole (SOI..SOS..scan..EOI), each subsequent one from its
+//     post-SOS scan data through its trailing EOI. Between any two
+//     adjacent fragments, rewrite the trailing EOI (FF D9) of the
+//     just-appended fragment into FF RSTn (restart_mark(i)).
+//
+//  2. If JPEGTables is non-empty, splice tables[2:-2] (and optionally
+//     adobeAPP14) into the frame immediately before the first SOS.
+//
+//  3. Patch the SOF dimensions to match the accumulated image size
+//     (Width = first-fragment width, Height = sum of fragment heights).
+//     If the caller specifies non-zero Width/Height in opts, those
+//     override the computed defaults.
+//
+//  4. If RestartInterval > 0, update an existing DRI in place or insert
+//     a new DRI (FF DD 00 04 <interval>) immediately before the first
+//     SOS (after the inserted tables/APP14 block).
+//
+// SOF location: Python's _manipulate_header uses bytes.find(FF C0), a
+// naive byte-scan that is theoretically fragile (FF C0 could appear
+// inside DQT/DHT payload bytes). For safety we use the jpeg.Scan segment
+// iterator to find the real SOF offset in the first fragment, then patch
+// bytes in place at that offset. The resulting output is byte-identical
+// to Python's on every slide where Python's byte-scan finds the correct
+// SOF — which is every slide we've observed in practice. A tables[2:-2]
+// blob containing an unstuffed FF C0 would cause our SOF patch to land
+// before the inserted tables while Python's would land after; this
+// divergence has not been seen on real SVS fixtures.
+//
+// SOS / DRI location: the only raw FF DA / FF DD markers in the frame
+// are the real SOS / DRI markers, because any 0xFF in entropy data is
+// byte-stuffed (0xFF 0x00), and the tables blob for our SVS fixtures
+// does not contain these marker pairs. We use naive bytes.Index for
+// these positions, matching Python's helpers one-to-one.
 func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	if len(fragments) == 0 {
 		return nil, fmt.Errorf("%w: no fragments", ErrBadJPEG)
 	}
 
-	dqts, dhts, err := SplitJPEGTables(opts.JPEGTables)
+	// --- Step 1: accumulate the frame and track image size. -----------------
+
+	// Parse the first fragment's SOF to seed width/height.
+	firstSOF, err := firstFragmentSOF(fragments[0])
 	if err != nil {
-		return nil, fmt.Errorf("split tables: %w", err)
+		return nil, fmt.Errorf("first fragment SOF: %w", err)
 	}
+	accumW := firstSOF.Width
+	accumH := firstSOF.Height
 
-	// Determine the SOF from the first fragment (for component sampling info)
-	// and override width/height from opts.
-	var firstSOF *SOF
-	var firstSOS []byte
-	for seg, err := range Scan(bytes.NewReader(fragments[0])) {
+	// Start with the first fragment verbatim.
+	frame := make([]byte, 0, initialCap(fragments))
+	frame = append(frame, fragments[0]...)
+
+	for i := 1; i < len(fragments); i++ {
+		// Between-fragment: rewrite the trailing EOI of the previous
+		// fragment (currently at the end of frame) into FF RSTn. Python
+		// does this at the END of iteration i-1; we do it at the START
+		// of iteration i for exactly the same effect.
+		if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
+			return nil, fmt.Errorf("%w: fragment %d: expected trailing EOI before appending next fragment, got %02X %02X",
+				ErrBadJPEG, i-1, frame[len(frame)-2], frame[len(frame)-1])
+		}
+		// restart_mark(i-1) = 0xD0 + ((i-1) % 8).
+		frame[len(frame)-2] = 0xFF
+		frame[len(frame)-1] = byte(0xD0 + ((i - 1) % 8))
+
+		frag := fragments[i]
+		sofI, err := firstFragmentSOF(frag)
 		if err != nil {
-			return nil, fmt.Errorf("scan first fragment: %w", err)
+			return nil, fmt.Errorf("fragment %d SOF: %w", i, err)
 		}
-		switch seg.Marker {
-		case SOF0:
-			s, err := ParseSOF(seg.Payload)
-			if err != nil {
-				return nil, err
-			}
-			firstSOF = s
-		case SOS:
-			firstSOS = make([]byte, 0, 4+len(seg.Payload))
-			firstSOS = append(firstSOS, 0xFF, byte(SOS))
-			length := 2 + len(seg.Payload)
-			lb := make([]byte, 2)
-			binary.BigEndian.PutUint16(lb, uint16(length))
-			firstSOS = append(firstSOS, lb...)
-			firstSOS = append(firstSOS, seg.Payload...)
+		accumH += sofI.Height // widths are expected equal across fragments
+
+		// Find SOS in this fragment and append from scan_start onwards.
+		sosPos := bytes.Index(frag, []byte{0xFF, 0xDA})
+		if sosPos < 0 {
+			return nil, fmt.Errorf("%w: fragment %d: SOS not found", ErrBadJPEG, i)
 		}
-		if firstSOF != nil && firstSOS != nil {
-			break
+		if sosPos+4 > len(frag) {
+			return nil, fmt.Errorf("%w: fragment %d: SOS truncated length", ErrBadJPEG, i)
 		}
-	}
-	if firstSOF == nil {
-		return nil, fmt.Errorf("%w: first fragment missing SOF", ErrBadJPEG)
-	}
-	if firstSOS == nil {
-		return nil, fmt.Errorf("%w: first fragment missing SOS", ErrBadJPEG)
-	}
-	sof := &SOF{
-		Precision:  firstSOF.Precision,
-		Width:      opts.Width,
-		Height:     opts.Height,
-		Components: firstSOF.Components,
+		sosLen := int(binary.BigEndian.Uint16(frag[sosPos+2 : sosPos+4]))
+		scanStart := sosPos + 2 + sosLen
+		if scanStart > len(frag) {
+			return nil, fmt.Errorf("%w: fragment %d: scan_start past end", ErrBadJPEG, i)
+		}
+		frame = append(frame, frag[scanStart:]...)
 	}
 
-	var out bytes.Buffer
-	out.Write([]byte{0xFF, 0xD8}) // SOI
-	if opts.ColorspaceFix {
-		// Single source of truth: the canonical Adobe APP14 segment lives in
-		// insert_tables.go (adobeAPP14). Both SVS tiled (InsertTablesAndAPP14)
-		// and SVS associated-image (this path) must emit identical bytes to
-		// match Python opentile / Aperio.
-		out.Write(adobeAPP14)
+	// Sanity: the frame should end with the LAST fragment's EOI (0xFF 0xD9).
+	if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
+		return nil, fmt.Errorf("%w: assembled frame does not end with EOI", ErrBadJPEG)
 	}
-	for _, seg := range dqts {
-		out.Write(seg)
+
+	// --- Step 2: splice tables[2:-2] (+ APP14) before first SOS. ------------
+
+	if len(opts.JPEGTables) > 4 {
+		insert := opts.JPEGTables[2 : len(opts.JPEGTables)-2]
+		if opts.ColorspaceFix {
+			combined := make([]byte, 0, len(insert)+len(adobeAPP14))
+			combined = append(combined, insert...)
+			combined = append(combined, adobeAPP14...)
+			insert = combined
+		}
+		sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
+		if sosPos < 0 {
+			return nil, fmt.Errorf("%w: SOS not found in assembled frame", ErrBadJPEG)
+		}
+		spliced := make([]byte, 0, len(frame)+len(insert))
+		spliced = append(spliced, frame[:sosPos]...)
+		spliced = append(spliced, insert...)
+		spliced = append(spliced, frame[sosPos:]...)
+		frame = spliced
+	} else if opts.ColorspaceFix {
+		// ColorspaceFix without tables is a caller bug for our use cases —
+		// if they're asking for the Adobe marker, there must be tables to
+		// splice it after. Match Python's layering (APP14 goes with the
+		// tables insert); refuse rather than silently producing a frame
+		// that doesn't match upstream.
+		return nil, fmt.Errorf("%w: ColorspaceFix requires non-empty JPEGTables", ErrBadJPEG)
 	}
-	for _, seg := range dhts {
-		out.Write(seg)
+
+	// --- Step 3: patch SOF dimensions. --------------------------------------
+
+	finalW := opts.Width
+	if finalW == 0 {
+		finalW = accumW
 	}
-	out.Write(BuildSOF(sof))
+	finalH := opts.Height
+	if finalH == 0 {
+		finalH = accumH
+	}
+	sofOff, err := findFirstSOFOffset(frame)
+	if err != nil {
+		return nil, fmt.Errorf("locate SOF for size patch: %w", err)
+	}
+	// SOF payload starts at sofOff+4 (marker 2 + length 2). Height at
+	// payload+1, width at payload+3.
+	payload := sofOff + 4
+	if payload+5 > len(frame) {
+		return nil, fmt.Errorf("%w: SOF payload truncated", ErrBadJPEG)
+	}
+	binary.BigEndian.PutUint16(frame[payload+1:payload+3], finalH)
+	binary.BigEndian.PutUint16(frame[payload+3:payload+5], finalW)
+
+	// --- Step 4: update or insert DRI just before the first SOS. ------------
+
 	if opts.RestartInterval > 0 {
-		// DRI: marker + length=4 + interval (u16)
-		dri := []byte{0xFF, 0xDD, 0x00, 0x04, 0, 0}
-		binary.BigEndian.PutUint16(dri[4:], uint16(opts.RestartInterval))
-		out.Write(dri)
+		if opts.RestartInterval > 0xFFFF {
+			return nil, fmt.Errorf("%w: RestartInterval %d exceeds uint16", ErrBadJPEG, opts.RestartInterval)
+		}
+		driPayload := []byte{0, 0}
+		binary.BigEndian.PutUint16(driPayload, uint16(opts.RestartInterval))
+		driPos := bytes.Index(frame, []byte{0xFF, 0xDD})
+		if driPos >= 0 {
+			if driPos+6 > len(frame) {
+				return nil, fmt.Errorf("%w: DRI truncated", ErrBadJPEG)
+			}
+			// payload is at driPos+4..driPos+6.
+			copy(frame[driPos+4:driPos+6], driPayload)
+		} else {
+			sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
+			if sosPos < 0 {
+				return nil, fmt.Errorf("%w: SOS not found for DRI insert", ErrBadJPEG)
+			}
+			// Insert FF DD 00 04 <payload> before SOS.
+			dri := []byte{0xFF, 0xDD, 0x00, 0x04, driPayload[0], driPayload[1]}
+			spliced := make([]byte, 0, len(frame)+len(dri))
+			spliced = append(spliced, frame[:sosPos]...)
+			spliced = append(spliced, dri...)
+			spliced = append(spliced, frame[sosPos:]...)
+			frame = spliced
+		}
 	}
-	out.Write(firstSOS)
 
-	// Concatenate entropy data from each fragment, inserting restart markers
-	// between fragments when RestartInterval > 0.
-	for i, frag := range fragments {
-		scanData, err := extractScanData(frag)
+	return frame, nil
+}
+
+// FirstFragmentSOF is the exported helper that parses the first SOF0 in a
+// JPEG byte buffer. Used by format-package callers (e.g. SVS associated
+// images) that need to derive the MCU size and dimensions from a strip
+// before assembling a frame.
+func FirstFragmentSOF(frag []byte) (*SOF, error) {
+	return firstFragmentSOF(frag)
+}
+
+// firstFragmentSOF walks seg-by-seg looking for the first SOF0; returns a
+// parsed SOF. This uses the segment walker rather than a naive bytes.Index
+// so DQT payloads that happen to contain FF C0 cannot fool us — important
+// for NDPI-style assemblies that embed larger tables in each fragment.
+func firstFragmentSOF(frag []byte) (*SOF, error) {
+	for seg, err := range Scan(bytes.NewReader(frag)) {
 		if err != nil {
-			return nil, fmt.Errorf("fragment %d: %w", i, err)
+			return nil, err
 		}
-		out.Write(scanData)
-		if opts.RestartInterval > 0 && i < len(fragments)-1 {
-			rstCode := byte(0xD0 + (i % 8))
-			out.Write([]byte{0xFF, rstCode})
+		if seg.Marker == SOF0 {
+			return ParseSOF(seg.Payload)
+		}
+		if seg.Marker == SOS {
+			// SOS comes after SOF in well-formed JPEGs. Hitting SOS first
+			// means no SOF — malformed.
+			return nil, fmt.Errorf("%w: SOS before SOF", ErrBadJPEG)
 		}
 	}
-	out.Write([]byte{0xFF, 0xD9}) // EOI
-	return out.Bytes(), nil
+	return nil, fmt.Errorf("%w: no SOF in fragment", ErrBadJPEG)
 }
 
-// extractScanData walks frag as a sequence of JPEG segments, locates the SOS,
-// and returns the entropy-coded scan data that follows it (up to and not
-// including the trailing EOI). The walk parses each marker segment's length
-// and skips its payload, so it cannot false-match on APPn payload bytes that
-// happen to look like marker codes.
-func extractScanData(frag []byte) ([]byte, error) {
-	scanStart, err := findSOSScanStart(frag)
-	if err != nil {
-		return nil, err
-	}
-	data, end, err := ReadScan(bytes.NewReader(frag[scanStart:]))
-	if err != nil {
-		return nil, err
-	}
-	if end != EOI {
-		return nil, fmt.Errorf("%w: scan ended with 0x%X, want EOI", ErrBadJPEG, end)
-	}
-	return data, nil
-}
-
-// findSOSScanStart walks frag segment-by-segment and returns the byte offset
-// of the first byte of entropy-coded scan data (immediately after the SOS
-// segment's length-prefixed payload).
-func findSOSScanStart(frag []byte) (int, error) {
-	// JPEG segments start at offset 0 with SOI (FF D8) or may have fill bytes.
+// findFirstSOFOffset walks frame by segments and returns the byte offset
+// of the first FF C0 marker prefix (so the marker byte is at offset+1 and
+// the length is at offset+2..+4).
+func findFirstSOFOffset(frame []byte) (int, error) {
+	// Reproduce the positional accounting from jpeg.Scan by tracking bytes
+	// as we iterate. Scan yields parsed segments but hides positions; walk
+	// the bytes directly instead.
 	pos := 0
-	for pos < len(frag) {
-		// Skip fill bytes and locate the marker code.
-		for pos < len(frag) && frag[pos] != 0xFF {
-			// A non-FF byte outside segment framing is malformed.
-			return 0, fmt.Errorf("%w: unexpected byte 0x%02X at pos %d", ErrBadJPEG, frag[pos], pos)
+	for pos < len(frame)-1 {
+		if frame[pos] != 0xFF {
+			return -1, fmt.Errorf("%w: expected 0xFF at pos %d, got %02X", ErrBadJPEG, pos, frame[pos])
 		}
-		for pos < len(frag) && frag[pos] == 0xFF {
+		// Skip fill bytes.
+		start := pos
+		for pos < len(frame) && frame[pos] == 0xFF {
 			pos++
 		}
-		if pos >= len(frag) {
-			return 0, fmt.Errorf("%w: truncated before marker code", ErrBadJPEG)
+		if pos >= len(frame) {
+			return -1, fmt.Errorf("%w: truncated at marker code", ErrBadJPEG)
 		}
-		code := Marker(frag[pos])
+		code := Marker(frame[pos])
+		if code == SOF0 {
+			// marker prefix is at pos-1 (0xFF) — return the FF offset.
+			return pos - 1, nil
+		}
 		pos++
 		if code == 0x00 {
-			return 0, fmt.Errorf("%w: 0xFF00 outside scan data", ErrBadJPEG)
-		}
-		if code == SOS {
-			// Read 2-byte length, skip payload, return next position.
-			if pos+2 > len(frag) {
-				return 0, fmt.Errorf("%w: SOS truncated length at pos %d", ErrBadJPEG, pos)
-			}
-			sosLen := int(binary.BigEndian.Uint16(frag[pos : pos+2]))
-			if sosLen < 2 {
-				return 0, fmt.Errorf("%w: SOS length %d < 2", ErrBadJPEG, sosLen)
-			}
-			scanStart := pos + sosLen
-			if scanStart > len(frag) {
-				return 0, fmt.Errorf("%w: scan start past frag end", ErrBadJPEG)
-			}
-			return scanStart, nil
+			return -1, fmt.Errorf("%w: 0xFF 00 outside scan data at pos %d", ErrBadJPEG, start)
 		}
 		if code.isStandalone() {
-			// SOI, EOI, RSTn: no length, no payload. But we shouldn't hit
-			// EOI before SOS — that would mean no scan.
-			if code == EOI {
-				return 0, fmt.Errorf("%w: EOI before SOS", ErrBadJPEG)
-			}
 			continue
 		}
-		// Length-prefixed segment: read length, skip payload.
-		if pos+2 > len(frag) {
-			return 0, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
+		if pos+2 > len(frame) {
+			return -1, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
 		}
-		segLen := int(binary.BigEndian.Uint16(frag[pos : pos+2]))
+		segLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
 		if segLen < 2 {
-			return 0, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
+			return -1, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
+		}
+		if code == SOS {
+			// Past SOF; SOF missing in segment-walk region.
+			return -1, fmt.Errorf("%w: SOS reached without SOF", ErrBadJPEG)
 		}
 		pos += segLen
-		if pos > len(frag) {
-			return 0, fmt.Errorf("%w: segment past frag end", ErrBadJPEG)
+		if pos > len(frame) {
+			return -1, fmt.Errorf("%w: segment past frame end", ErrBadJPEG)
 		}
 	}
-	return 0, fmt.Errorf("%w: no SOS found", ErrBadJPEG)
+	return -1, fmt.Errorf("%w: no SOF in frame", ErrBadJPEG)
+}
+
+// initialCap pre-sizes the output buffer to avoid repeated grow-copy during
+// append. Sum of fragment sizes is an upper bound; the real output is
+// slightly larger (tables insert + optional APP14 + optional DRI) but the
+// amortized cost of one extra grow is negligible next to the copy itself.
+func initialCap(fragments [][]byte) int {
+	n := 0
+	for _, f := range fragments {
+		n += len(f)
+	}
+	// small pad for tables splice; cheap.
+	return n + 512
 }

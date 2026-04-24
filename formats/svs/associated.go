@@ -53,13 +53,12 @@ func newAssociatedImage(kind string, p *tiff.Page, r io.ReaderAt) (opentile.Asso
 // JPEGTables and an APP14 "Adobe" marker to signal RGB colorspace (Aperio
 // stores non-standard RGB JPEG).
 type stripedJPEGAssociated struct {
-	kind            string
-	size            opentile.Size
-	stripOffsets    []uint64
-	stripCounts     []uint64
-	jpegTables      []byte
-	restartInterval int
-	reader          io.ReaderAt
+	kind         string
+	size         opentile.Size
+	stripOffsets []uint64
+	stripCounts  []uint64
+	jpegTables   []byte
+	reader       io.ReaderAt
 }
 
 func (a *stripedJPEGAssociated) Kind() string                      { return a.kind }
@@ -78,13 +77,73 @@ func (a *stripedJPEGAssociated) Bytes() ([]byte, error) {
 	if a.size.W > 0xFFFF || a.size.H > 0xFFFF {
 		return nil, fmt.Errorf("svs: associated %s %dx%d exceeds SOF uint16", a.kind, a.size.W, a.size.H)
 	}
+
+	// RestartInterval matches Python opentile's Jpeg.concatenate_scans:
+	// scan_size.area // mcu_area, where scan_size is the FIRST strip's own
+	// SOF dimensions (width × RowsPerStrip, pre-padding) and mcu_area comes
+	// from the strip's sampling factors. A value of 0 (single-strip thumb)
+	// produces no DRI marker — matching what Python's _manipulate_header
+	// emits when restart_interval is 0 (the find-existing path updates the
+	// payload; the insert path creates `FF DD 00 04 00 00`, which on decode
+	// means "no restart"). We intentionally propagate 0 through as-is to
+	// avoid emitting a useless DRI.
+	ri, err := computeRestartInterval(fragments)
+	if err != nil {
+		return nil, fmt.Errorf("svs: associated %s restart interval: %w", a.kind, err)
+	}
+
 	return jpeg.ConcatenateScans(fragments, jpeg.ConcatOpts{
 		Width:           uint16(a.size.W),
 		Height:          uint16(a.size.H),
 		JPEGTables:      a.jpegTables,
 		ColorspaceFix:   true,
-		RestartInterval: a.restartInterval,
+		RestartInterval: ri,
 	})
+}
+
+// computeRestartInterval matches Python opentile's Jpeg.concatenate_scans
+// computation:
+//
+//	restart_interval = scan_size.area // mcu_area
+//
+// where scan_size is the first strip's JPEG SOF dimensions (W × H from
+// the strip's own SOF, NOT the TIFF ImageWidth/RowsPerStrip, which
+// differ when the encoder pads) and mcu_area is derived from the luma
+// sampling factors.
+//
+// This deviates from the original Go implementation which used
+// TIFF ImageWidth and a hard-coded 16×16 MCU (Aperio 4:2:0 assumption);
+// CMU-1-Small-Region.svs uses 4:4:4 (subsample=0, MCU 8×8), so the
+// hardcoded value produced an incorrect DRI payload and a single-byte
+// divergence from Python.
+func computeRestartInterval(fragments [][]byte) (int, error) {
+	if len(fragments) == 0 {
+		return 0, nil
+	}
+	if len(fragments) < 2 {
+		// Single strip: Python emits restart_interval = scan_size.area /
+		// mcu_size. For a correctly-sized single-strip image this is
+		// effectively redundant but Python does emit it. We match
+		// unconditionally to avoid byte divergence on edge cases where
+		// the page has >1 strip but the caller never gets multi-strip.
+		// If it's a single fragment AND only one strip total, Python's
+		// behaviour still writes the DRI. Return the computed value, not 0.
+	}
+	sof, err := parseFirstSOF(fragments[0])
+	if err != nil {
+		return 0, fmt.Errorf("parse first strip SOF: %w", err)
+	}
+	mcuW, mcuH := sof.MCUSize()
+	if mcuW <= 0 || mcuH <= 0 {
+		return 0, fmt.Errorf("invalid MCU size %dx%d", mcuW, mcuH)
+	}
+	// scan_size = (sof.Width, sof.Height) — the first strip's own SOF.
+	return (int(sof.Width) * int(sof.Height)) / (mcuW * mcuH), nil
+}
+
+// parseFirstSOF returns the first SOF0 payload from frag, parsed.
+func parseFirstSOF(frag []byte) (*jpeg.SOF, error) {
+	return jpeg.FirstFragmentSOF(frag)
 }
 
 func newStripedJPEGAssociated(kind string, p *tiff.Page, r io.ReaderAt) (*stripedJPEGAssociated, error) {
@@ -112,33 +171,13 @@ func newStripedJPEGAssociated(kind string, p *tiff.Page, r io.ReaderAt) (*stripe
 	}
 	tables, _ := p.JPEGTables()
 
-	// RestartInterval: upstream writes one DRI giving MCUs-per-strip so the
-	// decoder knows each RSTn boundary is MCUs-per-strip apart. RowsPerStrip
-	// (tag 278) is the strip height; MCU size is 16x16 for YCbCr 4:2:0 (the
-	// Aperio default). If RowsPerStrip is missing, fall back to 0 (no DRI,
-	// verbatim concat — acceptable only for single-strip pages).
-	restartInterval := 0
-	if len(offsets) > 1 {
-		rps, ok := p.ScalarU32(tiff.TagRowsPerStrip)
-		if !ok || rps == 0 {
-			return nil, fmt.Errorf("svs: associated %s multi-strip but missing RowsPerStrip", kind)
-		}
-		// MCUs per strip = (padded_width / 16) * (rows_per_strip / 16).
-		// Round up both dimensions to an MCU boundary to stay safe.
-		const mcu = 16
-		mcusX := (int(iw) + mcu - 1) / mcu
-		mcusY := (int(rps) + mcu - 1) / mcu
-		restartInterval = mcusX * mcusY
-	}
-
 	return &stripedJPEGAssociated{
-		kind:            kind,
-		size:            opentile.Size{W: int(iw), H: int(il)},
-		stripOffsets:    offsets,
-		stripCounts:     counts,
-		jpegTables:      tables,
-		restartInterval: restartInterval,
-		reader:          r,
+		kind:         kind,
+		size:         opentile.Size{W: int(iw), H: int(il)},
+		stripOffsets: offsets,
+		stripCounts:  counts,
+		jpegTables:   tables,
+		reader:       r,
 	}, nil
 }
 
