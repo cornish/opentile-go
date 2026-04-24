@@ -6,15 +6,16 @@ import (
 	"testing"
 )
 
-// The exact 16-byte Adobe APP14 segment Python opentile emits
-// (jpeg/jpeg.py:400-404 in opentile 0.20.0). Parity with this byte sequence
-// is the correctness bar for InsertTablesAndAPP14.
+// The exact 16-byte canonical Adobe APP14 segment Python opentile and
+// Photoshop both emit (jpeg/jpeg.py:400-404 in opentile 0.20.0). Parity with
+// this byte sequence is the correctness bar for InsertTablesAndAPP14.
 var pythonAPP14 = []byte{
 	0xFF, 0xEE, 0x00, 0x0E,
-	0x41, 0x64, 0x6F, 0x62, 0x65, 0x00, // "Adobe\0"
-	0x64, 0x80, // DCTEncodeVersion
-	0x00, 0x00, // APP14Flags0
-	0x00, 0x00, // APP14Flags1
+	0x41, 0x64, 0x6F, 0x62, 0x65, // "Adobe" (5 bytes, no null)
+	0x00, 0x64, // DCTEncodeVersion = 100
+	0x80, 0x00, // APP14Flags0 = 0x8000
+	0x00, 0x00, // APP14Flags1 = 0
+	0x00, // ColorTransform = 0 (RGB)
 }
 
 func TestAdobeAPP14MatchesPython(t *testing.T) {

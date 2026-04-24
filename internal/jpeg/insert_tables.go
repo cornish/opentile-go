@@ -5,36 +5,31 @@ import (
 	"fmt"
 )
 
-// adobeAPP14 is the 16-byte Adobe APP14 segment Python opentile splices
-// before SOS to advertise RGB (not YCbCr) colorspace, matching Aperio's
-// non-standard JPEG encoding.
-//
-// Python opentile emits this exact byte sequence (jpeg/jpeg.py:392-405 in
-// opentile 0.20.0):
-//
-//	b"\xff\xee\x00\x0e\x41\x64\x6f\x62\x65\x00\x64\x80\x00\x00\x00\x00"
-//
-// Layout:
+// adobeAPP14 is the canonical Adobe APP14 segment that Aperio's JPEG encoder
+// and Photoshop both emit. Our SVS input slides carry it on the TIFF tile
+// bytes are abbreviated (no APP14), so we splice it in before SOS.
 //
 //	FF EE            APP14 marker
-//	00 0E            length = 14 (length field + 12 data bytes)
-//	41 64 6F 62 65 00  identifier "Adobe\0"
-//	64 80            DCTEncodeVersion (Python writes 0x6480)
-//	00 00            APP14Flags0
-//	00 00            APP14Flags1
+//	00 0E            length = 14 (length field + 12-byte payload)
+//	41 64 6F 62 65   identifier "Adobe" (5 bytes, no null terminator)
+//	00 64            DCTEncodeVersion = 100
+//	80 00            APP14Flags0 = 0x8000
+//	00 00            APP14Flags1 = 0
+//	00               ColorTransform = 0 (RGB)
 //
-// Note: this is 12 bytes of Adobe payload; the standard Adobe APP14 segment
-// also carries a 1-byte ColorTransform field (total payload 13 bytes,
-// length 15). Python opentile omits that byte, so the segment as emitted is
-// technically a truncated Adobe APP14. Most JPEG decoders infer RGB from
-// the presence of the Adobe identifier alone when ColorTransform is absent,
-// and we preserve Python's bytes exactly to satisfy the parity oracle.
+// ColorTransform = 0 tells decoders the component data is RGB, not YCbCr —
+// the "colorspace fix" Aperio needs. This is the same byte sequence Python
+// opentile 0.20.0 emits (jpeg/jpeg.py:392-405), preserved exactly for parity.
+//
+// Single source of truth: both InsertTablesAndAPP14 (SVS tiled) and
+// ConcatenateScans (SVS associated images) read from this var.
 var adobeAPP14 = []byte{
 	0xFF, 0xEE, 0x00, 0x0E,
-	0x41, 0x64, 0x6F, 0x62, 0x65, 0x00, // "Adobe\0"
-	0x64, 0x80, // DCTEncodeVersion
-	0x00, 0x00, // APP14Flags0
-	0x00, 0x00, // APP14Flags1
+	0x41, 0x64, 0x6F, 0x62, 0x65, // "Adobe" (5 bytes, no null)
+	0x00, 0x64, // DCTEncodeVersion = 100
+	0x80, 0x00, // APP14Flags0 = 0x8000
+	0x00, 0x00, // APP14Flags1 = 0
+	0x00, // ColorTransform = 0 (RGB)
 }
 
 // InsertTablesAndAPP14 returns a copy of frame with the JPEGTables DQT/DHT

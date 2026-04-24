@@ -92,18 +92,11 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	var out bytes.Buffer
 	out.Write([]byte{0xFF, 0xD8}) // SOI
 	if opts.ColorspaceFix {
-		// Adobe APP14 segment: 16 bytes total (FF EE + length 00 0E + 12 data
-		// bytes). The "Adobe" identifier has NO null terminator; the length
-		// field counts itself (2) + the 12 data bytes = 14.
-		app14 := []byte{
-			0xFF, 0xEE, 0x00, 0x0E,
-			'A', 'd', 'o', 'b', 'e',
-			0x64, 0x00, // DCTEncodeVersion
-			0x00, 0x00, // APP14Flags0
-			0x00, 0x00, // APP14Flags1
-			0x00,       // ColorTransform = 0 (RGB)
-		}
-		out.Write(app14)
+		// Single source of truth: the canonical Adobe APP14 segment lives in
+		// insert_tables.go (adobeAPP14). Both SVS tiled (InsertTablesAndAPP14)
+		// and SVS associated-image (this path) must emit identical bytes to
+		// match Python opentile / Aperio.
+		out.Write(adobeAPP14)
 	}
 	for _, seg := range dqts {
 		out.Write(seg)

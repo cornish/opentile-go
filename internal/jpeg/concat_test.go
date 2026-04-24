@@ -104,14 +104,17 @@ func TestConcatenateScansColorspaceFix(t *testing.T) {
 		t.Fatalf("ConcatenateScans: %v", err)
 	}
 	// The APP14 segment should appear immediately after SOI.
-	// Bytes 0..1 = SOI, bytes 2..17 = APP14 (16 bytes).
+	// Bytes 0..1 = SOI, bytes 2..17 = APP14 (16 bytes). This must match the
+	// canonical Adobe APP14 bytes Python opentile emits — same as adobeAPP14
+	// in insert_tables.go. Keep in lockstep with pythonAPP14 in
+	// insert_tables_test.go.
 	wantAPP14 := []byte{
 		0xFF, 0xEE, 0x00, 0x0E,
-		'A', 'd', 'o', 'b', 'e',
-		0x64, 0x00,
-		0x00, 0x00,
-		0x00, 0x00,
-		0x00,
+		0x41, 0x64, 0x6F, 0x62, 0x65, // "Adobe" (5 bytes, no null)
+		0x00, 0x64, // DCTEncodeVersion = 100
+		0x80, 0x00, // APP14Flags0 = 0x8000
+		0x00, 0x00, // APP14Flags1 = 0
+		0x00, // ColorTransform = 0 (RGB)
 	}
 	if len(out) < 18 {
 		t.Fatalf("output too short: %d bytes", len(out))
