@@ -277,18 +277,28 @@ func (l *stripedImage) assembleFrame(framePos, frameSize opentile.Size) ([]byte,
 			if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
 				return nil, fmt.Errorf("ndpi: read stripe (%d,%d) idx=%d: %w", sx, sy, idx, err)
 			}
-			// Validate NDPI invariant: each stripe ends with FF RSTn.
+			// Each stripe ends with FF RSTn — or FF D9 (EOI) on the very
+			// last stripe of the level, which upstream opentile
+			// (Jpeg.concatenate_fragments) silently treats the same way:
+			// drop the trailing byte and append a global RSTn. Validate
+			// the penultimate byte is 0xFF and the trailing byte falls
+			// in the expected marker range.
 			if count < 2 {
 				return nil, fmt.Errorf("ndpi: stripe idx=%d too short (%d bytes)", idx, count)
 			}
-			if buf[count-2] != 0xFF || buf[count-1] < 0xD0 || buf[count-1] > 0xD7 {
-				return nil, fmt.Errorf("ndpi: stripe idx=%d does not end with FF RSTn (got %02X %02X)",
+			if buf[count-2] != 0xFF {
+				return nil, fmt.Errorf("ndpi: stripe idx=%d does not end with FF marker (got %02X %02X)",
 					idx, buf[count-2], buf[count-1])
 			}
-			// Drop the stripe's own RSTn byte and append the globally-indexed
-			// restart mark so cycle counts line up across the assembled frame.
-			// The 0xFF that precedes the RSTn is the penultimate byte of buf
-			// and is retained; we overwrite just the trailing RSTn index byte.
+			last := buf[count-1]
+			if !(last >= 0xD0 && last <= 0xD7) && last != 0xD9 {
+				return nil, fmt.Errorf("ndpi: stripe idx=%d trailing marker %02X outside [D0..D7, D9]",
+					idx, last)
+			}
+			// Drop the stripe's own trailing marker byte and append the
+			// globally-indexed RSTn so cycle counts line up across the
+			// assembled frame. The leading 0xFF is the penultimate byte of
+			// buf and is retained; we overwrite just the trailing marker.
 			out = append(out, buf[:count-1]...)
 			out = append(out, byte(0xD0+(fragIdx%8)))
 			fragIdx++
