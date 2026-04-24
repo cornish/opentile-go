@@ -91,6 +91,51 @@ Caught by the three-slide integration tests or during implementation. The librar
 
   *How to fix in v0.3:* decode each strip via a TIFF-aware LZW codec (Go stdlib `compress/lzw` with `Order=MSB`, or a ported tifffile codec), raster-concatenate, re-encode as a single LZW stream covering the full image height, and rewrite the LZW-specific TIFF metadata to match. Requires a full LZW codec path. Also update Python opentile with the same fix so the parity oracle continues to compare like for like, or gate the oracle on non-label images.
 
+### L12 — NDPI edge-tile background fill uses black, not white
+- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2)
+- **Severity:** Limitation (parity gap on edge tiles)
+- **Detail:** `internal/jpegturbo.CropWithBackground` fills DCT blocks past
+  the original image boundary with zero (black). Python opentile's
+  PyTurboJPEG `crop_multiple` defaults to `background_luminance=1.0`
+  (white). This produces differing bytes for edge tiles when the
+  requested crop extends past the image — the visible area is bit-
+  identical; only the OOB pixels differ.
+
+  *Why this is the v0.2 behavior:* white fill requires computing the
+  correct DCT offset magic constant that libjpeg-turbo's CUSTOMFILTER
+  callback expects. The exact value depends on the JPEG's quantisation
+  table: per `turbojpeg.py:__map_luminance_to_dc_dct_coefficient`, the
+  DC coefficient is `round((luminance * 2047 - 1024) / dc_dqt)`, where
+  `dc_dqt` is the DC element of the luminance quantisation table. For
+  v0.2 we ship black-fill (lum=0) to unblock the rest of the NDPI
+  pipeline; fixture parity against Python will fail only on edge tiles
+  on known slides.
+
+  *How to fix:* port PyTurboJPEG's `__find_dqt` + `__get_dc_dqt_element`
+  + `__map_luminance_to_dc_dct_coefficient` to read the DQT[0] value
+  out of the source JPEG, compute the luma DC for white, and thread
+  that value through as the `lum` argument to `go_tj_transform_crop_fill`.
+
+### L13 — v0.2 NDPI striped path was architecturally wrong for ~50 hours before benchmarking caught it
+- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2, post-Batch 4)
+- **Severity:** Limitation (process note; resolved)
+- **Detail:** `formats/ndpi/striped.go` originally gated on TIFF tag 322
+  (TileWidth), which NDPI pages never carry. Every pyramid level fell
+  through to a whole-level `tjTransform` crop per tile — ~3000x slower
+  than Python opentile for L0 of CMU-1.ndpi (3.3s/tile vs 0.97ms/tile;
+  projected ~9h for a full-level fixture). Fixed by porting tifffile's
+  `_page._gettags` McuStarts rewrite (`internal/jpeg/ndpi_tile.go` +
+  `formats/ndpi/stripes.go`) plus Python opentile's
+  `NdpiStripedImage._read_extended_frame` tile-assembly path
+  (`formats/ndpi/striped.go`).
+
+  *Lesson captured in `feedback_ndpi_architecture.md`.* Reinforces the
+  "don't guess — read upstream" rule already codified in CLAUDE.md:
+  "does the slide open?" is not a sufficient NDPI smoke test; the
+  `NDPI_BENCH_SLIDE` benchmark (`formats/ndpi/bench_test.go`) now
+  forces a per-tile-time regression gate so this specific failure mode
+  cannot recur silently.
+
 ### L11 — SVS associated-image DRI assumes 16×16 MCU
 - **Source:** Task 21 follow-up review (feat/v0.2)
 - **Severity:** Limitation (format-assumption)
