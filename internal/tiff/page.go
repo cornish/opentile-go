@@ -157,6 +157,23 @@ func (p *Page) ScalarArrayU64(tag uint16) ([]uint64, error) {
 	return p.arrayU64(tag)
 }
 
+// ScalarArrayU32 returns the value array for an arbitrary tag as uint32s.
+// Used by format packages to read LONG-typed vendor arrays (e.g., NDPI
+// McuStarts / McuStartsHighBytes). Returns an error if the tag is missing
+// or cannot be decoded as uint32.
+func (p *Page) ScalarArrayU32(tag uint16) ([]uint32, error) {
+	return p.arrayU32(tag)
+}
+
+// HasTag reports whether the page carries the given tag at all, without
+// attempting to decode its value. Useful when a format needs to branch on
+// tag presence before paying the decode cost — e.g., NDPI's McuStarts
+// (65426) tag determines whether a page is a striped JPEG level.
+func (p *Page) HasTag(tag uint16) bool {
+	_, ok := p.ifd.get(tag)
+	return ok
+}
+
 func (p *Page) arrayU64(tag uint16) ([]uint64, error) {
 	e, ok := p.ifd.get(tag)
 	if !ok {
