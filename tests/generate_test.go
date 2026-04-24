@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,9 +35,9 @@ func TestGenerateFixtures(t *testing.T) {
 	}
 	for _, name := range slideCandidates {
 		t.Run(name, func(t *testing.T) {
-			slide := filepath.Join(dir, name)
-			if _, err := os.Stat(slide); err != nil {
-				t.Skipf("slide not present at %s", slide)
+			slide, ok := resolveSlide(dir, name)
+			if !ok {
+				t.Skipf("slide %s not present under %s", name, dir)
 			}
 			if err := generateFixture(slide); err != nil {
 				t.Fatalf("generate %s: %v", name, err)
@@ -108,8 +107,7 @@ func generateFixture(slide string) error {
 		f.Metadata.AcquisitionRFC3339 = md.AcquisitionDateTime.Format(time.RFC3339)
 	}
 
-	stem := name[:len(name)-len(filepath.Ext(name))]
-	outPath := filepath.Join("fixtures", stem+".json")
+	outPath := filepath.Join("fixtures", fixtureJSONFor(name))
 	if err := tests.SaveFixture(outPath, f); err != nil {
 		return fmt.Errorf("SaveFixture: %w", err)
 	}

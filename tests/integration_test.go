@@ -21,6 +21,21 @@ var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
 	"CMU-1.svs",
 	"JP2K-33003-1.svs",
+	"CMU-1.ndpi",
+	"OS-2.ndpi",
+}
+
+// resolveSlide looks up name in dir, dir/svs, dir/ndpi and returns the first
+// existing absolute path. Used so OPENTILE_TESTDIR can be set to the repo
+// sample_files root and cover both formats in one run.
+func resolveSlide(dir, name string) (string, bool) {
+	for _, sub := range []string{"", "svs", "ndpi"} {
+		p := filepath.Join(dir, sub, name)
+		if _, err := os.Stat(p); err == nil {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // TestSlideParity reads each candidate slide, walks every (level, x, y), and
@@ -35,11 +50,11 @@ func TestSlideParity(t *testing.T) {
 	any := false
 	for _, name := range slideCandidates {
 		t.Run(name, func(t *testing.T) {
-			slide := filepath.Join(dir, name)
-			fixturePath := filepath.Join("fixtures", fixtureJSONFor(name))
-			if _, err := os.Stat(slide); err != nil {
-				t.Skipf("slide not present at %s", slide)
+			slide, ok := resolveSlide(dir, name)
+			if !ok {
+				t.Skipf("slide %s not present under %s", name, dir)
 			}
+			fixturePath := filepath.Join("fixtures", fixtureJSONFor(name))
 			if _, err := os.Stat(fixturePath); err != nil {
 				t.Skipf("fixture not present at %s (generate with -generate)", fixturePath)
 			}
@@ -141,11 +156,17 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 	}
 }
 
-// fixtureJSONFor returns the fixture filename for a given slide filename by
-// swapping the .svs extension for .json.
+// fixtureJSONFor returns the fixture filename for a given slide filename.
+// SVS slides keep the historical "<stem>.json" naming. NDPI slides embed the
+// ".ndpi" extension as "<stem>.ndpi.json" so that (for example) CMU-1.svs and
+// CMU-1.ndpi produce distinct fixtures on disk.
 func fixtureJSONFor(slideFilename string) string {
 	base := filepath.Base(slideFilename)
-	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	if ext == ".ndpi" {
+		return stem + ".ndpi.json"
+	}
 	return stem + ".json"
 }
 
