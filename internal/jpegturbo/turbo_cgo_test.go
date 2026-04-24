@@ -56,3 +56,39 @@ func TestCropBadInput(t *testing.T) {
 		t.Fatal("expected error on garbage input")
 	}
 }
+
+func TestCropWithBackgroundInsideImage(t *testing.T) {
+	// Fully-inside crop: CropWithBackground should behave like Crop,
+	// producing a decoded image of the requested dimensions.
+	src := encodeTestJPEG(t, 32, 32)
+	got, err := CropWithBackground(src, Region{X: 0, Y: 0, Width: 16, Height: 16})
+	if err != nil {
+		t.Fatalf("CropWithBackground: %v", err)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(got))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if img.Bounds().Dx() != 16 || img.Bounds().Dy() != 16 {
+		t.Errorf("dims: got %v, want 16x16", img.Bounds())
+	}
+}
+
+func TestCropWithBackgroundBeyondImage(t *testing.T) {
+	// Crop extends past the source: Crop would error; CropWithBackground
+	// should succeed and return the requested dims. The OOB region is
+	// filled in the DCT domain.
+	src := encodeTestJPEG(t, 32, 32)
+	// Request 48x48 at (0,0) — 16 pixels of OOB on the right and bottom.
+	got, err := CropWithBackground(src, Region{X: 0, Y: 0, Width: 48, Height: 48})
+	if err != nil {
+		t.Fatalf("CropWithBackground OOB: %v", err)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(got))
+	if err != nil {
+		t.Fatalf("decode OOB: %v", err)
+	}
+	if img.Bounds().Dx() != 48 || img.Bounds().Dy() != 48 {
+		t.Errorf("OOB dims: got %v, want 48x48", img.Bounds())
+	}
+}
