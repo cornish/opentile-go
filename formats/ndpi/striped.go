@@ -121,11 +121,14 @@ func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 	left := (x * l.tileSize.W) % denomX
 	top := (y * l.tileSize.H) % denomY
 
-	// Fast path: frame exactly equals a single tile at (0,0). No crop.
-	if frameSize.W == l.tileSize.W && frameSize.H == l.tileSize.H && left == 0 && top == 0 {
-		return frame, nil
-	}
-
+	// Always go through libjpeg-turbo, even when the crop is an identity
+	// (frame == tile at origin). Upstream Python opentile calls
+	// PyTurboJPEG.crop_multiple unconditionally; its tjTransform pass
+	// rewrites the output JPEG's marker sequence to a canonical order
+	// (SOF before DHT). An identity-region fast path that returns the
+	// assembled frame as-is preserves input marker order (DHT before
+	// SOF, as in the NDPI file) and diverges from upstream byte-for-byte
+	// on interior tiles at smaller pyramid levels.
 	region := jpegturbo.Region{X: left, Y: top, Width: l.tileSize.W, Height: l.tileSize.H}
 	out, err := jpegturbo.Crop(frame, region)
 	if err != nil {
