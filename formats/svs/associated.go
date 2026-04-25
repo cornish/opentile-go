@@ -52,12 +52,18 @@ func newAssociatedImage(kind string, p *tiff.Page, r io.ReaderAt) (opentile.Asso
 // TIFF strips via internal/jpeg.ConcatenateScans, injecting the page's
 // JPEGTables and an APP14 "Adobe" marker to signal RGB colorspace (Aperio
 // stores non-standard RGB JPEG).
+//
+// mcuW/mcuH are the JPEG MCU pixel dimensions detected once at construction
+// time via jpeg.MCUSizeOf on the first strip (with JPEGTables prepended when
+// the strips themselves don't carry SOF tables). Used for DRI / restart-
+// interval computation in Bytes().
 type stripedJPEGAssociated struct {
 	kind         string
 	size         opentile.Size
 	stripOffsets []uint64
 	stripCounts  []uint64
 	jpegTables   []byte
+	mcuW, mcuH   int
 	reader       io.ReaderAt
 }
 
@@ -87,7 +93,7 @@ func (a *stripedJPEGAssociated) Bytes() ([]byte, error) {
 	// payload; the insert path creates `FF DD 00 04 00 00`, which on decode
 	// means "no restart"). We intentionally propagate 0 through as-is to
 	// avoid emitting a useless DRI.
-	ri, err := computeRestartInterval(fragments)
+	ri, err := computeRestartInterval(fragments, a.mcuW, a.mcuH)
 	if err != nil {
 		return nil, fmt.Errorf("svs: associated %s restart interval: %w", a.kind, err)
 	}
@@ -108,17 +114,21 @@ func (a *stripedJPEGAssociated) Bytes() ([]byte, error) {
 //
 // where scan_size is the first strip's JPEG SOF dimensions (W × H from
 // the strip's own SOF, NOT the TIFF ImageWidth/RowsPerStrip, which
-// differ when the encoder pads) and mcu_area is derived from the luma
-// sampling factors.
+// differ when the encoder pads) and mcu_area is mcuW * mcuH (derived from
+// the strip's luma sampling factors, computed once at construction time
+// via jpeg.MCUSizeOf and threaded through here).
 //
 // This deviates from the original Go implementation which used
 // TIFF ImageWidth and a hard-coded 16×16 MCU (Aperio 4:2:0 assumption);
 // CMU-1-Small-Region.svs uses 4:4:4 (subsample=0, MCU 8×8), so the
 // hardcoded value produced an incorrect DRI payload and a single-byte
 // divergence from Python.
-func computeRestartInterval(fragments [][]byte) (int, error) {
+func computeRestartInterval(fragments [][]byte, mcuW, mcuH int) (int, error) {
 	if len(fragments) == 0 {
 		return 0, nil
+	}
+	if mcuW <= 0 || mcuH <= 0 {
+		return 0, fmt.Errorf("invalid MCU size %dx%d", mcuW, mcuH)
 	}
 	if len(fragments) < 2 {
 		// Single strip: Python emits restart_interval = scan_size.area /
@@ -132,10 +142,6 @@ func computeRestartInterval(fragments [][]byte) (int, error) {
 	sof, err := parseFirstSOF(fragments[0])
 	if err != nil {
 		return 0, fmt.Errorf("parse first strip SOF: %w", err)
-	}
-	mcuW, mcuH := sof.MCUSize()
-	if mcuW <= 0 || mcuH <= 0 {
-		return 0, fmt.Errorf("invalid MCU size %dx%d", mcuW, mcuH)
 	}
 	// scan_size = (sof.Width, sof.Height) — the first strip's own SOF.
 	return (int(sof.Width) * int(sof.Height)) / (mcuW * mcuH), nil
@@ -171,12 +177,40 @@ func newStripedJPEGAssociated(kind string, p *tiff.Page, r io.ReaderAt) (*stripe
 	}
 	tables, _ := p.JPEGTables()
 
+	// Derive MCU size once at construction time from the first strip's SOF.
+	// Aperio SVS strips embed their own SOF0 segment, so the strip bytes are
+	// sufficient on their own (no need to splice JPEGTables first). If the
+	// strip happens to lack a SOF (unusual but possible if a vendor strips
+	// per-strip headers) we fall back to 16x16 — the Aperio 4:2:0 default —
+	// which preserves v0.2 behavior on those inputs.
+	firstStripe := make([]byte, counts[0])
+	if err := tiff.ReadAtFull(r, firstStripe, int64(offsets[0])); err != nil {
+		return nil, fmt.Errorf("svs: read first stripe for MCU detection: %w", err)
+	}
+	mcuW, mcuH := 16, 16
+	if w, h, err := jpeg.MCUSizeOf(firstStripe); err == nil {
+		mcuW, mcuH = w, h
+	} else if len(tables) > 4 {
+		// Fallback: some encoders may not embed a SOF in each strip; in that
+		// case build a minimal valid JPEG header by splicing JPEGTables'
+		// inner segments around the strip.
+		header := []byte{0xFF, 0xD8}
+		header = append(header, tables[2:len(tables)-2]...)
+		assembled := append(header, firstStripe...)
+		assembled = append(assembled, 0xFF, 0xD9)
+		if w, h, err2 := jpeg.MCUSizeOf(assembled); err2 == nil {
+			mcuW, mcuH = w, h
+		}
+	}
+
 	return &stripedJPEGAssociated{
 		kind:         kind,
 		size:         opentile.Size{W: int(iw), H: int(il)},
 		stripOffsets: offsets,
 		stripCounts:  counts,
 		jpegTables:   tables,
+		mcuW:         mcuW,
+		mcuH:         mcuH,
 		reader:       r,
 	}, nil
 }

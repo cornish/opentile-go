@@ -230,6 +230,33 @@ Caught by the three-slide integration tests or during implementation. The librar
   accepts many positions per invocation could reasonably raise the
   sample to hundreds per level.
 
+### L17 — NDPI label cropH rounded to MCU multiple, not full image height
+
+- **Source:** L7 fix in v0.3 (Task 10) surfaced the divergence
+- **Severity:** Limitation (parity gap on slides where image_h % mcu_h ≠ 0)
+- **Detail:** `formats/ndpi.newLabelImage` computes `cropH` as
+  `(overview.size.H / mcuH) * mcuH` (rounded down to a whole-MCU multiple)
+  to satisfy libjpeg-turbo's `TJXOPT_PERFECT` requirement that crops are
+  MCU-aligned. Python opentile's `crop_multiple` tolerates ragged heights
+  via its CUSTOMFILTER. Result: when an overview's height is not a multiple
+  of its MCU height, our Go label is one MCU row shorter than Python's.
+
+  Visible on OS-2.ndpi (344x392 Go vs 344x396 Python) and Hamamatsu-1.ndpi
+  (640x728 Go vs 640x732 Python). CMU-1.ndpi (352x408) is unaffected because
+  its image height is divisible by mcuH.
+
+  *Why this is the v0.3 behavior:* fixing it cleanly requires routing
+  ragged-height label crops through `CropWithBackground` (with the white-
+  fill DC math from Theme 4) rather than the bare `Crop` path. That's a
+  multi-step change orthogonal to L7's MCU-detection fix. v0.3 ships with
+  the new MCU detection (more correct: CMU-1 now matches Python byte-for-
+  byte) and documents this remaining gap.
+
+  *How to fix in v0.4:* detect ragged height in `newLabelImage`, route
+  through `CropWithBackground` with luminance=1.0 and chroma DC=0 (matches
+  Python). The OS-2 and Hamamatsu-1 fixtures will need re-regeneration
+  once the fix lands.
+
 ---
 
 ## 3. Reviewer suggestions accepted but not applied

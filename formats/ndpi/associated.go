@@ -75,8 +75,17 @@ type labelImage struct {
 
 // newLabelImage returns a labelImage whose Bytes() crops the overview to
 // [0, crop * overview.Width) horizontally, snapped down to the nearest MCU
-// boundary. mcuW / mcuH are the MCU dimensions of the overview's JPEG (16
-// for YCbCr 4:2:0 — the Hamamatsu standard).
+// boundary. mcuW / mcuH are the MCU dimensions of the overview's JPEG —
+// derive them via jpeg.MCUSizeOf on the overview bytes (16x16 for YCbCr
+// 4:2:0; 8x8 for the 4:4:4 case Hamamatsu actually uses on macro pages).
+//
+// Width is MCU-rounded the way Python opentile's _calculate_crop is
+// (int(W * crop / mcuW) * mcuW). Height is also rounded down to the nearest
+// mcuH multiple here because internal/jpegturbo.Crop uses TJXOPT_PERFECT
+// and rejects non-MCU-aligned regions; Python's PyTurboJPEG.crop_multiple
+// tolerates ragged crops, which is why upstream passes the un-rounded page
+// height. A v0.4 fix could route non-aligned cases through
+// CropWithBackground for full Python parity.
 func newLabelImage(overview *overviewImage, crop float64, mcuW, mcuH int) *labelImage {
 	pixelTo := int(float64(overview.size.W) * crop)
 	pixelTo = (pixelTo / mcuW) * mcuW
