@@ -9,37 +9,6 @@ import (
 	"github.com/tcornish/opentile-go/internal/tifflzw"
 )
 
-// TestClassifyAssociatedKind locks in the SubFileType + position-based
-// classifier. Upstream tifffile._series_svs dispatches Label/Macro by
-// SubFileType tag 254 (1=Label, 9=Macro), and treats pages[1] as
-// "Thumbnail" regardless of tag content.
-func TestClassifyAssociatedKind(t *testing.T) {
-	tests := []struct {
-		name        string
-		pageIdx     int
-		subfileType uint32
-		tiled       bool
-		want        string // empty string = not an associated image
-	}{
-		{"baseline pyramid skipped", 0, 0, true, ""},
-		{"page 1 non-tiled = thumbnail", 1, 0, false, "thumbnail"},
-		{"page 1 tiled still thumbnail", 1, 0, true, "thumbnail"},
-		{"extra tiled pyramid level skipped", 2, 0, true, ""},
-		{"subfile 1 non-tiled = label", 4, 1, false, "label"},
-		{"subfile 9 non-tiled = overview", 5, 9, false, "overview"},
-		{"unknown subfile non-tiled skipped", 3, 5, false, ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := classifyAssociatedKind(tc.pageIdx, tc.subfileType, tc.tiled)
-			if got != tc.want {
-				t.Errorf("classifyAssociatedKind(idx=%d sf=%d tiled=%v) = %q want %q",
-					tc.pageIdx, tc.subfileType, tc.tiled, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestLabelMultiStripDecodesRestitchesEncodes locks in the v0.3 L10 fix:
 // a multi-strip LZW label is decoded strip-by-strip, the raster is
 // concatenated row-major, and re-encoded as a single LZW stream covering

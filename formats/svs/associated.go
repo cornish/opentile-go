@@ -9,31 +9,6 @@ import (
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
-// classifyAssociatedKind returns the AssociatedImage kind for an SVS page or
-// empty string if the page is not an associated image. Mirrors
-// tifffile._series_svs: page 1 is always the thumbnail (positional); any
-// non-tiled page at index >= 2 with SubFileType 9 is the macro (overview),
-// SubFileType 1 is the label. Everything else is either a pyramid level
-// (handled separately) or ignored.
-//
-// Do not consult ImageDescription for this decision; upstream does not, and
-// the description strings are inconsistent across Aperio versions.
-func classifyAssociatedKind(pageIdx int, subfileType uint32, tiled bool) string {
-	if pageIdx == 1 {
-		return "thumbnail"
-	}
-	if tiled {
-		return ""
-	}
-	switch subfileType {
-	case 9:
-		return "overview"
-	case 1:
-		return "label"
-	}
-	return ""
-}
-
 // newAssociatedImage dispatches construction by kind. Thumbnail and overview
 // are striped JPEG assembled via ConcatenateScans; label is raw strip
 // passthrough (codec as advertised by the TIFF Compression tag).
