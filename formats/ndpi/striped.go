@@ -1,0 +1,386 @@
+package ndpi
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"iter"
+	"sync"
+
+	opentile "github.com/tcornish/opentile-go"
+	"github.com/tcornish/opentile-go/internal/jpeg"
+	"github.com/tcornish/opentile-go/internal/jpegturbo"
+	"github.com/tcornish/opentile-go/internal/tiff"
+)
+
+// stripedImage is an NDPI pyramid level whose source is a single giant JPEG
+// strip subdivided by restart (RSTn) markers into "native stripes" (one
+// DRI interval per stripe). Output tiles are assembled by concatenating
+// the relevant stripe scan fragments with a patched JPEG header, then
+// lossless-cropping the assembly to the output tile size via
+// libjpeg-turbo.
+//
+// This is a direct port of opentile's NdpiStripedImage (see
+// opentile/formats/ndpi/ndpi_image.py:408-580). The frame-caching shape
+// matches upstream: multiple tiles sharing a frame position reuse the
+// assembled frame; edge tiles use a smaller frame so we never crop past
+// the image bounds.
+type stripedImage struct {
+	index       int
+	pyrIndex    int
+	size        opentile.Size // image pixel size
+	tileSize    opentile.Size // output tile size
+	grid        opentile.Size // output tile grid
+	stripes     *StripeInfo
+	compression opentile.Compression
+	mpp         opentile.SizeMm
+	reader      io.ReaderAt
+
+	// frameSize = max(tileSize, stripeSize) — the default frame geometry
+	// for non-edge tiles. Stored so we don't recompute on every Tile call.
+	frameSize opentile.Size
+
+	// Patched-header cache. Keyed by frame size (the crop-safe frame
+	// geometry varies at the image edges). Populated lazily; an entry
+	// for each unique frame size is built once and reused thereafter.
+	headerMu           sync.Mutex
+	headersByFrameSize map[opentile.Size][]byte
+
+	// Assembled-frame cache. Keyed by (framePos, frameSize); the value is
+	// a complete JPEG that covers the frame. Populated lazily per-call.
+	//
+	// Note: v0.2 does not bound the cache size. A worst-case pyramid-level
+	// pass iterates tiles in row-major order, so each frame is assembled
+	// once and then every tile-inside-frame reads from the same entry
+	// until the next frame is needed. Memory cost per entry is ~frame
+	// JPEG size (~100s of KB for a 512x512 tile-equivalent frame).
+	frameMu     sync.Mutex
+	framesByKey map[frameKey][]byte
+}
+
+type frameKey struct {
+	posX, posY, w, h int
+}
+
+func newStripedImage(
+	index int,
+	p *tiff.Page,
+	tileSize opentile.Size,
+	stripes *StripeInfo,
+	r io.ReaderAt,
+) (*stripedImage, error) {
+	iw, ok := p.ImageWidth()
+	if !ok {
+		return nil, fmt.Errorf("ndpi: ImageWidth missing")
+	}
+	il, ok := p.ImageLength()
+	if !ok {
+		return nil, fmt.Errorf("ndpi: ImageLength missing")
+	}
+	size := opentile.Size{W: int(iw), H: int(il)}
+	gridW := (size.W + tileSize.W - 1) / tileSize.W
+	gridH := (size.H + tileSize.H - 1) / tileSize.H
+	return &stripedImage{
+		index:              index,
+		size:               size,
+		tileSize:           tileSize,
+		grid:               opentile.Size{W: gridW, H: gridH},
+		stripes:            stripes,
+		compression:        opentile.CompressionJPEG,
+		reader:             r,
+		frameSize:          maxSize(tileSize, opentile.Size{W: stripes.StripeW, H: stripes.StripeH}),
+		headersByFrameSize: make(map[opentile.Size][]byte),
+		framesByKey:        make(map[frameKey][]byte),
+	}, nil
+}
+
+func (l *stripedImage) Index() int                        { return l.index }
+func (l *stripedImage) PyramidIndex() int                 { return l.pyrIndex }
+func (l *stripedImage) Size() opentile.Size               { return l.size }
+func (l *stripedImage) TileSize() opentile.Size           { return l.tileSize }
+func (l *stripedImage) Grid() opentile.Size               { return l.grid }
+func (l *stripedImage) Compression() opentile.Compression { return l.compression }
+func (l *stripedImage) MPP() opentile.SizeMm              { return l.mpp }
+func (l *stripedImage) FocalPlane() float64               { return 0 }
+
+func (l *stripedImage) Tile(x, y int) ([]byte, error) {
+	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
+		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
+	}
+	frameSize := l.frameSizeForTile(x, y)
+	framePos := l.framePosition(x, y, frameSize)
+	frame, err := l.getFrame(framePos, frameSize)
+	if err != nil {
+		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	// Position of the tile's top-left inside the frame.
+	denomX := maxInt(frameSize.W, l.tileSize.W)
+	denomY := maxInt(frameSize.H, l.tileSize.H)
+	left := (x * l.tileSize.W) % denomX
+	top := (y * l.tileSize.H) % denomY
+
+	// Always go through libjpeg-turbo, even when the crop is an identity
+	// (frame == tile at origin). Upstream Python opentile calls
+	// PyTurboJPEG.crop_multiple unconditionally; its tjTransform pass
+	// rewrites the output JPEG's marker sequence to a canonical order
+	// (SOF before DHT). An identity-region fast path that returns the
+	// assembled frame as-is preserves input marker order (DHT before
+	// SOF, as in the NDPI file) and diverges from upstream byte-for-byte
+	// on interior tiles at smaller pyramid levels.
+	region := jpegturbo.Region{X: left, Y: top, Width: l.tileSize.W, Height: l.tileSize.H}
+	out, err := jpegturbo.Crop(frame, region)
+	if err != nil {
+		// Edge tile whose crop would extend past the assembled frame
+		// (this can happen when the image dimensions are not a multiple
+		// of tileSize). Fall through to CropWithBackground to fill the
+		// OOB region.
+		extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
+		if extendsBeyond {
+			out, err = jpegturbo.CropWithBackground(frame, region)
+		}
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+	}
+	return out, nil
+}
+
+func (l *stripedImage) TileReader(x, y int) (io.ReadCloser, error) {
+	b, err := l.Tile(x, y)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+func (l *stripedImage) Tiles(ctx context.Context) iter.Seq2[opentile.TilePos, opentile.TileResult] {
+	return func(yield func(opentile.TilePos, opentile.TileResult) bool) {
+		for y := 0; y < l.grid.H; y++ {
+			for x := 0; x < l.grid.W; x++ {
+				if err := ctx.Err(); err != nil {
+					yield(opentile.TilePos{X: x, Y: y}, opentile.TileResult{Err: err})
+					return
+				}
+				b, err := l.Tile(x, y)
+				if !yield(opentile.TilePos{X: x, Y: y}, opentile.TileResult{Bytes: b, Err: err}) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// frameSizeForTile mirrors NdpiStripedImage._get_frame_size_for_tile. The
+// narrowing conditions (sw < tileSize.W / sh < tileSize.H) fire only when
+// a native stripe is smaller than the output tile — the upstream-original
+// case. When the native stripe is wider/taller than the tile (the more
+// common NDPI layout), this returns the default frame size and any resulting
+// crop that extends past image bounds falls through to CropWithBackground
+// in Tile(); see docs/deferred.md L12 for the OOB fill parity story.
+func (l *stripedImage) frameSizeForTile(x, y int) opentile.Size {
+	w := l.frameSize.W
+	h := l.frameSize.H
+	sw := l.stripes.StripeW
+	sh := l.stripes.StripeH
+	if x == l.grid.W-1 && sw < l.tileSize.W {
+		w = sw*l.stripes.StripedW - x*l.tileSize.W
+	}
+	if y == l.grid.H-1 && sh < l.tileSize.H {
+		h = sh*l.stripes.StripedH - y*l.tileSize.H
+	}
+	return opentile.Size{W: w, H: h}
+}
+
+// framePosition computes the top-left tile coordinate of the frame that
+// covers tile (x, y). Mirrors NdpiTile's frame_position math: group tiles
+// by "tiles per frame", multiply by tile size → pixel top-left of frame
+// divided by tile size = tile-coord top-left of frame.
+func (l *stripedImage) framePosition(x, y int, frameSize opentile.Size) opentile.Size {
+	tpfX := maxInt(frameSize.W/l.tileSize.W, 1)
+	tpfY := maxInt(frameSize.H/l.tileSize.H, 1)
+	return opentile.Size{
+		W: (x / tpfX) * tpfX,
+		H: (y / tpfY) * tpfY,
+	}
+}
+
+// getFrame returns (and caches) the assembled JPEG covering framePos at
+// frameSize. Cache key uses tile-coord position and pixel size so distinct
+// edge-tile frames don't collide with the interior-frame key.
+func (l *stripedImage) getFrame(framePos, frameSize opentile.Size) ([]byte, error) {
+	key := frameKey{posX: framePos.W, posY: framePos.H, w: frameSize.W, h: frameSize.H}
+	l.frameMu.Lock()
+	if b, ok := l.framesByKey[key]; ok {
+		l.frameMu.Unlock()
+		return b, nil
+	}
+	l.frameMu.Unlock()
+
+	frame, err := l.assembleFrame(framePos, frameSize)
+	if err != nil {
+		return nil, err
+	}
+
+	l.frameMu.Lock()
+	if existing, ok := l.framesByKey[key]; ok {
+		l.frameMu.Unlock()
+		return existing, nil
+	}
+	l.framesByKey[key] = frame
+	l.frameMu.Unlock()
+	return frame, nil
+}
+
+// assembleFrame reads the stripe fragments covering (framePos, frameSize)
+// and concatenates them into a single JPEG, inserting restart markers at
+// fragment boundaries and prefixing a size-patched header.
+//
+// Direct port of NdpiStripedImage._read_extended_frame (ndpi_image.py:527-563)
+// plus Jpeg.concatenate_fragments (jpeg/jpeg.py:78-102).
+func (l *stripedImage) assembleFrame(framePos, frameSize opentile.Size) ([]byte, error) {
+	header, err := l.getPatchedHeader(frameSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Region of native stripes that covers the frame.
+	stripeStartX := (framePos.W * l.tileSize.W) / l.stripes.StripeW
+	stripeStartY := (framePos.H * l.tileSize.H) / l.stripes.StripeH
+	stripeCountX := maxInt(frameSize.W/l.stripes.StripeW, 1)
+	stripeCountY := maxInt(frameSize.H/l.stripes.StripeH, 1)
+
+	// Clip at the right/bottom edge of the native stripe grid — NDPI
+	// images that are not a multiple of stripe width end at stripedW etc.
+	if stripeStartX+stripeCountX > l.stripes.StripedW {
+		stripeCountX = l.stripes.StripedW - stripeStartX
+	}
+	if stripeStartY+stripeCountY > l.stripes.StripedH {
+		stripeCountY = l.stripes.StripedH - stripeStartY
+	}
+	if stripeCountX <= 0 || stripeCountY <= 0 {
+		return nil, fmt.Errorf("ndpi: empty stripe region for frame pos %v size %v", framePos, frameSize)
+	}
+
+	// Pre-size the output buffer. Header + stripes + trailing EOI.
+	estSize := len(header) + 2
+	for sy := stripeStartY; sy < stripeStartY+stripeCountY; sy++ {
+		for sx := stripeStartX; sx < stripeStartX+stripeCountX; sx++ {
+			idx := sy*l.stripes.StripedW + sx
+			estSize += int(l.stripes.StripeByteCounts[idx])
+		}
+	}
+	out := make([]byte, 0, estSize)
+	out = append(out, header...)
+
+	fragIdx := 0
+	for sy := stripeStartY; sy < stripeStartY+stripeCountY; sy++ {
+		for sx := stripeStartX; sx < stripeStartX+stripeCountX; sx++ {
+			idx := sy*l.stripes.StripedW + sx
+			count := int(l.stripes.StripeByteCounts[idx])
+			off := int64(l.stripes.StripeOffsets[idx])
+			buf := make([]byte, count)
+			if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
+				return nil, fmt.Errorf("ndpi: read stripe (%d,%d) idx=%d: %w", sx, sy, idx, err)
+			}
+			// Each stripe ends with FF RSTn — or FF D9 (EOI) on the very
+			// last stripe of the level, which upstream opentile
+			// (Jpeg.concatenate_fragments) silently treats the same way:
+			// drop the trailing byte and append a global RSTn. Validate
+			// the penultimate byte is 0xFF and the trailing byte falls
+			// in the expected marker range.
+			if count < 2 {
+				return nil, fmt.Errorf("ndpi: stripe idx=%d too short (%d bytes)", idx, count)
+			}
+			if buf[count-2] != 0xFF {
+				return nil, fmt.Errorf("ndpi: stripe idx=%d does not end with FF marker (got %02X %02X)",
+					idx, buf[count-2], buf[count-1])
+			}
+			last := buf[count-1]
+			if !(last >= 0xD0 && last <= 0xD7) && last != 0xD9 {
+				return nil, fmt.Errorf("ndpi: stripe idx=%d trailing marker %02X outside [D0..D7, D9]",
+					idx, last)
+			}
+			// Drop the stripe's own trailing marker byte and append the
+			// globally-indexed RSTn so cycle counts line up across the
+			// assembled frame. The leading 0xFF is the penultimate byte of
+			// buf and is retained; we overwrite just the trailing marker.
+			out = append(out, buf[:count-1]...)
+			out = append(out, byte(0xD0+(fragIdx%8)))
+			fragIdx++
+		}
+	}
+	out = append(out, 0xFF, 0xD9) // EOI
+	return out, nil
+}
+
+// getPatchedHeader returns (and caches) the JPEG header prefix patched so
+// its SOF advertises the given frame size. Mirrors
+// Jpeg._manipulate_header with size=frame_size.
+func (l *stripedImage) getPatchedHeader(frameSize opentile.Size) ([]byte, error) {
+	l.headerMu.Lock()
+	if b, ok := l.headersByFrameSize[frameSize]; ok {
+		l.headerMu.Unlock()
+		return b, nil
+	}
+	l.headerMu.Unlock()
+
+	patched, err := patchSOFSize(l.stripes.JPEGHeader, frameSize.H, frameSize.W)
+	if err != nil {
+		return nil, err
+	}
+
+	l.headerMu.Lock()
+	if existing, ok := l.headersByFrameSize[frameSize]; ok {
+		l.headerMu.Unlock()
+		return existing, nil
+	}
+	l.headersByFrameSize[frameSize] = patched
+	l.headerMu.Unlock()
+	return patched, nil
+}
+
+// patchSOFSize returns a copy of header with its SOF0 (FF C0) segment's
+// height/width fields overwritten. Kept package-private; the upstream
+// ReplaceSOFDimensions helper in internal/jpeg is semantically equivalent
+// but pre-dates stripes.go and uses a different byte-order argument order.
+func patchSOFSize(header []byte, newH, newW int) ([]byte, error) {
+	if newH < 0 || newW < 0 || newH > 0xFFFF || newW > 0xFFFF {
+		return nil, fmt.Errorf("ndpi: SOF size %dx%d out of uint16 range", newW, newH)
+	}
+	// Locate SOF0. The header is assembled from NDPIStripeJPEGHeader's
+	// output which keeps markers intact; a byte scan for FF C0 is safe.
+	sof := -1
+	for i := 0; i < len(header)-1; i++ {
+		if header[i] == 0xFF && jpeg.Marker(header[i+1]) == jpeg.SOF0 {
+			sof = i
+			break
+		}
+	}
+	if sof < 0 {
+		return nil, fmt.Errorf("ndpi: SOF0 not found in header")
+	}
+	// Payload starts at sof+4 (marker(2) + length(2)). Height at payload+1,
+	// width at payload+3.
+	payload := sof + 4
+	if payload+5 > len(header) {
+		return nil, fmt.Errorf("ndpi: SOF payload truncated")
+	}
+	out := make([]byte, len(header))
+	copy(out, header)
+	binary.BigEndian.PutUint16(out[payload+1:payload+3], uint16(newH))
+	binary.BigEndian.PutUint16(out[payload+3:payload+5], uint16(newW))
+	return out, nil
+}
+
+func maxSize(a, b opentile.Size) opentile.Size {
+	return opentile.Size{W: maxInt(a.W, b.W), H: maxInt(a.H, b.H)}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

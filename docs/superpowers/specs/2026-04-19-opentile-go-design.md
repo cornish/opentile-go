@@ -35,7 +35,7 @@ opentile does **not** provide region reads (`get_region`). For that, users compo
 
 Direct port of the Python library, with the following adaptations:
 
-- Pure Go, no cgo. Viable because the core tile path never requires a raster codec — it is TIFF parsing plus JPEG marker manipulation.
+- Pure Go, no cgo. Viable because the core tile path never requires a raster codec — it is TIFF parsing plus (for NDPI in v0.2) JPEG marker manipulation. v0.1 is pure TIFF parsing; SVS tiles pass through unmodified.
 - Structured as three layers: a narrowly-scoped internal TIFF reader, a narrowly-scoped internal JPEG marker package, and format-specific packages layered on top. Upstream's `tiler`/`tiff_image`/`formats/*`/`jpeg/*` layout is preserved, but TIFF IFD parsing and JPEG segment manipulation are each made explicit subpackages with independent test suites.
 
 ## Module path and layout
@@ -62,10 +62,8 @@ opentile-go/
 │   ├── tag.go              # tag type decoders
 │   └── page.go             # TiffPage: tile offsets/lengths, jpegtables, compression
 │
-├── internal/jpeg/          # pure-Go JPEG marker/segment work (no codec)
-│   ├── marker.go           # SOI/EOI/SOS/SOF/DQT/DHT parse
-│   ├── tables.go           # JPEG tables extract/merge
-│   └── concat.go           # scan concatenation (for level-0 striped + NDPI)
+├── internal/jpeg/          # pure-Go JPEG marker/segment work (v0.2 with NDPI)
+│   └── ...                 # deferred in v0.1; not required for SVS pass-through
 │
 ├── formats/
 │   ├── svs/
@@ -81,7 +79,7 @@ opentile-go/
     └── oracle/             # //go:build parity — Python oracle harness
 ```
 
-`internal/tiff` is internal because its API is shaped for opentile's needs — raw compressed tile byte access, WSI vendor tag support — rather than as a general-purpose TIFF library. `internal/jpeg` is internal because its surface is a port-support utility, not a published API.
+`internal/tiff` is internal because its API is shaped for opentile's needs — raw compressed tile byte access, WSI vendor tag support — rather than as a general-purpose TIFF library. `internal/jpeg` (deferred to v0.2) will be internal for the same reason: a port-support utility, not a published API.
 
 Format subpackages are public so that consumers can import only what they need. The top-level `opentile.Open` discovers registered format tilers; registration is explicit (no `init()` side-effects) to keep binary size predictable. A convenience umbrella package `opentile/formats/all` registers every known format for users who want the kitchen sink.
 
@@ -148,7 +146,8 @@ type TileResult struct {
 
 type Compression uint8
 const (
-    CompressionNone Compression = iota
+    CompressionUnknown Compression = iota // zero value; unset or unrecognized
+    CompressionNone
     CompressionJPEG
     CompressionJP2K
 )
@@ -169,7 +168,7 @@ type Metadata struct {
 }
 ```
 
-Format-specific metadata (e.g., `svs.Metadata` with Aperio-proprietary fields) is exposed via type assertion on the value returned by `Tiler.Metadata()` — the `Metadata` struct above carries the common fields, and format packages embed it.
+Format-specific metadata (e.g., `svs.Metadata` with Aperio-proprietary fields) is exposed via a per-format accessor function (`svs.MetadataOf(tiler)`). The common `Metadata` struct carries the cross-format fields and is returned by `Tiler.Metadata()`; format packages embed it in their own metadata struct and provide a typed `XxxOf(Tiler) (*XxxMetadata, bool)` accessor so consumers can import the format package directly when they need the extras. This avoids making `Metadata` an interface (and losing ergonomic field access) while still making format-specific data reachable from an `opentile.Tiler` handle.
 
 ### Design notes on the public surface
 

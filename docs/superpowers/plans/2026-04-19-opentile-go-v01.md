@@ -313,6 +313,7 @@ func TestCompressionString(t *testing.T) {
         c    Compression
         want string
     }{
+        {CompressionUnknown, "unknown"},
         {CompressionNone, "none"},
         {CompressionJPEG, "jpeg"},
         {CompressionJP2K, "jp2k"},
@@ -329,7 +330,7 @@ func TestCompressionString(t *testing.T) {
 - [ ] **Step 2: Run test to verify failure**
 
 Run: `go test ./...`
-Expected: FAIL — undefined: `Compression`, `CompressionNone`, etc.
+Expected: FAIL — undefined: `Compression`, `CompressionUnknown`, `CompressionNone`, etc.
 
 - [ ] **Step 3: Implement `compression.go`**
 
@@ -343,16 +344,22 @@ import "fmt"
 // opentile-go returns tile bytes in the compression format of the source TIFF
 // without decoding them. Consumers that need decoded pixels should pass the
 // bytes to a codec appropriate for the reported compression.
+//
+// The zero value is CompressionUnknown: a forgotten-to-initialize field
+// surfaces loudly rather than masquerading as a known compression.
 type Compression uint8
 
 const (
-    CompressionNone Compression = iota
+    CompressionUnknown Compression = iota // zero value; unset or unrecognized
+    CompressionNone
     CompressionJPEG
     CompressionJP2K
 )
 
 func (c Compression) String() string {
     switch c {
+    case CompressionUnknown:
+        return "unknown"
     case CompressionNone:
         return "none"
     case CompressionJPEG:
@@ -567,6 +574,7 @@ package tiff
 
 import (
     "encoding/binary"
+    "errors"
     "fmt"
     "io"
 )
@@ -589,7 +597,7 @@ func newByteReader(r io.ReaderAt, littleEndian bool) *byteReader {
 func (b *byteReader) read(offset int64, n int) ([]byte, error) {
     buf := make([]byte, n)
     got, err := b.r.ReadAt(buf, offset)
-    if err != nil && !(err == io.EOF && got == n) {
+    if err != nil && !(errors.Is(err, io.EOF) && got == n) {
         return nil, fmt.Errorf("tiff: read %d bytes at %d: %w", n, offset, err)
     }
     if got != n {
@@ -1270,7 +1278,7 @@ func TestOpenFileMinimal(t *testing.T) {
         {256, 3, 1024}, // ImageWidth
         {257, 3, 768},  // ImageLength
     })
-    f, err := Open(bytes.NewReader(data))
+    f, err := Open(bytes.NewReader(data), int64(len(data)))
     if err != nil {
         t.Fatalf("Open: %v", err)
     }
@@ -1284,7 +1292,7 @@ func TestOpenFileMinimal(t *testing.T) {
 
 func TestOpenRejectsBigTIFF(t *testing.T) {
     data := []byte{'I', 'I', 43, 0, 8, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0}
-    if _, err := Open(bytes.NewReader(data)); err == nil {
+    if _, err := Open(bytes.NewReader(data), int64(len(data))); err == nil {
         t.Fatal("expected BigTIFF to be rejected")
     }
 }
@@ -1301,6 +1309,7 @@ Expected: FAIL — undefined `Open`, `File`, `Pages`.
 package tiff
 
 import (
+    "encoding/binary"
     "io"
 )
 
@@ -1308,13 +1317,17 @@ import (
 // and byte order needed to decode tag values and read tile payloads.
 type File struct {
     r      io.ReaderAt
+    size   int64
     reader *byteReader
     pages  []*Page
 }
 
 // Open parses the header and every IFD in r, producing a File ready for use by
-// format packages. Open does not read tile payloads.
-func Open(r io.ReaderAt) (*File, error) {
+// format packages. Open does not read tile payloads. The caller retains
+// ownership of r; File does not close it (the io.ReaderAt contract does not
+// include Close). size is the total readable size of r in bytes and is stored
+// for future offset-bounds validation.
+func Open(r io.ReaderAt, size int64) (*File, error) {
     h, err := parseHeader(r)
     if err != nil {
         return nil, err
@@ -1328,14 +1341,14 @@ func Open(r io.ReaderAt) (*File, error) {
     for _, i := range ifds {
         pages = append(pages, newPage(i, br))
     }
-    return &File{r: r, reader: br, pages: pages}, nil
+    return &File{r: r, size: size, reader: br, pages: pages}, nil
 }
 
 // Pages returns the pages in IFD order. The slice is owned by File; do not mutate.
 func (f *File) Pages() []*Page { return f.pages }
 
 // LittleEndian reports whether the file is stored little-endian.
-func (f *File) LittleEndian() bool { return f.reader.order.String() == "LittleEndian" }
+func (f *File) LittleEndian() bool { return f.reader.order == binary.LittleEndian }
 
 // ReaderAt returns the underlying reader for use by format packages reading
 // tile byte ranges.
@@ -1352,6 +1365,8 @@ To unblock compilation in this task, add a minimal `Page` stub in `internal/tiff
 ```go
 package tiff
 
+// Page wraps a single parsed IFD with the byte reader needed to decode its tag
+// values. Typed tag accessors are added in a subsequent task.
 type Page struct {
     ifd *ifd
     br  *byteReader
@@ -1458,7 +1473,8 @@ func buildPageTIFF(t *testing.T) []byte {
 }
 
 func TestPageAccessors(t *testing.T) {
-    f, err := Open(bytes.NewReader(buildPageTIFF(t)))
+    data := buildPageTIFF(t)
+    f, err := Open(bytes.NewReader(data), int64(len(data)))
     if err != nil {
         t.Fatalf("Open: %v", err)
     }
@@ -1497,7 +1513,8 @@ func TestPageAccessors(t *testing.T) {
 }
 
 func TestPageTileGrid(t *testing.T) {
-    f, _ := Open(bytes.NewReader(buildPageTIFF(t)))
+    data := buildPageTIFF(t)
+    f, _ := Open(bytes.NewReader(data), int64(len(data)))
     p := f.Pages()[0]
     gx, gy, err := p.TileGrid()
     if err != nil {
@@ -1695,8 +1712,14 @@ func (p *Page) TileGrid() (int, int, error) {
     if !ok || tl == 0 {
         return 0, 0, fmt.Errorf("tiff: TileLength missing or zero")
     }
-    gx := int((iw + tw - 1) / tw)
-    gy := int((il + tl - 1) / tl)
+    gx := int(iw / tw)
+    if iw%tw != 0 {
+        gx++
+    }
+    gy := int(il / tl)
+    if il%tl != 0 {
+        gy++
+    }
     return gx, gy, nil
 }
 ```
@@ -1779,6 +1802,7 @@ type Option func(*config)
 // config is the aggregate of all Option values applied at Open time.
 type config struct {
     tileSize    Size
+    hasTileSize bool
     corruptTile CorruptTilePolicy
 }
 
@@ -1797,7 +1821,10 @@ func newConfig(opts []Option) *config {
 // default is used (SVS: native tile size from the TIFF). Required for formats
 // that have no native rectangular tiles (NDPI, v0.2+).
 func WithTileSize(w, h int) Option {
-    return func(c *config) { c.tileSize = Size{W: w, H: h} }
+    return func(c *config) {
+        c.tileSize = Size{W: w, H: h}
+        c.hasTileSize = true
+    }
 }
 
 // WithCorruptTilePolicy sets the behavior for corrupt-edge tiles. v0.1 supports
@@ -1838,8 +1865,8 @@ package opentile
 import "time"
 
 // Metadata is the common subset of slide metadata surfaced across all formats.
-// Format packages embed this struct to add format-specific fields exposed via
-// type assertion on Tiler.Metadata().
+// Format packages embed this struct to add format-specific fields; consumers
+// access those extras via a per-format accessor (e.g. svs.MetadataOf(tiler)).
 type Metadata struct {
     Magnification       float64   // 0 if unknown
     ScannerManufacturer string
@@ -2124,7 +2151,7 @@ func resetRegistry() {
 // size is the total file size in bytes.
 func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
     cfg := newConfig(opts)
-    file, err := tiff.Open(r)
+    file, err := tiff.Open(r, size)
     if err != nil {
         if errors.Is(err, tiff.ErrInvalidTIFF) {
             return nil, fmt.Errorf("%w: %v", ErrInvalidTIFF, err)
@@ -2336,8 +2363,12 @@ type Config struct {
     c *config
 }
 
-// TileSize returns the requested output tile size. Zero Size means "format default".
-func (c *Config) TileSize() Size { return c.c.tileSize }
+// TileSize returns the requested output tile size and whether the caller set
+// one. ok=false means "use format default"; callers must not treat the zero
+// Size as equivalent to "default" because (Size{}, true) is distinct from
+// (Size{}, false) — the former asserts an explicit 0x0 (which format packages
+// should reject as malformed input).
+func (c *Config) TileSize() (Size, bool) { return c.c.tileSize, c.c.hasTileSize }
 
 // CorruptTilePolicy returns the configured policy.
 func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile }
@@ -2454,8 +2485,12 @@ import (
 )
 
 // Metadata is the SVS-specific slide metadata. It embeds opentile.Metadata so
-// type-asserting the return of opentile.Tiler.Metadata() exposes the Aperio
-// extras (MPP, software line, filename).
+// the common fields (magnification, scanner identity, acquisition datetime)
+// are populated via the embedded struct; Aperio-specific fields (MPP,
+// SoftwareLine, Filename) live on the outer struct.
+//
+// Consumers read the common fields via opentile.Tiler.Metadata() as usual;
+// to read the Aperio-specific fields, pass the Tiler to svs.MetadataOf.
 type Metadata struct {
     opentile.Metadata
     MPP          float64 // microns per pixel
@@ -2489,10 +2524,18 @@ func parseDescription(desc string) (Metadata, error) {
     kv := splitKV(body)
 
     if v, ok := kv["AppMag"]; ok {
-        md.Magnification, _ = strconv.ParseFloat(v, 64)
+        parsed, err := strconv.ParseFloat(v, 64)
+        if err != nil {
+            return md, fmt.Errorf("svs: parse AppMag %q: %w", v, err)
+        }
+        md.Magnification = parsed
     }
     if v, ok := kv["MPP"]; ok {
-        md.MPP, _ = strconv.ParseFloat(v, 64)
+        parsed, err := strconv.ParseFloat(v, 64)
+        if err != nil {
+            return md, fmt.Errorf("svs: parse MPP %q: %w", v, err)
+        }
+        md.MPP = parsed
     }
     if v, ok := kv["ScanScope ID"]; ok {
         md.ScannerSerial = v
@@ -2509,7 +2552,7 @@ func parseDescription(desc string) (Metadata, error) {
         if err != nil {
             return md, fmt.Errorf("svs: parse Date/Time %q %q: %w", date, tm, err)
         }
-        md.AcquisitionDateTime = parsed.UTC()
+        md.AcquisitionDateTime = parsed
     }
     return md, nil
 }
@@ -2776,9 +2819,12 @@ Append to `options.go`:
 
 ```go
 // NewTestConfig constructs a Config for use in tests. It is not intended for
-// production callers, which should go through opentile.Open.
+// production callers, which should go through opentile.Open. A non-zero
+// tileSize is treated as explicitly set (TileSize ok=true); a zero Size is
+// treated as "use format default" (TileSize ok=false).
 func NewTestConfig(tileSize Size, policy CorruptTilePolicy) *Config {
-    return &Config{c: &config{tileSize: tileSize, corruptTile: policy}}
+    has := tileSize.W != 0 || tileSize.H != 0
+    return &Config{c: &config{tileSize: tileSize, hasTileSize: has, corruptTile: policy}}
 }
 ```
 
@@ -2808,19 +2854,26 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
         return nil, err
     }
 
-    // For v0.1, every page is treated as a Level. Thumbnail/label/overview
-    // classification is a v0.3 feature.
+    // Pyramid levels are tiled; non-tiled pages (thumbnail, label, macro)
+    // are the substrate for associated-image support (v0.3) and are skipped
+    // here. Level indices are contiguous (0..N-1) in pyramid order and do
+    // not correspond to physical page indices in the TIFF.
     levels := make([]opentile.Level, 0, len(pages))
     baseSize, err := pageSize(basePage)
     if err != nil {
         return nil, err
     }
-    for i, p := range pages {
-        lvl, err := newTiledImage(i, p, baseSize, md.MPP, file.ReaderAt(), cfg)
+    levelIdx := 0
+    for pageIdx, p := range pages {
+        if _, ok := p.TileWidth(); !ok {
+            continue // non-tiled page; defer to v0.3 associated-image support
+        }
+        lvl, err := newTiledImage(levelIdx, p, baseSize, md.MPP, file.ReaderAt(), cfg)
         if err != nil {
-            return nil, fmt.Errorf("svs: level %d: %w", i, err)
+            return nil, fmt.Errorf("svs: page %d (level %d): %w", pageIdx, levelIdx, err)
         }
         levels = append(levels, lvl)
+        levelIdx++
     }
     icc, _ := basePage.ICCProfile()
     return &tiler{md: md, levels: levels, icc: icc}, nil
@@ -2857,6 +2910,24 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
         return nil, opentile.ErrLevelOutOfRange
     }
     return t.levels[i], nil
+}
+
+// MetadataOf returns the SVS-specific metadata if t is an SVS Tiler, otherwise
+// (nil, false). Use this to read the Aperio extras (MPP, SoftwareLine,
+// Filename) that are not visible through the common opentile.Metadata struct.
+//
+//	if md, ok := svs.MetadataOf(tiler); ok {
+//	    fmt.Println(md.MPP, md.SoftwareLine)
+//	}
+func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
+    svsT, ok := t.(*tiler)
+    if !ok {
+        return nil, false
+    }
+    // Return a pointer into the tiler's stored metadata. t.md is populated
+    // once at Open time and never mutated; the returned pointer is safe to
+    // hold for the lifetime of the Tiler.
+    return &svsT.md, true
 }
 ```
 
@@ -2976,7 +3047,7 @@ func mapCompression(code uint32) opentile.Compression {
     case 33003, 33005:
         return opentile.CompressionJP2K
     default:
-        return opentile.CompressionNone // callers should not assume; inspect Compression() explicitly if needed
+        return opentile.CompressionUnknown
     }
 }
 
