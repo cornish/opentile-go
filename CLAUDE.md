@@ -12,7 +12,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 ## Invariants
 
-- **Don't guess format behavior — read upstream.** This is a **direct port** of Python opentile (which delegates format details to tifffile). Whenever classification, layout, tag semantics, or edge-case handling is unclear: **read `imi-bigpicture/opentile` first, then `cgohlke/tifffile`**. Guessed behavior has cost us two debugging cycles already (NDPI IFD layout, NDPI page classification). The rule: if you catch yourself reasoning from first principles about a WSI format quirk, stop and find the upstream code that handles it. Port directly, adapt for Go idioms, but preserve the logic.
+- **Don't guess format behavior — read upstream.** This is a **direct port** of Python opentile (which delegates format details to tifffile). Whenever classification, layout, tag semantics, or edge-case handling is unclear: **read `imi-bigpicture/opentile` first, then `cgohlke/tifffile`**. Guessed behavior cost v0.2 five separate debugging cycles (NDPI IFD layout, NDPI metadata tag numbers, NDPI StripOffsets tag, NDPI striped vs. oneframe gate, APP14 byte values) — every one fixed by reading the actual upstream source. The rule: if you catch yourself reasoning from first principles about a WSI format quirk, stop and find the upstream code that handles it. Port directly, adapt for Go idioms, but preserve the logic.
 - **No cutting corners; no active users yet.** Complete things we know are broken before moving on. When a bug is identified, the rule is: fix it, don't defer. Plan thoroughly for v0.3+ rather than race.
 - **Architectural placement of ported logic:** format-specific quirks belong in the format package (`formats/ndpi/`, `formats/svs/`), not `internal/tiff`. `internal/tiff` stays a generic TIFF/BigTIFF/NDPI-IFD parser. Examples: NDPI page-series grouping, SVS ImageDescription quirks, Philips sparse-tile filling.
 - **cgo is narrowly scoped.** `internal/jpegturbo/` is the only package linking libjpeg-turbo. Under `nocgo` build tag, format paths that need it return `ErrCGORequired`; the rest works.
@@ -24,7 +24,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 - Module path: `github.com/tcornish/opentile-go`
 - Go 1.23+ (for `iter.Seq2`)
-- `internal/tiff` is internal — shaped for opentile's needs, not a general-purpose TIFF library. `internal/jpeg` will join it in v0.2 alongside NDPI support.
+- `internal/tiff` and `internal/jpeg` are internal — both shaped for opentile's needs, not general-purpose libraries. `internal/jpegturbo` is the only cgo package in the module.
 - Format subpackages (`formats/svs/`, `formats/ndpi/`, …) are public; `formats/all` is the umbrella registration package
 - `io.ReaderAt` + `int64` size is the core input (stdlib `*os.File` satisfies concurrent-use semantics)
 - Public tile methods: `Level.Tile(x, y int)` returns raw compressed bytes; `Level.TileReader(x, y)` streams via `io.SectionReader`; `Level.Tiles(ctx)` is serial row-major via `iter.Seq2`
@@ -49,9 +49,17 @@ go test ./... -race
 # directory containing one or more of the committed fixture slides)
 OPENTILE_TESTDIR="$PWD/sample_files/svs" go test ./tests/... -v
 
-# regenerate parity fixtures from real slides
-OPENTILE_TESTDIR="$PWD/sample_files/svs" \
+# regenerate parity fixtures from real slides (walks svs/ and ndpi/)
+OPENTILE_TESTDIR="$PWD/sample_files" \
   go test ./tests -tags generate -run TestGenerateFixtures -generate -v
+
+# byte-parity vs Python opentile 0.20.0 (requires venv with opentile installed)
+OPENTILE_ORACLE_PYTHON=$(which python) OPENTILE_TESTDIR="$PWD/sample_files" \
+  go test ./tests/oracle/... -tags parity -v
+
+# NDPI per-tile throughput regression gate (requires a local NDPI slide)
+NDPI_BENCH_SLIDE="$PWD/sample_files/ndpi/CMU-1.ndpi" \
+  go test ./formats/ndpi -bench=Tile -benchtime=1x -run=^$ -v
 ```
 
 ## Execution mode
