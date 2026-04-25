@@ -16,9 +16,9 @@ Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a p
 
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
-| R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ in flight on feat/v0.2 |
+| R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ landed (Batches 2-7, parity verified) |
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
-| R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | in flight (Task 21) |
+| R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v1.0 | deferred |
 | R5 | Philips TIFF (sparse-tile filler) | v0.4 | deferred |
 | R6 | 3DHistech TIFF | v0.5 | deferred |
@@ -26,7 +26,7 @@ Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a p
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
 | R9 | JPEG 2000 decode/encode (native tiles pass through; decoding only matters once associated-image re-encoding lands) | v0.3+ | deferred |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
-| R11 | Python parity oracle under `//go:build parity` | v0.2 | in flight (Batch 7) |
+| R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
 | R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.3+ | deferred (currently dropped in classifier) |
 
@@ -151,6 +151,66 @@ Caught by the three-slide integration tests or during implementation. The librar
   forces a per-tile-time regression gate so this specific failure mode
   cannot recur silently.
 
+### L14 — NDPI label synthesis is Go-specific; Python opentile does not expose NDPI labels
+- **Source:** Batch 7 parity oracle extension
+- **Severity:** Limitation (deliberate API divergence)
+- **Detail:** Python opentile 0.20.0's `NdpiTiler.labels` returns an empty
+  list — the upstream library does not surface a "label" AssociatedImage
+  for NDPI slides. Our Go implementation synthesizes one by cropping the
+  left 30% of the overview page (`formats/ndpi.newLabelImage`,
+  `formats/ndpi/associated.go`), matching a convention common in Aperio
+  SVS but with no upstream NDPI precedent.
+
+  The Batch 7 parity test accommodates this by treating a zero-length
+  Python oracle output as "skip"; downstream consumers inspecting
+  `Tiler.Associated()` on an NDPI slide will see a `Kind() == "label"`
+  entry our Go side provides and Python's does not. Not a bug, but a
+  deliberate Go-side extension that callers switching between the two
+  languages should know about.
+
+  *How to fix if we decide it's unwanted:* drop the `newLabelImage` call
+  in `formats/ndpi/ndpi.go` Open() so NDPI associated is overview-only.
+  Or keep it and add a README note calling it out.
+
+### L15 — Hamamatsu-1.ndpi (6.4 GB) is excluded from the committed fixture set
+- **Source:** Batch 6 Task 24 (`673d475`)
+- **Severity:** Limitation (coverage)
+- **Detail:** `slideCandidates` in `tests/integration_test.go` lists five
+  sample slides; `Hamamatsu-1.ndpi` is not among them. Its fixture
+  would exceed the 5 MB soft-cap adopted in the plan (the slide's tile
+  count is ~20x larger than OS-2.ndpi's 3.8 MB fixture). CI and the
+  parity oracle therefore do not exercise NDPI's 64-bit offset extension
+  path end-to-end on a real file larger than 4 GB; only unit tests and
+  the ~931 MB OS-2.ndpi cover the closely-related code.
+
+  *Mitigation in place:* `formats/ndpi` benchmark opens and hashes tiles
+  of Hamamatsu-1.ndpi when `NDPI_BENCH_SLIDE` is set, so the 64-bit
+  path is exercised interactively if a developer has the slide locally.
+
+  *How to fix:* either raise the committed-fixture cap (git-lfs) or
+  generate a sparse fixture that hashes only a sampled subset of tiles
+  per level (integration test would need a "sampled" mode).
+
+### L16 — Parity oracle default run samples only 10 tiles per level
+- **Source:** Batch 7 Task 26 (`057f955`)
+- **Severity:** Suggestion (coverage)
+- **Detail:** `samplePositions` in `tests/oracle/parity_test.go` returns
+  up to 10 tile positions per level (corners, midline, interior) rather
+  than every tile. `-parity-full` enumerates all tiles but is not in
+  CI because full-walk runtime on OS-2.ndpi approaches 30 minutes.
+
+  A deliberately divergent tile inside the sampled 10 would be caught;
+  a divergence confined to, say, a single mid-edge tile we don't sample
+  would not. The structural/architectural divergences we know about
+  (L10 SVS LZW label, L12 NDPI edge fill) show up consistently at the
+  sampled corners and so are caught by the default run.
+
+  *How to improve without blowing up runtime:* batch several tile
+  positions into one Python invocation (subprocess startup is ~200 ms
+  and dominates the per-tile cost at 10 samples). A runner that
+  accepts many positions per invocation could reasonably raise the
+  sample to hundreds per level.
+
 ### L11 — SVS associated-image DRI assumes 16×16 MCU
 - **Source:** Task 21 follow-up review (feat/v0.2)
 - **Severity:** Limitation (format-assumption)
@@ -220,8 +280,17 @@ Non-blocking items raised during per-task spec / quality review. Categorized by 
 
 These are not deferred items — they're observations about how v0.2 development went, kept here so future sessions have context.
 
-- **The "don't guess — read upstream" rule was established mid-session** (commit `993289e`). It's codified in CLAUDE.md and in the cross-session memory system (`feedback_no_guessing.md`). The rule was prompted by three separate "guess-and-regret" debugging cycles in v0.2: NDPI IFD layout, NDPI metadata tag numbers, and the StripOffsets tag number. Each was eventually fixed by reading the relevant upstream source (tifffile / opentile) directly. Future format work should budget time to read upstream FIRST and commit behavior from there.
-- **Architecture audit at end of Batch 4** (this doc) — three minor cleanups landed (NDPI tiler struct consolidated into `tiler.go`, SVS `image.go` renamed to `tiled.go`, stale debug artifacts removed). Full decision trail in the commit that introduced this section.
+- **The "don't guess — read upstream" rule was established mid-session** (commit `993289e`). Codified in CLAUDE.md and in the cross-session memory system (`feedback_no_guessing.md`). Prompted by three separate "guess-and-regret" debugging cycles in v0.2 (NDPI IFD layout, NDPI metadata tag numbers, StripOffsets tag number) and reinforced by two more in Batch 6/7 (NDPI striped vs. oneframe gate on tag 322 — L13; APP14 bytes miscopied — now canonical). Future format work should read upstream first and commit behavior from there.
+
+- **Architecture audit at end of Batch 4** — three minor cleanups landed (NDPI tiler struct consolidated into `tiler.go`, SVS `image.go` renamed to `tiled.go`, stale debug artifacts removed). Full decision trail in commit `cae47cd`.
+
+- **"Does the slide open?" is not a sufficient NDPI smoke test (L13).** The original `formats/ndpi/striped.go` gated on TIFF tag 322 (TileWidth), which NDPI pages never carry. Every pyramid level fell through to `oneFrameImage`'s per-tile whole-level tjTransform — 3000× slower than Python opentile for CMU-1.ndpi L0, but every unit and integration test still passed because they only verified `Open()` + tile counts, never per-tile throughput. Caught during Batch 6 when fixture generation hit a 30-minute timeout on a 188 MB slide. `formats/ndpi/bench_test.go` is now a regression gate that exercises per-tile time under `NDPI_BENCH_SLIDE`.
+
+- **Byte parity is a stronger correctness bar than it first appears (Batch 7).** The parity oracle was originally scoped as a best-effort opt-in check; extending it to `Associated.Bytes()` surfaced two latent divergences in `internal/jpeg/ConcatenateScans` (APP14 byte values and segment ordering) that no other test caught — both produced valid JPEGs, both decoded to correct pixels, both self-consistent inside our own fixtures. Only byte-level comparison against Python opentile surfaced them. Lesson: "decodes to the right pixels" is not synonymous with "correct output" when downstream consumers (wsidicomizer, DICOM pipelines) may hash the output.
+
+- **Parity with an unconfigured upstream has hidden dimensions (Batch 7).** Python opentile 0.20.0's `OpenTile.open(slide, tile_size)` expects `int`, not `(w, h)`; passing a tuple silently worked for SVS and raised `TypeError` from NDPI's adjust_tile_size. Two separate parity agents hit this. The v0.2 runner pins `tile_size: int` and documents the quirk.
+
+- **tjTransform's CUSTOMFILTER callback is not bitwise-deterministic across Go/Python (L12).** Same flags (`TJXOPT_PERFECT | TJXOPT_CROP`), same callback output, same source JPEG → subtly different entropy streams for NDPI edge tiles. Verified our DC coefficient math matches Python's (`round((lum * 2047 - 1024) / dc_quant) = 170` for luminance=1.0 on CMU-1.ndpi L0's DQT=6), AC is untouched on both sides. Root cause unknown; see L12 for v0.3+ debugging plan.
 
 ## 5. Triage process
 
