@@ -234,6 +234,48 @@ func TestConcatenateScansExplicitSize(t *testing.T) {
 	t.Fatal("SOF not found in output")
 }
 
+// TestConcatenateScansSingleFragmentWithTrailingZeros verifies that a single
+// fragment whose last bytes are 00 00 (zero padding, as seen in Aperio BigTIFF
+// SVS thumbnails whose StripByteCounts is over-allocated) is accepted and the
+// output ends with FF D9. Upstream Python opentile blindly overwrites the last
+// 2 bytes with EOI, so trailing padding is harmless.
+func TestConcatenateScansSingleFragmentWithTrailingZeros(t *testing.T) {
+	// Build a fragment that ends with 100 zero bytes instead of FF D9.
+	frag := fakeScan(t, 16, 8, []byte{0x11, 0x22})
+	// Replace the trailing FF D9 with 00 00, then pad with 98 more zeros.
+	// fakeScan ends with [...scan_data, FF, D9]. Strip the EOI and append zeros.
+	frag = frag[:len(frag)-2]
+	padding := make([]byte, 100)
+	frag = append(frag, padding...)
+	// frag now ends with 100 zero bytes; no EOI at the end.
+
+	out, err := ConcatenateScans([][]byte{frag}, ConcatOpts{JPEGTables: minimalJPEGTables()})
+	if err != nil {
+		t.Fatalf("ConcatenateScans with trailing zeros: %v", err)
+	}
+	// Output length will be >= input length due to tables splice; we only
+	// care that the output ends with FF D9 (EOI was written unconditionally).
+	if out[len(out)-2] != 0xFF || out[len(out)-1] != 0xD9 {
+		t.Errorf("last 2 bytes: got %02X %02X, want FF D9", out[len(out)-2], out[len(out)-1])
+	}
+}
+
+// TestConcatenateScansSingleFragmentEndsWithEOI verifies the existing happy path
+// still works: a single fragment with a proper FF D9 tail is returned unchanged
+// (modulo tables splice/SOF patch).
+func TestConcatenateScansSingleFragmentEndsWithEOI(t *testing.T) {
+	frag := fakeScan(t, 16, 8, []byte{0x11, 0x22})
+	// frag ends with FF D9.
+	tables := minimalJPEGTables()
+	out, err := ConcatenateScans([][]byte{frag}, ConcatOpts{JPEGTables: tables})
+	if err != nil {
+		t.Fatalf("ConcatenateScans with proper EOI: %v", err)
+	}
+	if out[len(out)-2] != 0xFF || out[len(out)-1] != 0xD9 {
+		t.Errorf("last 2 bytes: got %02X %02X, want FF D9", out[len(out)-2], out[len(out)-1])
+	}
+}
+
 // TestConcatenateScansDRIValue sanity-checks the DRI payload uses the
 // specified restart interval as a big-endian u16.
 func TestConcatenateScansDRIValue(t *testing.T) {

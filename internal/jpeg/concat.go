@@ -119,14 +119,12 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	frame = append(frame, fragments[0]...)
 
 	for i := 1; i < len(fragments); i++ {
-		// Between-fragment: rewrite the trailing EOI of the previous
-		// fragment (currently at the end of frame) into FF RSTn. Python
-		// does this at the END of iteration i-1; we do it at the START
-		// of iteration i for exactly the same effect.
-		if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
-			return nil, fmt.Errorf("%w: fragment %d: expected trailing EOI before appending next fragment, got %02X %02X",
-				ErrBadJPEG, i-1, frame[len(frame)-2], frame[len(frame)-1])
-		}
+		// Between-fragment: rewrite the last 2 bytes of the previous
+		// fragment (currently at the end of frame) into FF RSTn.
+		// Python's concatenate_scans does frame += scan[:-2] followed by
+		// frame += b"\xff" + restart_mark(i-1), which has the same net
+		// effect as unconditionally overwriting the last 2 bytes — no EOI
+		// validation is performed upstream.
 		// restart_mark(i-1) = 0xD0 + ((i-1) % 8).
 		frame[len(frame)-2] = 0xFF
 		frame[len(frame)-1] = byte(0xD0 + ((i - 1) % 8))
@@ -154,10 +152,18 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		frame = append(frame, frag[scanStart:]...)
 	}
 
-	// Sanity: the frame should end with the LAST fragment's EOI (0xFF 0xD9).
-	if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
-		return nil, fmt.Errorf("%w: assembled frame does not end with EOI", ErrBadJPEG)
+	// Overwrite the last 2 bytes of the assembled frame with EOI (FF D9).
+	// Python's concatenate_scans ends with frame[-2:] = self.end_of_image()
+	// — an unconditional overwrite, not a validation. This handles fragments
+	// whose StripByteCounts is over-allocated (e.g. Aperio BigTIFF SVS
+	// thumbnails where the trailing bytes are zero padding rather than EOI).
+	// JPEG decoders stop at the first real EOI they encounter, so any padding
+	// past the real EOI inside the assembled frame is harmless.
+	if len(frame) < 2 {
+		return nil, fmt.Errorf("%w: assembled frame too short", ErrBadJPEG)
 	}
+	frame[len(frame)-2] = 0xFF
+	frame[len(frame)-1] = 0xD9
 
 	// --- Step 2: splice tables[2:-2] (+ APP14) before first SOS. ------------
 
