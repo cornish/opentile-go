@@ -21,3 +21,13 @@ var ErrCGORequired = errors.New("jpegturbo: this operation requires cgo + libjpe
 type Region struct {
 	X, Y, Width, Height int
 }
+
+// BackgroundLuminance is a [0,1] fill level for out-of-bounds DCT blocks
+// when CropWithBackground's crop region extends past the source image.
+// 0.0 = black, 1.0 = white, 0.5 = mid-gray. The default when zero-valued
+// must be 1.0 to match Python opentile's PyTurboJPEG.crop_multiple default.
+type BackgroundLuminance float64
+
+// DefaultBackgroundLuminance is Python opentile's default: white fill,
+// matching PyTurboJPEG.crop_multiple's background_luminance=1.0 argument.
+const DefaultBackgroundLuminance BackgroundLuminance = 1.0

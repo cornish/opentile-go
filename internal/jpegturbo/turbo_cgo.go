@@ -119,8 +119,9 @@ static int go_tj_fill_background(
         if (arr_bx < 0 || arr_bx >= blocks_per_row) continue;
         for (int by = left_start_row_px / MCU_SIDE; by < left_end_row_px / MCU_SIDE; by++) {
             short *blk = coeffs + (by * blocks_per_row + arr_bx) * MCU_AREA;
-            // Zero all coefficients; plant DC.
-            for (int k = 0; k < MCU_AREA; k++) blk[k] = 0;
+            // Mirror PyTurboJPEG fill_background (turbojpeg.py:271):
+            // `coeffs[y][x][0] = background_data.lum`. AC coefficients are
+            // untouched.
             blk[0] = (short)d->lum;
         }
     }
@@ -137,7 +138,7 @@ static int go_tj_fill_background(
         if (arr_bx < 0 || arr_bx >= blocks_per_row) continue;
         for (int by = bottom_start_row_px / MCU_SIDE; by < bottom_end_row_px / MCU_SIDE; by++) {
             short *blk = coeffs + (by * blocks_per_row + arr_bx) * MCU_AREA;
-            for (int k = 0; k < MCU_AREA; k++) blk[k] = 0;
+            // DC-only fill; see comment on the "right-of-image" pass above.
             blk[0] = (short)d->lum;
         }
     }
@@ -152,11 +153,14 @@ static int go_tj_fill_background(
 // OOB.
 //
 // `lum` is the post-quantisation DC coefficient written to OOB luma
-// blocks. Pass 0 for a black fill. A positive value approximates a
-// brighter fill; the exact white-equivalent requires reading DQT[0] and
-// computing `round((luminance * 2047 - 1024) / dc_quant)` per
-// PyTurboJPEG's __map_luminance_to_dc_dct_coefficient — see L12 in
-// docs/deferred.md.
+// blocks. Pass 0 for a mid-gray fill (DC=0 maps to level-shift-neutral
+// 128). Callers derive `lum` from the requested BackgroundLuminance via
+// internal/jpeg.LuminanceToDCCoefficient, which ports PyTurboJPEG's
+// __map_luminance_to_dc_dct_coefficient:
+//
+//	lum = round((luminance * 2047 - 1024) / dc_dqt)
+//
+// where dc_dqt is the DC element of the source's luma quantization table.
 static int go_tj_transform_crop_fill(
     const unsigned char *src, unsigned long src_size,
     int x, int y, int w, int h,
@@ -246,6 +250,8 @@ import "C"
 import (
 	"fmt"
 	"unsafe"
+
+	"github.com/tcornish/opentile-go/internal/jpeg"
 )
 
 // Crop performs an MCU-aligned lossless crop of src using libjpeg-turbo's
@@ -297,22 +303,43 @@ func Crop(src []byte, r Region) ([]byte, error) {
 
 // CropWithBackground behaves like Crop but tolerates crop regions that
 // extend past the source image. Out-of-bounds DCT blocks are filled via
-// a CUSTOMFILTER callback. Required for NDPI edge tiles, where the level
-// JPEG's dimensions are not an integer multiple of the output tile size.
+// a CUSTOMFILTER callback so the requested crop can be any size. Required
+// for NDPI edge tiles, where the pyramid level's JPEG dimensions are not
+// an integer multiple of the output tile size.
 //
-// Fill behavior: luma DCT blocks outside the original (width, height)
-// rectangle are zeroed, leaving a neutral-gray fill. PyTurboJPEG's
-// default is `background_luminance=1.0` (white) which requires
-// quantisation-table math; porting that is tracked as L12 in
-// docs/deferred.md. Black/zero fill is adequate for v0.2 since the
-// visible area of the cropped tile is bit-identical with Python; only
-// OOB pixels differ.
+// Fill behavior: the OOB region is filled with white (luminance=1.0) to
+// match Python opentile's PyTurboJPEG.crop_multiple default. The DC DCT
+// coefficient for OOB luma blocks is computed per-JPEG from the source's
+// luma quantization table (DQT table ID 0), reproducing
+// PyTurboJPEG.__map_luminance_to_dc_dct_coefficient exactly. Chroma DC
+// coefficients are left at 0 (level-shift-neutral 128), producing white
+// output when combined with the luma fill.
+//
+// For non-white fills (e.g. background_luminance=0 for black), use
+// CropWithBackgroundLuminance.
 //
 // Concurrency: as Crop — fresh tjhandle per call; safe for parallel use.
 func CropWithBackground(src []byte, r Region) ([]byte, error) {
+	return CropWithBackgroundLuminance(src, r, DefaultBackgroundLuminance)
+}
+
+// CropWithBackgroundLuminance is the full-featured variant of
+// CropWithBackground with a caller-specified background luminance in
+// the range [0, 1] (0 = black, 1 = white, 0.5 = mid-gray).
+func CropWithBackgroundLuminance(src []byte, r Region, luminance BackgroundLuminance) ([]byte, error) {
 	if len(src) == 0 {
 		return nil, fmt.Errorf("jpegturbo: empty source")
 	}
+	// Derive the luma DC coefficient to write into OOB blocks. Match
+	// Python opentile's PyTurboJPEG: scan the source's DQT (table 0)
+	// for the DC quantization element, then compute
+	// round((luminance * 2047 - 1024) / dc_quant). See
+	// internal/jpeg/dqt.go for the port.
+	lum, err := jpeg.LuminanceToDCCoefficient(src, float64(luminance))
+	if err != nil {
+		return nil, fmt.Errorf("jpegturbo: derive luma DC from source: %w", err)
+	}
+
 	// Read the source image dimensions so the callback knows what's OOB.
 	var imgW, imgH C.int
 	const errBufLen = 256
@@ -341,12 +368,11 @@ func CropWithBackground(src []byte, r Region) ([]byte, error) {
 		errBuf[i] = 0
 	}
 
-	// lum=0 → black fill. See godoc above.
 	rc := C.go_tj_transform_crop_fill(
 		(*C.uchar)(unsafe.Pointer(&src[0])),
 		C.ulong(len(src)),
 		C.int(r.X), C.int(r.Y), C.int(r.Width), C.int(r.Height),
-		imgW, imgH, C.int(0),
+		imgW, imgH, C.int(lum),
 		&dst, &dstSize,
 		errPtr, C.int(errBufLen),
 	)
