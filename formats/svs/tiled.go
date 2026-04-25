@@ -30,8 +30,8 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets    []uint32
-	counts     []uint32
+	offsets    []uint64
+	counts     []uint64
 	jpegTables []byte // TIFF tag 347 payload (SOI..DQT/DHT..EOI); nil for non-JPEG pages
 	reader     io.ReaderAt
 
@@ -66,11 +66,11 @@ func newTiledImage(
 	if err != nil {
 		return nil, err
 	}
-	offsets, err := p.TileOffsets()
+	offsets, err := p.TileOffsets64()
 	if err != nil {
 		return nil, err
 	}
-	counts, err := p.TileByteCounts()
+	counts, err := p.TileByteCounts64()
 	if err != nil {
 		return nil, err
 	}
