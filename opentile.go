@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/tcornish/opentile-go/internal/tiff"
@@ -30,6 +31,21 @@ func Register(f FormatFactory) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registry = append(registry, f)
+}
+
+// Formats returns the format identifiers that have been registered via
+// Register, sorted lexicographically. Useful for diagnostics and for
+// callers that want to enumerate compiled-in formats without importing
+// each format package directly.
+func Formats() []Format {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	out := make([]Format, 0, len(registry))
+	for _, f := range registry {
+		out = append(out, f.Format())
+	}
+	sort.Slice(out, func(i, j int) bool { return string(out[i]) < string(out[j]) })
+	return out
 }
 
 // resetRegistry is for tests only.

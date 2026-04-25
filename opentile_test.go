@@ -3,11 +3,21 @@ package opentile
 import (
 	"bytes"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
+
+// testFactory is a minimal FormatFactory used to inject identifiers into the
+// registry for introspection tests.
+type testFactory struct{ format Format }
+
+func (t testFactory) Format() Format                              { return t.format }
+func (t testFactory) Supports(*tiff.File) bool                    { return false }
+func (t testFactory) Open(*tiff.File, *Config) (Tiler, error)     { return nil, ErrUnsupportedFormat }
 
 // fakeFactory is a test double that reports support when the tag
 // ImageDescription begins with "FAKE".
@@ -72,6 +82,21 @@ func TestOpenInvalidTIFF(t *testing.T) {
 	_, err := Open(bytes.NewReader([]byte{'X', 'Y'}), 2)
 	if !errors.Is(err, ErrInvalidTIFF) {
 		t.Fatalf("expected ErrInvalidTIFF, got %v", err)
+	}
+}
+
+func TestFormatsRegistered(t *testing.T) {
+	// Use the existing resetRegistry pattern; Task 36 migrates these tests
+	// to a withRegistry(t, ...) helper.
+	resetRegistry()
+	defer resetRegistry()
+	Register(testFactory{format: FormatSVS})
+	Register(testFactory{format: "fake-format"})
+	got := Formats()
+	want := []Format{"fake-format", FormatSVS}
+	sort.Slice(got, func(i, j int) bool { return string(got[i]) < string(got[j]) })
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Formats(): got %v, want %v", got, want)
 	}
 }
 
