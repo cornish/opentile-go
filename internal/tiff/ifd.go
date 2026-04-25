@@ -1,8 +1,15 @@
 package tiff
 
 import (
+	"errors"
 	"fmt"
 )
+
+// ErrTooManyIFDs is returned when a TIFF IFD chain exceeds the safety cap
+// (maxIFDs) before terminating. The root opentile package re-exports this
+// as opentile.ErrTooManyIFDs so callers can errors.Is against the public
+// sentinel.
+var ErrTooManyIFDs = errors.New("internal/tiff: TIFF IFD chain exceeded the safety cap")
 
 // ifd is a parsed Image File Directory: a collection of Entry values indexed by tag id.
 type ifd struct {
@@ -49,7 +56,7 @@ func walkClassicIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 	seen := make(map[int64]bool)
 	for offset != 0 {
 		if len(out) >= maxIFDs {
-			return nil, fmt.Errorf("tiff: IFD chain exceeds max length %d", maxIFDs)
+			return nil, fmt.Errorf("%w (cap=%d)", ErrTooManyIFDs, maxIFDs)
 		}
 		if seen[offset] {
 			return nil, fmt.Errorf("tiff: IFD cycle at offset %d", offset)

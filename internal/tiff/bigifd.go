@@ -10,7 +10,7 @@ func walkBigIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 	seen := make(map[int64]bool)
 	for offset != 0 {
 		if len(out) >= maxIFDs {
-			return nil, fmt.Errorf("tiff: IFD chain exceeds max length %d", maxIFDs)
+			return nil, fmt.Errorf("%w (cap=%d)", ErrTooManyIFDs, maxIFDs)
 		}
 		if seen[offset] {
 			return nil, fmt.Errorf("tiff: IFD cycle at offset %d", offset)
