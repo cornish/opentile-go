@@ -1,6 +1,7 @@
 package svs
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,5 +88,20 @@ func TestParseDescriptionRejectsMalformedDate(t *testing.T) {
 	_, err := parseDescription(desc)
 	if err == nil {
 		t.Fatal("expected error on malformed date")
+	}
+}
+
+func TestParseDescriptionTrimsCRLFFromSoftwareLine(t *testing.T) {
+	desc := "Aperio Image Library v11.2.1 \r\n46000x32914 [42673,5576 2220x2967] (240x240) JPEG/RGB Q=30"
+	md, err := parseDescription(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasSuffix(md.SoftwareLine, "\r") || strings.HasSuffix(md.SoftwareLine, "\n") {
+		t.Errorf("SoftwareLine retains line ending: %q", md.SoftwareLine)
+	}
+	want := "Aperio Image Library v11.2.1"
+	if md.SoftwareLine != want {
+		t.Errorf("SoftwareLine: got %q, want %q", md.SoftwareLine, want)
 	}
 }

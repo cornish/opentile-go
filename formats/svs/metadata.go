@@ -46,7 +46,7 @@ func parseDescription(desc string) (Metadata, error) {
 		md.ScannerSoftware = []string{desc}
 		return md, nil
 	}
-	md.SoftwareLine = desc[:newline]
+	md.SoftwareLine = strings.TrimRight(desc[:newline], "\r\n ")
 	md.ScannerManufacturer = "Aperio"
 	md.ScannerSoftware = []string{md.SoftwareLine}
 
