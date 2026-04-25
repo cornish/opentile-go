@@ -225,6 +225,8 @@ type stripedLabel struct {
 	compression  opentile.Compression
 	stripOffsets []uint64
 	stripCounts  []uint64
+	rowsPerStrip int
+	samples      int
 	reader       io.ReaderAt
 }
 
@@ -232,24 +234,42 @@ func (a *stripedLabel) Kind() string                      { return "label" }
 func (a *stripedLabel) Size() opentile.Size               { return a.size }
 func (a *stripedLabel) Compression() opentile.Compression { return a.compression }
 
-// Bytes returns strip 0's raw compressed bytes.
+// Bytes returns the full label as a single compressed bytestream.
 //
-// This matches the upstream Python opentile SvsLabelImage.get_tile((0,0))
-// behavior, which returns a single strip regardless of how many strips the
-// TIFF carries. For multi-strip LZW labels (typical for CMU fixtures) this
-// means the returned blob is a valid-but-truncated LZW stream representing
-// only the top RowsPerStrip rows of the label, not the full image.
-//
-// Proper multi-strip stitching is deferred to v0.3 (see docs/deferred.md).
+// Single-strip labels are returned as-is. Multi-strip LZW labels (typical
+// for CMU fixtures) are decoded strip-by-strip, the decoded raster is
+// concatenated row-major, and the result is re-encoded as a single LZW
+// stream covering the full image height. This deviates from the upstream
+// Python opentile 0.20.0 SvsLabelImage.get_tile((0,0)) which returns only
+// strip 0 — a long-standing upstream bug; we'll file a PR there separately
+// so parity can re-engage once Python lands the same fix.
 func (a *stripedLabel) Bytes() ([]byte, error) {
 	if len(a.stripOffsets) == 0 || len(a.stripCounts) == 0 {
 		return nil, fmt.Errorf("svs: label has no strips")
 	}
-	buf := make([]byte, a.stripCounts[0])
-	if err := tiff.ReadAtFull(a.reader, buf, int64(a.stripOffsets[0])); err != nil {
-		return nil, fmt.Errorf("svs: read label strip 0: %w", err)
+	if len(a.stripOffsets) == 1 {
+		// Single-strip label: decode-restitch is a no-op; return as-is.
+		buf := make([]byte, a.stripCounts[0])
+		if err := tiff.ReadAtFull(a.reader, buf, int64(a.stripOffsets[0])); err != nil {
+			return nil, fmt.Errorf("svs: read label strip 0: %w", err)
+		}
+		return buf, nil
 	}
-	return buf, nil
+	// Multi-strip label: only LZW is supported in v0.3. JPEG/uncompressed
+	// multi-strip labels would need their own restitch path; we haven't seen
+	// one in the wild yet (all three CMU fixtures are LZW=5).
+	if a.compression != opentile.CompressionLZW {
+		return nil, fmt.Errorf("svs: multi-strip label compression %s unsupported (LZW only in v0.3)", a.compression)
+	}
+	strips := make([][]byte, len(a.stripOffsets))
+	for i := range a.stripOffsets {
+		buf := make([]byte, a.stripCounts[i])
+		if err := tiff.ReadAtFull(a.reader, buf, int64(a.stripOffsets[i])); err != nil {
+			return nil, fmt.Errorf("svs: read label strip %d: %w", i, err)
+		}
+		strips[i] = buf
+	}
+	return reconstructLZWLabel(strips, a.rowsPerStrip, a.size.H, a.size.W, a.samples)
 }
 
 func newStripedLabel(p *tiff.Page, r io.ReaderAt) (*stripedLabel, error) {
@@ -270,11 +290,15 @@ func newStripedLabel(p *tiff.Page, r io.ReaderAt) (*stripedLabel, error) {
 		return nil, fmt.Errorf("svs: label strip counts: %w", err)
 	}
 	comp, _ := p.Compression()
+	rps, _ := p.ScalarU32(tiff.TagRowsPerStrip)
+	spp, _ := p.SamplesPerPixel()
 	return &stripedLabel{
 		size:         opentile.Size{W: int(iw), H: int(il)},
 		compression:  tiffCompressionToOpentile(comp),
 		stripOffsets: offsets,
 		stripCounts:  counts,
+		rowsPerStrip: int(rps),
+		samples:      int(spp),
 		reader:       r,
 	}, nil
 }

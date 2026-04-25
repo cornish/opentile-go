@@ -100,6 +100,18 @@ func runParityOnSlide(t *testing.T, slide string) {
 	// emits zero-length stdout and we treat that as "skip" (the Go side may
 	// still expose a synthesized image, e.g. NDPI's cropped-overview label).
 	for _, a := range tiler.Associated() {
+		// Skip parity for label images on every format. Python opentile
+		// 0.20.0 returns only strip 0 of multi-strip labels (an upstream
+		// bug — see L10); our Go side decode-restitch-encodes the full
+		// image, so the byte streams legitimately diverge. We'll file an
+		// upstream PR so this skip can be removed once Python lands the
+		// same fix. Until then, skip uniformly (NDPI labels are also
+		// affected since some are synthesized from cropped overviews).
+		if a.Kind() == "label" {
+			t.Logf("slide %s associated %q: skipping parity (Python opentile 0.20.0 returns strip 0 only — see L10)",
+				filepath.Base(slide), a.Kind())
+			continue
+		}
 		ourB, err := a.Bytes()
 		if err != nil {
 			t.Errorf("slide %s associated %q: Go error: %v", filepath.Base(slide), a.Kind(), err)

@@ -6,3 +6,15 @@ Copyright 2021-2024 Sectra AB, licensed under the Apache License, Version 2.0.
 
 This is an independent port. It is not affiliated with or endorsed by Sectra AB
 or the Innovative Medicines Initiative BigPicture project.
+
+----
+
+internal/tifflzw/ contains an LZW reader/writer adapted from:
+  - golang.org/x/image/tiff/lzw (reader; the upstream "off by one" comment is preserved)
+  - the Go standard library compress/lzw (writer; the same off-by-one
+    transition is applied symmetrically so the writer's output is decodable
+    by libtiff, imagecodecs, and golang.org/x/image/tiff/lzw)
+
+Both upstreams are Copyright 2011 The Go Authors and licensed under a
+BSD-style license; see https://github.com/golang/image/blob/master/LICENSE
+and https://go.dev/LICENSE.
