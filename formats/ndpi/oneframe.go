@@ -132,10 +132,9 @@ func (l *oneFrameImage) Tiles(ctx context.Context) iter.Seq2[opentile.TilePos, o
 // tjTransform's TJXOPT_PERFECT). Called on first Tile; result is cached for
 // the level's lifetime.
 //
-// Concurrency note: paddedJPEGOnce is read/written without locking. On
-// concurrent first-calls two goroutines may both read the underlying JPEG
-// and rewrite the SOF dimensions; the result is byte-identical in that
-// case. The caller-visible Crop output is deterministic regardless.
+// Concurrency note: this method is only reached through extendedOnce.Do in
+// Tile()'s extended-frame path, which supplies the memory barrier and
+// single-entry guarantee. paddedJPEGOnce therefore cannot race in practice.
 func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 	if l.paddedJPEGOnce {
 		return l.paddedJPEG, nil

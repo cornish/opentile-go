@@ -172,9 +172,13 @@ func (l *stripedImage) Tiles(ctx context.Context) iter.Seq2[opentile.TilePos, op
 	}
 }
 
-// frameSizeForTile mirrors NdpiStripedImage._get_frame_size_for_tile. Edge
-// tiles on the right / bottom may use a smaller frame so the assembled
-// JPEG doesn't claim rows/columns the original image doesn't have.
+// frameSizeForTile mirrors NdpiStripedImage._get_frame_size_for_tile. The
+// narrowing conditions (sw < tileSize.W / sh < tileSize.H) fire only when
+// a native stripe is smaller than the output tile — the upstream-original
+// case. When the native stripe is wider/taller than the tile (the more
+// common NDPI layout), this returns the default frame size and any resulting
+// crop that extends past image bounds falls through to CropWithBackground
+// in Tile(); see docs/deferred.md L12 for the OOB fill parity story.
 func (l *stripedImage) frameSizeForTile(x, y int) opentile.Size {
 	w := l.frameSize.W
 	h := l.frameSize.H

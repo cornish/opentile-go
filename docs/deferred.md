@@ -91,6 +91,25 @@ Caught by the three-slide integration tests or during implementation. The librar
 
   *How to fix in v0.3:* decode each strip via a TIFF-aware LZW codec (Go stdlib `compress/lzw` with `Order=MSB`, or a ported tifffile codec), raster-concatenate, re-encode as a single LZW stream covering the full image height, and rewrite the LZW-specific TIFF metadata to match. Requires a full LZW codec path. Also update Python opentile with the same fix so the parity oracle continues to compare like for like, or gate the oracle on non-label images.
 
+### L11 — SVS associated-image DRI assumes 16×16 MCU
+- **Source:** Task 21 follow-up review (feat/v0.2)
+- **Severity:** Limitation (format-assumption)
+- **Detail:** `formats/svs.stripedJPEGAssociated.Bytes()` computes the DRI as
+  `ceil(width/16) × ceil(RowsPerStrip/16)` MCUs per strip, hardcoding the
+  Aperio YCbCr 4:2:0 default. If a thumbnail or overview page were encoded
+  with different luma/chroma sampling factors the computed DRI would be
+  incorrect and the assembled JPEG would decode with artefacts at every
+  strip boundary. The code does not read SOF sampling factors to verify.
+
+  *Why this is the v0.2 behavior:* all three sample SVS fixtures use the
+  YCbCr 4:2:0 Aperio default; the RestartInterval math matches what Python
+  opentile's `_manipulate_header` computes for the same files. Parallel to
+  L7 for NDPI overview crop.
+
+  *How to fix:* parse the SOF from the first strip (similar to
+  `ndpi/oneframe.go`'s `sof.MCUSize()` pattern), derive the MCU size from
+  the sampling factors, and use that instead of the 16×16 constant.
+
 ### L12 — NDPI edge-tile entropy-encoding divergence
 - **Source:** NDPI v0.2 architectural rewrite (feat/v0.2)
 - **Severity:** Limitation (parity gap on edge tiles)
@@ -210,25 +229,6 @@ Caught by the three-slide integration tests or during implementation. The librar
   and dominates the per-tile cost at 10 samples). A runner that
   accepts many positions per invocation could reasonably raise the
   sample to hundreds per level.
-
-### L11 — SVS associated-image DRI assumes 16×16 MCU
-- **Source:** Task 21 follow-up review (feat/v0.2)
-- **Severity:** Limitation (format-assumption)
-- **Detail:** `formats/svs.stripedJPEGAssociated.Bytes()` computes the DRI as
-  `ceil(width/16) × ceil(RowsPerStrip/16)` MCUs per strip, hardcoding the
-  Aperio YCbCr 4:2:0 default. If a thumbnail or overview page were encoded
-  with different luma/chroma sampling factors the computed DRI would be
-  incorrect and the assembled JPEG would decode with artefacts at every
-  strip boundary. The code does not read SOF sampling factors to verify.
-
-  *Why this is the v0.2 behavior:* all three sample SVS fixtures use the
-  YCbCr 4:2:0 Aperio default; the RestartInterval math matches what Python
-  opentile's `_manipulate_header` computes for the same files. Parallel to
-  L7 for NDPI overview crop.
-
-  *How to fix:* parse the SOF from the first strip (similar to
-  `ndpi/oneframe.go`'s `sof.MCUSize()` pattern), derive the MCU size from
-  the sampling factors, and use that instead of the 16×16 constant.
 
 ---
 
