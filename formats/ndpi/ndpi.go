@@ -133,9 +133,11 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 			// part of the standard NDPI layout.
 		}
 	}
-	if overview != nil {
+	if overview != nil && cfg.NDPISynthesizedLabel() {
 		// Default label crop: 0 → 30% of macro width. MCU sizes default to
 		// 16x16 (YCbCr 4:2:0 — Hamamatsu standard).
+		// mcuW=16, mcuH=16: Aperio YCbCr 4:2:0 default. Task 10 replaces these
+		// hardcoded values with the result of jpeg.MCUSizeOf(overview bytes).
 		associated = append(associated, newLabelImage(overview, 0.3, 16, 16))
 	}
 	return &tiler{md: md, levels: levels, associated: associated}, nil

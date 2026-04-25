@@ -15,15 +15,17 @@ type Option func(*config)
 
 // config is the aggregate of all Option values applied at Open time.
 type config struct {
-	tileSize    Size
-	hasTileSize bool
-	corruptTile CorruptTilePolicy
+	tileSize       Size
+	hasTileSize    bool
+	corruptTile    CorruptTilePolicy
+	ndpiSynthLabel bool // default true
 }
 
 func newConfig(opts []Option) *config {
 	c := &config{
-		tileSize:    Size{},
-		corruptTile: CorruptTileError,
+		tileSize:       Size{},
+		corruptTile:    CorruptTileError,
+		ndpiSynthLabel: true, // v0.2 behavior; opt-out via WithNDPISynthesizedLabel(false)
 	}
 	for _, o := range opts {
 		o(c)
@@ -45,6 +47,16 @@ func WithTileSize(w, h int) Option {
 // only CorruptTileError.
 func WithCorruptTilePolicy(p CorruptTilePolicy) Option {
 	return func(c *config) { c.corruptTile = p }
+}
+
+// WithNDPISynthesizedLabel controls whether NDPI Tiler.Associated() includes
+// a synthesized "label" image, which Go produces by cropping the left 30%
+// of the overview page. Python opentile 0.20.0 does not expose NDPI labels;
+// this is a Go-side extension. Default: true (matches v0.2 behavior).
+func WithNDPISynthesizedLabel(enable bool) Option {
+	return func(c *config) {
+		c.ndpiSynthLabel = enable
+	}
 }
 
 // Config is an opaque, read-only view of the configuration passed to a
@@ -71,6 +83,10 @@ func (c *Config) TileSize() (Size, bool) { return c.c.tileSize, c.c.hasTileSize 
 
 // CorruptTilePolicy returns the configured policy.
 func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile }
+
+// NDPISynthesizedLabel reports whether NDPI Tiler.Associated() should
+// include a synthesized label cropped from the overview. Default true.
+func (c *Config) NDPISynthesizedLabel() bool { return c.c.ndpiSynthLabel }
 
 // NewTestConfig constructs a Config for use in tests.
 //
