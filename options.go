@@ -64,10 +64,11 @@ func (c *Config) TileSize() (Size, bool) { return c.c.tileSize, c.c.hasTileSize 
 // CorruptTilePolicy returns the configured policy.
 func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile }
 
-// NewTestConfig constructs a Config for use in tests. It is not intended for
-// production callers, which should go through opentile.Open. A non-zero
-// tileSize is treated as explicitly set (TileSize ok=true); a zero Size is
-// treated as "use format default" (TileSize ok=false).
+// NewTestConfig constructs a Config for use in tests.
+//
+// Deprecated: use opentile/opentiletest.NewConfig. This wrapper remains
+// for one release to keep external callers compiling; it will be removed
+// in v0.4.
 func NewTestConfig(tileSize Size, policy CorruptTilePolicy) *Config {
 	has := tileSize.W != 0 || tileSize.H != 0
 	return &Config{c: &config{tileSize: tileSize, hasTileSize: has, corruptTile: policy}}

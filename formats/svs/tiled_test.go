@@ -10,6 +10,7 @@ import (
 
 	opentile "github.com/tcornish/opentile-go"
 	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/tcornish/opentile-go/opentile/opentiletest"
 )
 
 // buildSVSTIFF builds a TIFF with one tiled page carrying tileCount*tileCount
@@ -104,7 +105,7 @@ func TestSvsTilerOpenAndLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("svs.New().Open: %v", err)
@@ -146,7 +147,7 @@ func TestSvsTilerOpenAndLevel(t *testing.T) {
 func TestSvsLevelTileOutOfBounds(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 	_, err := lvl.Tile(99, 99)
@@ -165,7 +166,7 @@ func TestSvsLevelTileOutOfBounds(t *testing.T) {
 func TestSvsLevelTilesIterator(t *testing.T) {
 	data, tiles := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 
@@ -189,7 +190,7 @@ func TestSvsLevelTilesIterator(t *testing.T) {
 func TestSvsLevelTileReader(t *testing.T) {
 	data, tiles := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 	rc, err := lvl.TileReader(1, 1)
@@ -235,7 +236,7 @@ func TestSvsLevelTileBenignEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -255,7 +256,7 @@ func TestSvsLevelTileBenignEOF(t *testing.T) {
 func TestMetadataOfExtractsAperioExtras(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "AppMag = 40|MPP = 0.25|Filename = slide-x")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -411,7 +412,7 @@ func TestSvsTilerSkipsNonTiledPages(t *testing.T) {
 	if len(f.Pages()) != 2 {
 		t.Fatalf("expected 2 TIFF pages, got %d", len(f.Pages()))
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: non-tiled page should not cause Open to fail: %v", err)
@@ -445,7 +446,7 @@ func (w *wrapperTiler) UnwrapTiler() opentile.Tiler { return w.Tiler }
 func TestMetadataOfUnwrapsWrappers(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "MPP = 0.25")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
