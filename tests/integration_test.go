@@ -23,6 +23,7 @@ var slideCandidates = []string{
 	"JP2K-33003-1.svs",
 	"CMU-1.ndpi",
 	"OS-2.ndpi",
+	"Hamamatsu-1.ndpi",
 }
 
 // resolveSlide looks up name in dir, dir/svs, dir/ndpi and returns the first
@@ -100,24 +101,52 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 		if lvl.Compression().String() != exp.Compression {
 			t.Errorf("level %d compression: got %q, want %q", i, lvl.Compression(), exp.Compression)
 		}
-		// Tile hashes
-		for y := 0; y < lvl.Grid().H; y++ {
-			for x := 0; x < lvl.Grid().W; x++ {
-				b, err := lvl.Tile(x, y)
+		// Tile hashes — full-walk mode
+		if len(fix.TileSHA256) > 0 {
+			for y := 0; y < lvl.Grid().H; y++ {
+				for x := 0; x < lvl.Grid().W; x++ {
+					b, err := lvl.Tile(x, y)
+					if err != nil {
+						t.Errorf("Tile(%d,%d) level %d: %v", x, y, i, err)
+						continue
+					}
+					sum := sha256.Sum256(b)
+					got := hex.EncodeToString(sum[:])
+					key := tests.TileKey(i, x, y)
+					want, ok := fix.TileSHA256[key]
+					if !ok {
+						t.Errorf("fixture missing key %s", key)
+						continue
+					}
+					if got != want {
+						t.Errorf("tile %s hash: got %s, want %s", key, got, want)
+					}
+				}
+			}
+		}
+	}
+
+	// Sampled-walk mode: walk only deliberately-chosen positions.
+	if len(fix.SampledTileSHA256) > 0 {
+		for i, lvl := range levels {
+			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
+			for _, p := range positions {
+				b, err := lvl.Tile(p.X, p.Y)
 				if err != nil {
-					t.Errorf("Tile(%d,%d) level %d: %v", x, y, i, err)
+					t.Errorf("sampled Tile(%d,%d) level %d: %v", p.X, p.Y, i, err)
+					continue
+				}
+				key := tests.SampleKey(i, p)
+				expEntry, ok := fix.SampledTileSHA256[key]
+				if !ok {
+					t.Errorf("sampled fixture missing key %s", key)
 					continue
 				}
 				sum := sha256.Sum256(b)
 				got := hex.EncodeToString(sum[:])
-				key := tests.TileKey(i, x, y)
-				want, ok := fix.TileSHA256[key]
-				if !ok {
-					t.Errorf("fixture missing key %s", key)
-					continue
-				}
-				if got != want {
-					t.Errorf("tile %s hash: got %s, want %s", key, got, want)
+				if got != expEntry.SHA256 {
+					t.Errorf("sampled tile %s (%s): got %s, want %s",
+						key, expEntry.Reason, got, expEntry.SHA256)
 				}
 			}
 		}
