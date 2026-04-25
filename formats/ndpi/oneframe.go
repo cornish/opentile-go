@@ -160,12 +160,12 @@ func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 	var sof *jpeg.SOF
 	for seg, err := range jpeg.Scan(bytes.NewReader(buf)) {
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", opentile.ErrBadJPEGBitstream, err)
+			return nil, fmt.Errorf("%w: %w", opentile.ErrBadJPEGBitstream, err)
 		}
 		if seg.Marker == jpeg.SOF0 {
 			sof, err = jpeg.ParseSOF(seg.Payload)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %v", opentile.ErrBadJPEGBitstream, err)
+				return nil, fmt.Errorf("%w: %w", opentile.ErrBadJPEGBitstream, err)
 			}
 			break
 		}
