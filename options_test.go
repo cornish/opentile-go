@@ -58,3 +58,27 @@ func TestConfigTileSizeAccessor(t *testing.T) {
 		t.Error("NewTestConfig with zero tileSize: expected ok=false")
 	}
 }
+
+func TestConfigTileSizeExplicitZero(t *testing.T) {
+	c := &Config{c: newConfig([]Option{WithTileSize(0, 0)})}
+	sz, ok := c.TileSize()
+	if !ok {
+		t.Fatal("explicit WithTileSize(0,0): expected ok=true")
+	}
+	if sz != (Size{}) {
+		t.Errorf("explicit WithTileSize(0,0): got %v, want zero Size", sz)
+	}
+}
+
+func TestConfigTileSizeUnsetVsExplicitZero(t *testing.T) {
+	cUnset := &Config{c: newConfig(nil)}
+	cExplicit := &Config{c: newConfig([]Option{WithTileSize(0, 0)})}
+	_, okUnset := cUnset.TileSize()
+	_, okExplicit := cExplicit.TileSize()
+	if okUnset {
+		t.Error("unset config: expected ok=false")
+	}
+	if !okExplicit {
+		t.Error("explicit zero: expected ok=true")
+	}
+}

@@ -54,11 +54,19 @@ type Config struct {
 	c *config
 }
 
-// TileSize returns the requested output tile size and whether the caller set
-// one. ok=false means "use format default"; callers must not treat the zero
-// Size as equivalent to "default" because (Size{}, true) is distinct from
-// (Size{}, false) — the former asserts an explicit 0x0 (which format packages
-// should reject as malformed input).
+// TileSize returns the requested output tile size and whether the caller
+// set one.
+//
+//   - (Size{}, false): caller did not pass WithTileSize. Format packages
+//     should use their format default (e.g. SVS reads the native tile size
+//     from the TIFF; NDPI uses 512).
+//   - (Size{}, true): caller explicitly passed WithTileSize(0, 0). Format
+//     packages MUST reject this as malformed input. The zero Size is
+//     distinct from "unset" because the API contract is that an explicit
+//     option overrides the default.
+//   - (non-zero, true): caller's requested tile size; format honors it
+//     (NDPI may snap to a stripe-multiple, SVS rejects when it doesn't
+//     match the native tile dimensions).
 func (c *Config) TileSize() (Size, bool) { return c.c.tileSize, c.c.hasTileSize }
 
 // CorruptTilePolicy returns the configured policy.
