@@ -67,17 +67,17 @@ func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 func OpenFile(path string, opts ...Option) (Tiler, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opentile: open %q: %w", path, err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("opentile: stat %q: %w", path, err)
 	}
 	t, err := Open(f, info.Size(), opts...)
 	if err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("opentile: %s: %w", path, err)
 	}
 	return &fileCloser{Tiler: t, f: f}, nil
 }

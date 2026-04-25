@@ -3,6 +3,7 @@ package opentile
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tcornish/opentile-go/internal/tiff"
@@ -71,6 +72,16 @@ func TestOpenInvalidTIFF(t *testing.T) {
 	_, err := Open(bytes.NewReader([]byte{'X', 'Y'}), 2)
 	if !errors.Is(err, ErrInvalidTIFF) {
 		t.Fatalf("expected ErrInvalidTIFF, got %v", err)
+	}
+}
+
+func TestOpenFileErrorIncludesPath(t *testing.T) {
+	_, err := OpenFile("/nonexistent/slide.svs")
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+	if !strings.Contains(err.Error(), "/nonexistent/slide.svs") {
+		t.Errorf("error should include path: %v", err)
 	}
 }
 
