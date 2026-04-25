@@ -49,3 +49,26 @@ func Tile(slide string, level, x, y, tileSize int) ([]byte, error) {
 	}
 	return stdout.Bytes(), nil
 }
+
+// Associated invokes Python opentile for an associated image of the given
+// kind ("label", "overview", "thumbnail") and returns its raw bytes.
+//
+// If Python opentile does not expose that kind on this slide (e.g. NDPI
+// CMU-1 has no labels or thumbnails), the runner emits zero-length stdout
+// with exit 0; the caller receives a nil/empty slice and should skip the
+// comparison. A non-nil error means the subprocess itself failed.
+//
+// tileSize is passed via OPENTILE_TILE_SIZE for parity with Tile, though
+// for associated images it does not affect the returned bytes — the
+// associated image is always a single, fixed-size blob.
+func Associated(slide, kind string, tileSize int) ([]byte, error) {
+	cmd := exec.Command(PythonBin(), RunnerScript(), slide, kind)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("OPENTILE_TILE_SIZE=%d", tileSize))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("python oracle associated %q failed (%s): %w\nstderr:\n%s", kind, cmd.Path, err, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}

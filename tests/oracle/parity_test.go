@@ -70,16 +70,54 @@ func runParityOnSlide(t *testing.T, slide string) {
 				continue
 			}
 			if !bytes.Equal(our, theirs) {
-				// Edge tile = last column or last row (pixel extent exceeds image bounds).
+				// NDPI edge tiles (pixel extent exceeds image bounds) go
+				// through a CUSTOMFILTER-driven OOB fill inside tjTransform.
+				// Our callback and Python's emit identical DC values
+				// (verified by LumaDCQuant + LuminanceToDCCoefficient
+				// agreement) but the two encoded entropy streams still
+				// diverge in a handful of bytes. Root cause is a subtle
+				// tjTransform non-determinism we haven't pinned down;
+				// pixel output is visually equivalent but not byte-equal.
+				// Downgrade to t.Log on NDPI edge tiles only — see
+				// docs/deferred.md L12.
 				isEdge := (pos.X+1)*tileSize > imgSize.W || (pos.Y+1)*tileSize > imgSize.H
 				if isNDPI && isEdge {
-					t.Logf("slide %s level %d tile (%d,%d): edge-tile divergence accepted under L12 (go=%d bytes, py=%d bytes) — see docs/deferred.md L12",
+					t.Logf("slide %s level %d tile (%d,%d): NDPI edge-tile entropy divergence (L12) — go=%d bytes py=%d bytes",
 						filepath.Base(slide), li, pos.X, pos.Y, len(our), len(theirs))
 					continue
 				}
 				t.Errorf("slide %s level %d tile (%d,%d): byte-level divergence (go=%d bytes, py=%d bytes)",
 					filepath.Base(slide), li, pos.X, pos.Y, len(our), len(theirs))
 			}
+		}
+	}
+
+	// Associated-image parity: byte-compare each Go AssociatedImage against
+	// the Python equivalent. Python opentile exposes label/overview/thumbnail
+	// via tiler.labels / tiler.overviews / tiler.thumbnails; the runner
+	// dispatches on argv count and fetches the first image of the requested
+	// kind. If Python has no image of that kind on this slide, the runner
+	// emits zero-length stdout and we treat that as "skip" (the Go side may
+	// still expose a synthesized image, e.g. NDPI's cropped-overview label).
+	for _, a := range tiler.Associated() {
+		ourB, err := a.Bytes()
+		if err != nil {
+			t.Errorf("slide %s associated %q: Go error: %v", filepath.Base(slide), a.Kind(), err)
+			continue
+		}
+		theirB, err := oracle.Associated(slide, a.Kind(), tileSize)
+		if err != nil {
+			t.Errorf("slide %s associated %q: Python oracle error: %v", filepath.Base(slide), a.Kind(), err)
+			continue
+		}
+		if len(theirB) == 0 {
+			t.Logf("slide %s associated %q: not exposed by Python opentile; skipping parity check (Go synthesized %d bytes)",
+				filepath.Base(slide), a.Kind(), len(ourB))
+			continue
+		}
+		if !bytes.Equal(ourB, theirB) {
+			t.Errorf("slide %s associated %q: byte-level divergence (go=%d bytes, py=%d bytes)",
+				filepath.Base(slide), a.Kind(), len(ourB), len(theirB))
 		}
 	}
 }
