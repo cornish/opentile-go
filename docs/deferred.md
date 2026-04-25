@@ -254,6 +254,13 @@ Caught by the three-slide integration tests or during implementation. The librar
   Python). The OS-2 and Hamamatsu-1 fixtures will need re-regeneration
   once the fix lands.
 
+### L18 — `ConcatenateScans` rejected `ColorspaceFix=true` when JPEGTables is empty  *(resolved in v0.3)*
+
+- **Source:** Task 12 fixture-generation attempt against `svs_40x_bigtiff.svs` (Grundium Ocus scanner)
+- **Severity:** Limitation (blocked SVS associated-image read on slides whose pages carry no shared JPEGTables tag — strips embed their own DQT/DHT/SOF inline)
+- **Status:** Fixed on `feat/v0.3`. `internal/jpeg/concat.go` now skips both the tables splice and the APP14 splice when `len(JPEGTables) == 0`, matching upstream's gate at `opentile/jpeg/jpeg.py:192-198` (where `rgb_colorspace_fix` is layered inside the `if jpeg_tables is not None:` branch). Verified byte-identical to Python opentile on `scan_620_.svs` thumbnail (3,145,734 bytes), label (834,864 bytes), and overview (116,344 bytes). Two unit tests in `internal/jpeg/concat_test.go` lock the gate behavior in.
+- **Original detail:** `internal/jpeg/concat.go` errored with `ColorspaceFix requires non-empty JPEGTables` whenever `ColorspaceFix=true` and `len(JPEGTables) == 0`. Surfaced on the BigTIFF Grundium slide (`svs_40x_bigtiff.svs`): every page reports `hasJPEGTables=false(len=0)` and the thumbnail/macro associated-image reads failed immediately. Tile reads worked fine because the tiled-level path (`formats/svs/tiled.go:162`) only splices when `len(jpegTables) > 0`.
+
 ---
 
 ## 3. Reviewer suggestions accepted but not applied

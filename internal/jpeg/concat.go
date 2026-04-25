@@ -31,10 +31,15 @@ import (
 //     happens — callers are expected to pass non-empty tables when
 //     using ConcatenateScans.
 //
-//   - ColorspaceFix: when true, emit an Adobe APP14 segment signaling
-//     RGB colorspace (ColorTransform=0) immediately after the inserted
-//     tables. Required for Aperio SVS non-standard RGB JPEGs. The exact
-//     bytes come from the shared adobeAPP14 literal in insert_tables.go.
+//   - ColorspaceFix: when true AND JPEGTables is non-empty, emit an
+//     Adobe APP14 segment signaling RGB colorspace (ColorTransform=0)
+//     immediately after the inserted tables. Required for Aperio SVS
+//     non-standard RGB JPEGs. The exact bytes come from the shared
+//     adobeAPP14 literal in insert_tables.go. Silently skipped when
+//     JPEGTables is absent — matches upstream opentile, where the
+//     colorspace fix is layered inside the tables splice
+//     (opentile/jpeg/jpeg.py:192-198). Strips that lack shared tables
+//     (Grundium-style) carry their own colorspace info inline.
 //
 //   - RestartInterval: when >0, either (a) update the existing DRI
 //     payload if one is present in the fragment header, or (b) insert a
@@ -184,14 +189,13 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		spliced = append(spliced, insert...)
 		spliced = append(spliced, frame[sosPos:]...)
 		frame = spliced
-	} else if opts.ColorspaceFix {
-		// ColorspaceFix without tables is a caller bug for our use cases —
-		// if they're asking for the Adobe marker, there must be tables to
-		// splice it after. Match Python's layering (APP14 goes with the
-		// tables insert); refuse rather than silently producing a frame
-		// that doesn't match upstream.
-		return nil, fmt.Errorf("%w: ColorspaceFix requires non-empty JPEGTables", ErrBadJPEG)
 	}
+	// When JPEGTables is absent, both the tables splice AND the APP14
+	// colorspace-fix splice are skipped — matching upstream's gate at
+	// opentile/jpeg/jpeg.py:192-198, where rgb_colorspace_fix is layered
+	// inside the `if jpeg_tables is not None:` branch. Required by
+	// scanners (e.g. Grundium) that omit the shared JPEGTables tag and
+	// embed DQT/DHT/SOF inline in each strip.
 
 	// --- Step 3: patch SOF dimensions. --------------------------------------
 

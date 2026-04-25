@@ -298,3 +298,74 @@ func TestConcatenateScansDRIValue(t *testing.T) {
 		t.Errorf("DRI payload: got %d, want 1234", payload)
 	}
 }
+
+// TestConcatenateScansEmptyJPEGTablesWithColorspaceFix locks in the L18 fix:
+// when JPEGTables is absent (nil/empty), ConcatenateScans must skip BOTH the
+// tables splice AND the APP14 marker, even if ColorspaceFix=true. This matches
+// upstream Python opentile (opentile/jpeg/jpeg.py:192-198):
+//
+//	if jpeg_tables is not None:
+//	    if rgb_colorspace_fix:
+//	        frame = self._add_jpeg_tables_and_rgb_color_space_fix(frame, jpeg_tables)
+//	    else:
+//	        frame = self._add_jpeg_tables(frame, jpeg_tables)
+//
+// The rgb_colorspace_fix branch is gated INSIDE the tables-present check; when
+// tables are absent the colorspace fix is silently skipped too. Required for
+// SVS files emitted by scanners (e.g. Grundium) that omit the shared
+// JPEGTables tag — strips embed their own DQT/DHT/SOF inline.
+func TestConcatenateScansEmptyJPEGTablesWithColorspaceFix(t *testing.T) {
+	frag := fakeScan(t, 16, 8, []byte{0x11, 0x22})
+
+	out, err := ConcatenateScans(
+		[][]byte{frag},
+		ConcatOpts{JPEGTables: nil, ColorspaceFix: true, RestartInterval: 1},
+	)
+	if err != nil {
+		t.Fatalf("ConcatenateScans: %v", err)
+	}
+
+	// Segment order must be SOI, SOF0, DRI, SOS — no DQT/DHT (no tables) and
+	// no APP14 (no colorspace splice when tables are absent).
+	want := []Marker{SOI, SOF0, DRI, SOS}
+	got := segmentMarkers(t, out)
+	if len(got) != len(want) {
+		t.Fatalf("segment order: got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("segment %d: got 0x%X, want 0x%X", i, got[i], want[i])
+		}
+	}
+
+	// Belt-and-braces: APP14 (FF EE) must not appear anywhere in the output.
+	if bytes.Contains(out, []byte{0xFF, 0xEE}) {
+		t.Error("APP14 (FF EE) present in output despite empty JPEGTables; upstream gates APP14 inside the tables-present branch")
+	}
+}
+
+// TestConcatenateScansEmptyJPEGTablesNoColorspaceFix is a regression guard:
+// the absence of any tables-related splice was already correct before the L18
+// fix (the bug was specifically in the ColorspaceFix=true branch). This locks
+// in that the no-tables, no-colorspace-fix path stays a no-op splice.
+func TestConcatenateScansEmptyJPEGTablesNoColorspaceFix(t *testing.T) {
+	frag := fakeScan(t, 16, 8, []byte{0x11, 0x22})
+
+	out, err := ConcatenateScans(
+		[][]byte{frag},
+		ConcatOpts{JPEGTables: nil, ColorspaceFix: false, RestartInterval: 1},
+	)
+	if err != nil {
+		t.Fatalf("ConcatenateScans: %v", err)
+	}
+	want := []Marker{SOI, SOF0, DRI, SOS}
+	got := segmentMarkers(t, out)
+	if len(got) != len(want) {
+		t.Fatalf("segment order: got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("segment %d: got 0x%X, want 0x%X", i, got[i], want[i])
+		}
+	}
+}
