@@ -257,6 +257,25 @@ recorded here as they land.
   byte-equality assertions; the alternative pixel-equivalent fallback
   is not needed.
 
+### Task 2 — NDPI Map fixture audit
+
+- **Date:** 2026-04-26
+- **Outcome:** Map pages present on two of three local NDPI fixtures.
+  ```
+  CMU-1.ndpi          : no Map page (5 pages, max mag = 20.0, min = -1.0)
+  OS-2.ndpi           : page 11 (198x580)  mag=-2.0  <-- MAP
+  Hamamatsu-1.ndpi    : page  7 (205x600)  mag=-2.0  <-- MAP
+  ```
+  Upstream confirmation: no `tiler.maps` property in Python opentile
+  0.20.0; no `kind == "map"` references anywhere in
+  `imi-bigpicture/opentile`. Surfacing Map pages is a deliberate
+  Go-side extension paralleling the v0.2 NDPI label synthesis (L14).
+  Both Map pages report a 2D shape (no third dim) — single-component;
+  Task 6's `mapPage` implementation needs to handle the grayscale
+  decode rather than assuming RGB.
+- **Consequence:** L6 / R13 stays in v0.4 scope. Tasks 6-8 proceed
+  using OS-2 + Hamamatsu-1 fixtures.
+
 ---
 
 ## 7. Triage process
