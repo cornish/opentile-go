@@ -3,9 +3,10 @@
 *.test
 *.out
 
-# IDE
+# IDE / agent local state
 .idea/
 .vscode/
+.claude/
 
 # Local test data
 /testdata/slides/
