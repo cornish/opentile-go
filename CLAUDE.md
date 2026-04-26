@@ -2,15 +2,15 @@
 
 Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.3
+## Current milestone — v0.4
 
-- **Scope:** Polish — close every v0.2 review finding (16 limitations, 25+ reviewer suggestions). No new format support. Settle the public API.
-- **Settled:** v0.3 freezes the public API. Every name in `go doc ./...` after v0.3 ships survives v0.3 → v0.4 unchanged unless explicitly versioned.
-- **Active limitations:** L4 / L5 / L14 are permanent design choices. L6 / L12 / L17 are v0.4 work-items targeting existing-format completeness (`docs/deferred.md` §2). New format support (Philips, 3DHistech, OME) is v0.5+.
-- **Design:** `docs/superpowers/specs/2026-04-24-opentile-go-v03-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-25-opentile-go-v03.md`
-- **Next milestone:** v0.4 spec at `docs/superpowers/specs/2026-04-26-opentile-go-v04-design.md`; plan at `docs/superpowers/plans/2026-04-26-opentile-go-v04.md`. Theme: existing-format completeness (SVS corrupt-edge reconstruct + JP2K decode/encode + NDPI Map pages + L17/L12).
-- **Work branch:** `feat/v0.3`
+- **Scope:** NDPI completeness. Closed L12 (NDPI edge-tile OOB fill — was misframed as tjTransform non-determinism, actually a control-flow bug), L17 (NDPI label cropH passes full image height now), and L6 / R13 (NDPI Map pages surface as `Kind() == "map"`). Public API stable from v0.3.
+- **Active limitations:** Three Permanent design choices only — L4 (missing-MPP, slide-data dependent), L5 (NDPI sniff in `internal/tiff` is necessary), L14 (Go-side NDPI label synthesis with `WithNDPISynthesizedLabel(false)` opt-out). No open work-items for SVS or NDPI on existing fixtures.
+- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1) — none of our local SVS slides exhibits the corrupt-edge bug, so the work is speculative until a real slide motivates it. The full upstream algorithm + Go-side dependency tree + byte-parity bar from the v0.4 T1 determinism gate are documented in the issue.
+- **Design:** `docs/superpowers/specs/2026-04-26-opentile-go-v04-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-26-opentile-go-v04.md`
+- **Port notes:** `docs/superpowers/notes/2026-04-26-svs-reconstruct-port.md` (R4 reference for the deferred work)
+- **Work branch:** `feat/v0.4`
 
 ## Invariants
 
@@ -34,7 +34,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 ## Sample slides
 
-Local slides live in `/sample_files/` (gitignored). v0.3 fixtures:
+Local slides live in `/sample_files/` (gitignored). v0.4 fixture set:
 - `sample_files/svs/CMU-1-Small-Region.svs` (1.9 MB, JPEG) — primary fixture
 - `sample_files/svs/CMU-1.svs` (177 MB, JPEG) — full-slide fixture
 - `sample_files/svs/JP2K-33003-1.svs` (63 MB, JPEG 2000 passthrough) — proves JP2K path works without a codec

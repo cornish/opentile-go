@@ -5,28 +5,31 @@
 Pure-Go port of [opentile](https://github.com/imi-bigpicture/opentile), a library for reading
 tiles from whole-slide imaging (WSI) TIFF files used in digital pathology.
 
-**Status — v0.3**: Polish milestone over v0.2. Aperio SVS (JPEG and JPEG 2000)
-and Hamamatsu NDPI fully supported, with associated images (label, overview,
-thumbnail), BigTIFF, and Hamamatsu's 64-bit offset extension. Public API frozen
-from this point: every name in `go doc ./...` after v0.3 survives v0.3 → v0.4
-unchanged unless explicitly versioned.
+**Status — v0.4**: NDPI completeness milestone over v0.3. Aperio SVS (JPEG
+and JPEG 2000) and Hamamatsu NDPI fully supported, with associated images
+(label, overview, thumbnail, **NDPI Map pages new in v0.4**), BigTIFF, and
+Hamamatsu's 64-bit offset extension. Public API frozen since v0.3.
 
-Output is byte-identical to Python
-[opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 for all SVS tiles
-(including the BigTIFF Grundium variants) and all NDPI interior tiles; a
-documented residual divergence affects the out-of-bounds fill region of NDPI
-edge tiles only — decoded pixels still match Python (see `docs/deferred.md`
-L12; queued for v0.4 investigation).
+Output is **byte-identical to Python
+[opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 on every
+sampled tile and associated image we expose**, across all 7 fixtures
+in the parity oracle. The v0.3 NDPI edge-tile divergence (was tracked
+as L12) was diagnosed as a control-flow bug in our Go-side dispatch and
+fixed in v0.4 — geometry-first dispatch matches Python's
+`__need_fill_background` gate exactly. Same milestone fixed L17 (NDPI
+label cropH passes full image height) and added L6 / R13 (NDPI Map
+page surfacing as `Kind() == "map"`).
 
-The v0.2 review surface (16 limitations + 25+ reviewer suggestions) closed in
-v0.3 except for six entries documented as either permanent design choices
-(L4 missing-MPP, L5 NDPI sniff, L14 Go-side label synthesis) or v0.4
-work-items (L6 NDPI Map pages, L12 edge-tile entropy, L17 NDPI label cropH).
+Three permanent design choices remain documented (L4 missing-MPP, L5
+NDPI sniff, L14 Go-side label synthesis on NDPI). Aperio SVS
+corrupt-edge reconstruct (R4) and JPEG 2000 decode/encode (R9) are
+parked at [#1](https://github.com/cornish/opentile-go/issues/1) until
+a real slide motivates them — none of our local SVS fixtures exhibits
+the corrupt-edge bug, so v0.4 deferred R4/R9 rather than write 12
+tasks of speculative cgo work for a synthetic-fixture-only feature.
 
-v0.4 closes the v0.4 work-items above plus SVS corrupt-edge reconstruct (R4)
-and JPEG 2000 decode/encode (R9). New format support (Philips, 3DHistech,
-OME TIFF) is v0.5+. See [`docs/deferred.md`](./docs/deferred.md) for the full
-roadmap.
+New format support (Philips, 3DHistech, OME TIFF) is v0.5+. See
+[`docs/deferred.md`](./docs/deferred.md) for the full roadmap.
 
 ## Prerequisites
 
