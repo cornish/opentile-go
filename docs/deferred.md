@@ -14,26 +14,30 @@ Format per item:
 
 Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a prior or current milestone).
 
-**v0.4 scope:** finish what we already support — close every real bug
-and parity gap on SVS and NDPI before adding any new format.
+**v0.4 scope (final):** close every real bug and parity gap on SVS and NDPI that we have a fixture to drive. Landed: L12 (NDPI edge-tile OOB fill), L17 (NDPI label cropH), L6 / R13 (NDPI Map pages). Permanent items (L4, L5, L14) stay documented as design choices.
 
-**v0.5+ scope:** new format support (Philips, 3DHistech, OME).
+**v0.5+ scope:** new format support (Philips, 3DHistech, OME), plus
+SVS corrupt-edge reconstruct (R4) + JP2K decode/encode (R9) parked at
+[#1](https://github.com/cornish/opentile-go/issues/1) until a real
+slide motivates the work — none of our local SVS fixtures exhibits
+the corrupt-edge bug, so v0.4 deferred R4/R9 rather than ship 12
+tasks of speculative cgo work.
 
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
 | R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ landed (Batches 2-7, parity verified) |
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
-| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.4 | deferred (was v1.0; promoted as part of SVS-completeness focus) |
+| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
 | R5 | Philips TIFF (sparse-tile filler) | v0.5 | deferred (was v0.4; demoted in favour of v0.4 SVS/NDPI completeness) |
 | R6 | 3DHistech TIFF | v0.5 | deferred |
 | R7 | OME TIFF | v0.5 | deferred |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
-| R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.4 | deferred (was v0.3+; needed by R4) |
+| R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
-| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | deferred (was v0.3+; same milestone as L6) |
+| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
 
 ---
 
