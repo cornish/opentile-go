@@ -216,6 +216,18 @@ gate decides a done-when bar or fix path for subsequent tasks.
 - **Outcome:** byte-deterministic. 5 passes through `Jpeg.fill_frame(src, 1.0)` in Python opentile (which wraps libjpeg-turbo's `tjTransform` with a CUSTOMFILTER that zeros all DCT coefficients, then sets the luma DC at the first block of each MCU) produced identical output bytes for the same source tile (SHA `05c3789cc691d9a207659e250b3fc9c799eca7c5019c4b084a441c4dca9da243`, 2,364 bytes; source: CMU-1-Small-Region.svs L0 tile (0,0), 3,985 bytes).
 - **Consequence:** v0.5 sparse-tile blank-tile output (`internal/jpegturbo.FillFrame`) must byte-match Python opentile. Tasks 5 / 10 enforce byte-equality; the alternative pixel-equivalent fallback is not needed.
 
+#### Task 3 — DICOM XML schema audit
+
+- **Date:** 2026-04-26
+- **Outcome:** the 11 attributes in upstream's TAGS list are all extractable from our 4 fixtures, but **two of them are missing on 3 of 4 fixtures** and three have multi-value formats. Concretely:
+  - **Always present (4/4):** `DICOM_PIXEL_SPACING` (per-level series, count varies 9-11), `DICOM_BITS_ALLOCATED` (8), `DICOM_BITS_STORED` (8), `DICOM_HIGH_BIT` (7), `DICOM_LOSSY_IMAGE_COMPRESSION_METHOD`, `DICOM_LOSSY_IMAGE_COMPRESSION_RATIO`, `DICOM_MANUFACTURER`, `DICOM_PIXEL_REPRESENTATION` (0), `DICOM_SOFTWARE_VERSIONS`.
+  - **Sometimes missing (1/4):** `DICOM_ACQUISITION_DATETIME` (only in Philips-4: `'20160718122300.000000'`), `DICOM_DEVICE_SERIAL_NUMBER` (only in Philips-4: `'FMT0107'`). Parser must return zero/empty for these on the other 3 fixtures.
+  - **Multi-value strings** (space-separated, quoted): `DICOM_SOFTWARE_VERSIONS` (e.g. `'"1.6.6186" "20150402_R48" "4.0.3"'` on Philips-4), `DICOM_LOSSY_IMAGE_COMPRESSION_METHOD` (e.g. `'"PHILIPS_DP_1_0" "PHILIPS_TIFF_1_0"'`), `DICOM_LOSSY_IMAGE_COMPRESSION_RATIO`. Parser strips quotes and splits on whitespace.
+  - **Scanner manufacturer is not always "Philips":** Philips-1 + Philips-3 say `Hamamatsu`, Philips-2 says `3D Histech`, Philips-4 says `PHILIPS`. The format is open — non-Philips scanners can emit Philips TIFF. Surfacing the actual manufacturer string verbatim is correct (no normalisation).
+  - **`DICOM_PIXEL_SPACING` example value:** `'"0.000226891" "0.000226907"'` — quoted, space-separated `(W, H)` in metres-per-pixel. Floats with quotes around each. Parser strips quotes and splits.
+  - **`DICOM_ACQUISITION_DATETIME` format:** `'20160718122300.000000'` — Go layout: `"20060102150405.000000"`. Microseconds are always zero in our one example.
+- **Consequence:** Task 11 (PhilipsTiffMetadata XML parser) handles missing values via Optional / pointer-to-T patterns, splits on whitespace + strips `"` for the multi-value string fields, parses dates with the documented Go layout. No additional disambiguation needed beyond what upstream's parser already encodes.
+
 ### v0.4 gates
 
 ### Task 1 — JP2K determinism gate
