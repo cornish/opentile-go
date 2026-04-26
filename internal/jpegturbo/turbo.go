@@ -31,3 +31,16 @@ type BackgroundLuminance float64
 // DefaultBackgroundLuminance is Python opentile's default: white fill,
 // matching PyTurboJPEG.crop_multiple's background_luminance=1.0 argument.
 const DefaultBackgroundLuminance BackgroundLuminance = 1.0
+
+// CropOpts is an optional argument to CropWithBackgroundLuminanceOpts for
+// callers that already know the post-quantisation luma DC coefficient and
+// want to skip the per-call DQT parse. Typical use: a tiler that processes
+// many tiles from the same source JPEG computes the DC once at level
+// construction (via jpeg.LuminanceToDCCoefficient) and reuses it.
+type CropOpts struct {
+	// DCBackground is the post-quantisation DC coefficient to plant in OOB
+	// luma blocks. If zero, the cgo path falls back to deriving it from
+	// (luminance, source's luma DQT) on every call. Pass non-zero to skip
+	// that work.
+	DCBackground int
+}

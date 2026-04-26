@@ -41,6 +41,21 @@ type stripedImage struct {
 	// for non-edge tiles. Stored so we don't recompute on every Tile call.
 	frameSize opentile.Size
 
+	// dcBackground is the post-quantisation luma DC coefficient to plant
+	// in OOB DCT blocks during edge-tile CropWithBackground calls. Derived
+	// once at construction from the level's shared JPEGHeader DQT (the DC
+	// quant doesn't vary across stripes/tiles of the same level), then
+	// passed via jpegturbo.CropOpts on every edge-tile call. Saves a
+	// per-call DQT byte-scan inside libjpeg-turbo's wrapper.
+	//
+	// Always uses luminance=1.0 (the white-fill default that matches
+	// Python opentile's PyTurboJPEG.crop_multiple). If a future caller
+	// needs a different luminance per tile they must compute the DC
+	// themselves and pass it via CropOpts; the legacy
+	// CropWithBackground / CropWithBackgroundLuminance APIs still derive
+	// per-call.
+	dcBackground int
+
 	// Patched-header cache. Keyed by frame size (the crop-safe frame
 	// geometry varies at the image edges). Populated lazily; an entry
 	// for each unique frame size is built once and reused thereafter.
@@ -81,6 +96,14 @@ func newStripedImage(
 	size := opentile.Size{W: int(iw), H: int(il)}
 	gridW := (size.W + tileSize.W - 1) / tileSize.W
 	gridH := (size.H + tileSize.H - 1) / tileSize.H
+	// Pre-compute the OOB-fill DC coefficient from the level's shared
+	// DQT so edge-tile CropWithBackground calls can skip the per-call
+	// DQT parse. The header carries the DQT verbatim — no need to
+	// assemble a frame to look it up.
+	dc, err := jpeg.LuminanceToDCCoefficient(stripes.JPEGHeader, float64(jpegturbo.DefaultBackgroundLuminance))
+	if err != nil {
+		return nil, fmt.Errorf("ndpi: derive luma DC for level %d: %w", index, err)
+	}
 	return &stripedImage{
 		index:              index,
 		size:               size,
@@ -90,6 +113,7 @@ func newStripedImage(
 		compression:        opentile.CompressionJPEG,
 		reader:             r,
 		frameSize:          maxSize(tileSize, opentile.Size{W: stripes.StripeW, H: stripes.StripeH}),
+		dcBackground:       dc,
 		headersByFrameSize: make(map[opentile.Size][]byte),
 		framesByKey:        make(map[frameKey][]byte),
 	}, nil
@@ -137,7 +161,10 @@ func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 		// OOB region.
 		extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
 		if extendsBeyond {
-			out, err = jpegturbo.CropWithBackground(frame, region)
+			out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
+				frame, region, jpegturbo.DefaultBackgroundLuminance,
+				jpegturbo.CropOpts{DCBackground: l.dcBackground},
+			)
 		}
 		if err != nil {
 			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
