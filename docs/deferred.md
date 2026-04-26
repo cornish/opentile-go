@@ -232,6 +232,33 @@ locks the change in.
 
 ---
 
-## 6. Triage process
+## 6. v0.4 gate outcomes (live)
+
+Tasks 1-4 of the v0.4 plan are JIT verification gates that decide
+done-when bars and fix paths for the rest of the milestone. Outcomes
+recorded here as they land.
+
+### Task 1 — JP2K determinism gate
+
+- **Date:** 2026-04-26
+- **Outcome:** byte-deterministic. Two passes through
+  `imagecodecs.jpeg2k_encode` with the upstream Python opentile
+  options (level=80, codecformat=J2K, colorspace=SRGB, mct=True,
+  reversible=False, bitspersample=8) on the JP2K-33003-1.svs L0
+  tile (0,0) produced identical bytes:
+  ```
+  pass1 sha256=5862056ca6dcbd079403c1f5debd36ce104afe9bbb2fd56ffc5fec2ca7f82080 len=58366
+  pass2 sha256=5862056ca6dcbd079403c1f5debd36ce104afe9bbb2fd56ffc5fec2ca7f82080 len=58366
+  identical=True
+  pixel_equal=True
+  ```
+- **Consequence:** v0.4 R4 (SVS corrupt-edge reconstruct) targets
+  **byte-parity** with Python opentile. Tasks 12 / 16 enforce
+  byte-equality assertions; the alternative pixel-equivalent fallback
+  is not needed.
+
+---
+
+## 7. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.
