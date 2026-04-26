@@ -159,6 +159,13 @@ func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 		// (this can happen when the image dimensions are not a multiple
 		// of tileSize). Fall through to CropWithBackground to fill the
 		// OOB region.
+		//
+		// The geometry-first inversion suggested by N-10 is not
+		// byte-equivalent in this codebase: extendsBeyond is broader
+		// than "Crop errored," and routing through CropWithBackground
+		// when Crop would have succeeded produces different bytes
+		// (different libjpeg-turbo transform path). The fixtures encode
+		// the try-Crop-then-fall-through outputs.
 		extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
 		if extendsBeyond {
 			out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
