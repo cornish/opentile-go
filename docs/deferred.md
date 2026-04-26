@@ -55,10 +55,12 @@ completeness milestone). Items closed during v0.3 are listed in §5.
 - **Severity:** Permanent — design decision. NDPI files share classic TIFF magic 42 with no header-level distinguisher, so something has to peek to dispatch the NDPI-layout walker. The peek is encapsulated in `sniffNDPI` (see N-9 godoc on that function).
 - **Detail:** `internal/tiff/file.go` reads tag 65420 (Hamamatsu NDPI FileFormat) in the first IFD to decide whether to dispatch the NDPI-layout IFD walker. A cleaner split would have `tiff.Open` expose a generic "layout" hint and let format packages drive selection — but that requires callers to know NDPI exists, which inverts the dependency. Revisit only if adding Philips/OME forces a more general dialect-detection scheme.
 
-### L6 — NDPI Map pages (`mag == -2.0`) are silently dropped
+### L6 — NDPI Map pages (`mag == -2.0`) are silently dropped  *(resolved in v0.4)*
 - **Source:** NDPI classifier port (post-Batch 4)
-- **Severity:** v0.4 — paired with R13. Needs a `"map"` `AssociatedImage` Kind plus a real test fixture (a Hamamatsu slide with a Map page).
-- **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image.
+- **Severity:** Fixed on `feat/v0.4` (Tasks 6-8) together with roadmap item R13. NDPI Map pages now surface as `AssociatedImage` entries with `Kind() == "map"`. OS-2.ndpi page 11 (580x198, uncompressed grayscale) and Hamamatsu-1.ndpi page 7 (600x205) are both exposed; CMU-1.ndpi unchanged (no Map page).
+- **Original detail:** `classifyPage` returned `pageMap` for Magnification tag value -2.0, and `Factory.Open` silently dropped that kind. tifffile's `_series_ndpi` (`tifffile.py:5049-5072`) had always classified these as `series.name == 'Map'`, but upstream Python opentile chose not to surface them — `NdpiTiler` returns False from `_is_label_series` and `_is_thumbnail_series`, leaving Map pages with no predicate and no `tiler.maps` property to reach them.
+
+  v0.4 fix is a deliberate Go-side extension: `formats/ndpi/mappage.go` adds a `mapPage` struct that mirrors `overviewImage` but uses the page's actual TIFF Compression tag (Map pages are uncompressed 8-bit grayscale on every Hamamatsu fixture we have, NOT JPEG like the other associated images). Downstream consumers decoding a Map page need to expect a single-channel image. Parallels the existing v0.2 NDPI synthesised label (L14).
 
 ### L12 — NDPI edge-tile OOB fill (control-flow bug)  *(resolved in v0.4)*
 - **Source:** NDPI v0.2 architectural rewrite (feat/v0.2); root cause re-diagnosed in v0.4 Task 3 (2026-04-26).

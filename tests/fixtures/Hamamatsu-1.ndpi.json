@@ -377,6 +377,15 @@
       "sha256": "f29f224ed45e384a17ab1768354e02db3c22767d36923843557c7054771b90e8"
     },
     {
+      "kind": "map",
+      "size": [
+        600,
+        205
+      ],
+      "compression": "none",
+      "sha256": "611252f6b6d9a74f97f8be31b37bf2f616d20f421e6e7e86a5317022375294e4"
+    },
+    {
       "kind": "label",
       "size": [
         640,

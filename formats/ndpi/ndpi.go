@@ -128,7 +128,15 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 			overview = ov
 			associated = append(associated, ov)
 		case pageMap:
-			// v0.2: Map pages are skipped. v0.3+ may expose them as associated.
+			// L6 / R13 (v0.4): surface Map pages as AssociatedImage with
+			// Kind() == "map". Deliberate Go-side extension — Python
+			// opentile 0.20.0 does not expose Map pages. See
+			// formats/ndpi/mappage.go for the rationale.
+			mp, err := newMapPage(p, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("ndpi: map page: %w", err)
+			}
+			associated = append(associated, mp)
 		case pageUnknown:
 			// Skip pages with no magnification tag; they're malformed or not
 			// part of the standard NDPI layout.

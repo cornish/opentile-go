@@ -47833,6 +47833,15 @@
       "sha256": "c0027e3fcebdea13ad5b6a87ed0dc65e2ddc62782201c7c4a6f9c84812902d5d"
     },
     {
+      "kind": "map",
+      "size": [
+        580,
+        198
+      ],
+      "compression": "none",
+      "sha256": "27a097cf81b07ba09bcd1ce481d780fed4fe1e3cf590db0986deaf7c4b1d86c2"
+    },
+    {
       "kind": "label",
       "size": [
         344,
