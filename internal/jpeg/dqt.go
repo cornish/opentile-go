@@ -1,6 +1,8 @@
 package jpeg
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 )
@@ -27,8 +29,78 @@ func LumaDCQuant(src []byte) (int, error) {
 }
 
 // dcQuantForTable finds the DQT with the given table index and returns its
-// DC (first) coefficient.
+// DC (first) coefficient. Tries a structural Scan-based walk first (which
+// cannot conflate FF DB bytes inside other segments' payloads with real
+// DQT markers) and falls back to the historical byte-scan if Scan can't
+// parse the input — e.g., callers that pass a partial header without SOI
+// or with non-standard prefix bytes.
 func dcQuantForTable(src []byte, tableIdx int) (int, error) {
+	if dc, ok := dcQuantViaScan(src, tableIdx); ok {
+		return dc, nil
+	}
+	return dcQuantViaByteScan(src, tableIdx)
+}
+
+// dcQuantViaScan walks src as a JPEG marker sequence and returns the DC
+// coefficient for the first DQT entry whose table ID matches tableIdx.
+// Returns (0, false) if the structural walk fails for any reason —
+// callers should fall back to the byte-scan path.
+//
+// A single DQT segment can pack multiple tables back-to-back; this
+// function walks through them inside one segment payload before moving
+// on to the next DQT segment. Mirrors Python opentile's __find_dqt
+// outer loop, which also handles multiple-table-per-segment payloads
+// (turbojpeg.py:866-938).
+func dcQuantViaScan(src []byte, tableIdx int) (int, bool) {
+	br := bufio.NewReader(bytes.NewReader(src))
+	for seg, err := range Scan(br) {
+		if err != nil {
+			return 0, false
+		}
+		if seg.Marker != DQT {
+			if seg.Marker == SOS {
+				// Past the structural region with no match.
+				return 0, false
+			}
+			continue
+		}
+		// Walk the segment's tables. Each table starts with a precision/id
+		// byte followed by 64 (8-bit) or 128 (16-bit) coefficient bytes.
+		p := seg.Payload
+		for len(p) >= 1 {
+			pid := p[0]
+			precision := int(pid >> 4)
+			id := int(pid & 0x0F)
+			var tableLen int
+			switch precision {
+			case 0:
+				tableLen = 1 + 64
+			case 1:
+				tableLen = 1 + 128
+			default:
+				return 0, false
+			}
+			if len(p) < tableLen {
+				return 0, false
+			}
+			if id == tableIdx {
+				switch precision {
+				case 0:
+					return int(int8(p[1])), true
+				case 1:
+					return int(int16(binary.BigEndian.Uint16(p[1:3]))), true
+				}
+			}
+			p = p[tableLen:]
+		}
+	}
+	return 0, false
+}
+
+// dcQuantViaByteScan is the original v0.2 byte-scan implementation, kept
+// as a fallback when Scan fails. Matches Python's bytes.find('\xff\xdb')
+// strategy exactly.
+func dcQuantViaByteScan(src []byte, tableIdx int) (int, error) {
 	pos := 0
 	for pos < len(src)-1 {
 		// Naive byte-scan for FF DB, matching Python's bytes.find('\xff\xdb').
