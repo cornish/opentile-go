@@ -60,11 +60,9 @@ completeness milestone). Items closed during v0.3 are listed in §5.
 - **Severity:** v0.4 — paired with R13. Needs a `"map"` `AssociatedImage` Kind plus a real test fixture (a Hamamatsu slide with a Map page).
 - **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image.
 
-### L12 — NDPI edge-tile OOB fill is mid-gray, not white (control-flow bug)
+### L12 — NDPI edge-tile OOB fill (control-flow bug)  *(resolved in v0.4)*
 - **Source:** NDPI v0.2 architectural rewrite (feat/v0.2); root cause re-diagnosed in v0.4 Task 3 (2026-04-26).
-- **Severity:** v0.4 — control-flow fix in `formats/ndpi/striped.go::Tile`. Not a libjpeg-turbo bug, not a CUSTOMFILTER non-determinism, not an entropy-encoding subtlety. The v0.2 + v0.3 framing was wrong on every count; v0.4 Task 3 (`docs/superpowers/plans/2026-04-26-opentile-go-v04.md` §6) records the corrected diagnosis and Task 9 has the fix.
-
-  ⚠️ **The v0.3 `tests/fixtures/OS-2.ndpi.json` and `tests/fixtures/Hamamatsu-1.ndpi.json` fixtures encode the BUGGY mid-gray output.** `TestSlideParity` confirms our (wrong) bytes against committed (wrong) fixture hashes; it does NOT confirm correctness. Until v0.4 Task 9 lands, the parity oracle's NDPI edge-tile `t.Logf` lines are not "documented harmless divergences" — they are real correctness failures masked by the wrong fixtures. Task 9 regenerates these fixtures and removes the parity-oracle carve-out.
+- **Severity:** Fixed on `feat/v0.4` (Task 9). `formats/ndpi/striped.go::Tile` now dispatches geometry-first against image-size — matching Python's `turbojpeg.py:839-863` `__need_fill_background` gate exactly. CMU-1 / OS-2 / Hamamatsu-1 NDPI fixtures regenerated; parity oracle is byte-equal to Python opentile on every NDPI tile (the L12 `t.Logf` carve-out in `tests/oracle/parity_test.go` was removed in the same commit).
 
 - **Detail:** Python opentile (`turbojpeg.py:839-863`'s `__need_fill_background`) decides geometry-first: route through CUSTOMFILTER iff `crop_region.x + crop_region.w > image_size[0]` OR `crop_region.y + crop_region.h > image_size[1]`, AND `background_luminance != 0.5`. No try-Crop-first pattern.
 
@@ -72,10 +70,7 @@ completeness milestone). Items closed during v0.3 are listed in §5.
 
   Verified on OS-2.ndpi L5 tile (3,0): in-image pixels (cols 0-895) match Python byte-for-byte; OOB strip (cols 896-1023) is mid-gray on Go, white on Python. Both sides individually byte-deterministic; the divergence is purely between languages and exclusively in the OOB region.
 
-  The v0.3 T30 task (`acc2282`) attempted this fix but reverted because the v0.3 fixtures already encoded the buggy mid-gray output — the "regression" was actually the correct behaviour returning. v0.4 Task 9 lands the fix and regenerates the fixtures together.
-  Alternatively, submit an upstream issue to libjpeg-turbo asking
-  whether CUSTOMFILTER is expected to be deterministic across two
-  invocations with identical inputs.
+  The v0.3 T30 task (`acc2282`) attempted this fix but reverted because the v0.3 fixtures already encoded the buggy mid-gray output — the "regression" was actually the correct behaviour returning. v0.4 Task 9 landed the fix and regenerated CMU-1 / OS-2 / Hamamatsu-1 NDPI fixtures together; parity oracle is byte-equal to Python opentile on every NDPI tile.
 
 ### L14 — NDPI label synthesis is Go-specific; Python opentile does not expose NDPI labels
 - **Source:** Batch 7 parity oracle extension
@@ -266,6 +261,8 @@ recorded here as they land.
   3. Regenerate the OS-2 / Hamamatsu-1 NDPI fixtures with the corrected output (the v0.3 fixtures currently encode the wrong mid-gray fill on edge tiles). Confirm new fixtures byte-match Python via the parity oracle.
 
   No C-only repro needed; no upstream-bug ticket; no L12 → Permanent demotion.
+
+  **Status (2026-04-26): fixed.** Task 9 landed the dispatch change and regen'd CMU-1 / OS-2 / Hamamatsu-1 NDPI fixtures. Parity oracle removes the L12 carve-out in the same commit; every NDPI tile is now byte-equal to Python opentile.
 
 ### Task 2 — NDPI Map fixture audit
 

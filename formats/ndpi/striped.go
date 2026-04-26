@@ -153,29 +153,34 @@ func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 	// SOF, as in the NDPI file) and diverges from upstream byte-for-byte
 	// on interior tiles at smaller pyramid levels.
 	region := jpegturbo.Region{X: left, Y: top, Width: l.tileSize.W, Height: l.tileSize.H}
-	out, err := jpegturbo.Crop(frame, region)
+
+	// Dispatch matches Python's __need_fill_background gate at
+	// turbojpeg.py:839-863: route through CropWithBackground iff the
+	// tile crosses the image edge in IMAGE coordinates. The pre-v0.4
+	// "try Crop first, fall through on error" pattern silently
+	// returned mid-gray OOB fills (libjpeg-turbo's default DC=0) on
+	// tiles where Crop succeeded despite extending past the image —
+	// the cached white-fill DC was never planted because the fall-
+	// through path never fired. See L12 in docs/deferred.md and v0.4
+	// Task 9 for the full reproduction. The v0.3 acc2282 commit's
+	// "geometry-first inversion is unsafe" claim was wrong: the
+	// inversion is safe — the previous attempt used assembled-frame
+	// size as the comparator instead of image size, and the v0.3
+	// fixtures had already encoded the buggy mid-gray output.
+	tileXOrigin := x * l.tileSize.W
+	tileYOrigin := y * l.tileSize.H
+	extendsBeyond := tileXOrigin+l.tileSize.W > l.size.W || tileYOrigin+l.tileSize.H > l.size.H
+	var out []byte
+	if extendsBeyond {
+		out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
+			frame, region, jpegturbo.DefaultBackgroundLuminance,
+			jpegturbo.CropOpts{DCBackground: l.dcBackground},
+		)
+	} else {
+		out, err = jpegturbo.Crop(frame, region)
+	}
 	if err != nil {
-		// Edge tile whose crop would extend past the assembled frame
-		// (this can happen when the image dimensions are not a multiple
-		// of tileSize). Fall through to CropWithBackground to fill the
-		// OOB region.
-		//
-		// The geometry-first inversion suggested by N-10 is not
-		// byte-equivalent in this codebase: extendsBeyond is broader
-		// than "Crop errored," and routing through CropWithBackground
-		// when Crop would have succeeded produces different bytes
-		// (different libjpeg-turbo transform path). The fixtures encode
-		// the try-Crop-then-fall-through outputs.
-		extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
-		if extendsBeyond {
-			out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
-				frame, region, jpegturbo.DefaultBackgroundLuminance,
-				jpegturbo.CropOpts{DCBackground: l.dcBackground},
-			)
-		}
-		if err != nil {
-			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
-		}
+		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 	}
 	return out, nil
 }
