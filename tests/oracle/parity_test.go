@@ -22,6 +22,7 @@ var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
 	"CMU-1.svs",
 	"JP2K-33003-1.svs",
+	"scan_620_.svs",
 	"svs_40x_bigtiff.svs",
 	"CMU-1.ndpi",
 	"OS-2.ndpi",
