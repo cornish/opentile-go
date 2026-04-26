@@ -60,42 +60,19 @@ completeness milestone). Items closed during v0.3 are listed in §5.
 - **Severity:** v0.4 — paired with R13. Needs a `"map"` `AssociatedImage` Kind plus a real test fixture (a Hamamatsu slide with a Map page).
 - **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image.
 
-### L12 — NDPI edge-tile entropy-encoding divergence
-- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2)
-- **Severity:** v0.4 — tjTransform CUSTOMFILTER non-determinism. Pixel output is visually equivalent but a handful of bytes per edge tile differ between Go and Python; root cause not pinned down. Investigating likely needs a minimal C-side reproduction to isolate libjpeg-turbo state.
-- **Detail:** `internal/jpegturbo.CropWithBackground` now uses the
-  canonical PyTurboJPEG white-fill algorithm: `internal/jpeg.LumaDCQuant`
-  parses the source's DQT table 0, `LuminanceToDCCoefficient` computes
-  `round((luminance * 2047 - 1024) / dc_quant)` (banker's rounding), and
-  our CUSTOMFILTER callback plants the resulting DC coefficient in
-  OOB luma blocks — identical math to
-  `turbojpeg.py:__map_luminance_to_dc_dct_coefficient`. DC values
-  verified to match Python byte-for-byte on CMU-1.ndpi L0 (dq=6 →
-  dc=170 for luminance=1.0).
+### L12 — NDPI edge-tile OOB fill is mid-gray, not white (control-flow bug)
+- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2); root cause re-diagnosed in v0.4 Task 3 (2026-04-26).
+- **Severity:** v0.4 — control-flow fix in `formats/ndpi/striped.go::Tile`. Not a libjpeg-turbo bug, not a CUSTOMFILTER non-determinism, not an entropy-encoding subtlety. The v0.2 + v0.3 framing was wrong on every count; v0.4 Task 3 (`docs/superpowers/plans/2026-04-26-opentile-go-v04.md` §6) records the corrected diagnosis and Task 9 has the fix.
 
-  Despite matching DC inputs, NDPI edge tiles still show small
-  byte-level differences vs Python opentile — typically a single byte
-  in the entropy stream for CMU-1.ndpi, up to ~130 bytes for OS-2.ndpi.
-  The divergence propagates through JPEG's differential DC encoding so
-  decoded pixels differ visibly in the OOB region only. Root cause is
-  a subtle tjTransform / libjpeg-turbo non-determinism we haven't
-  pinned down: same flags (`TJXOPT_PERFECT | TJXOPT_CROP`), same
-  CUSTOMFILTER output, different entropy encoding. Possibly related to
-  MCU boundary handling at sub-MCU-aligned image edges or DC predictor
-  state across the callback boundary.
+  ⚠️ **The v0.3 `tests/fixtures/OS-2.ndpi.json` and `tests/fixtures/Hamamatsu-1.ndpi.json` fixtures encode the BUGGY mid-gray output.** `TestSlideParity` confirms our (wrong) bytes against committed (wrong) fixture hashes; it does NOT confirm correctness. Until v0.4 Task 9 lands, the parity oracle's NDPI edge-tile `t.Logf` lines are not "documented harmless divergences" — they are real correctness failures masked by the wrong fixtures. Task 9 regenerates these fixtures and removes the parity-oracle carve-out.
 
-  Parity-visible area (inside the image): byte-identical. Only the
-  OOB background region diverges.
+- **Detail:** Python opentile (`turbojpeg.py:839-863`'s `__need_fill_background`) decides geometry-first: route through CUSTOMFILTER iff `crop_region.x + crop_region.w > image_size[0]` OR `crop_region.y + crop_region.h > image_size[1]`, AND `background_luminance != 0.5`. No try-Crop-first pattern.
 
-  *Why this is the v0.2 behavior:* unblocks parity-oracle green on all
-  5 sample slides; chasing the remaining divergence would require
-  in-depth libjpeg-turbo source instrumentation. Parity test downgrades
-  NDPI-only edge-tile mismatches to `t.Log`.
+  Our `striped.go::Tile` tries plain `Crop` first, falls through to `CropWithBackgroundLuminanceOpts` only when `Crop` errors. For OS-2 / Hamamatsu-1 edge tiles where `Crop` succeeds despite the tile extending past the image (libjpeg-turbo accepts the MCU-aligned geometry), we silently return `Crop`'s default OOB fill — DC=0 → mid-gray (RGB 128,128,128). Python plants DC=170 → white (RGB 255,255,255).
 
-  *How to fix in v0.3+:* instrument tjTransform to dump the coefficient
-  buffer state before and after the CUSTOMFILTER callback on both
-  Python and Go sides for a known-diverging tile, diff the buffers,
-  identify the single coefficient that differs, trace backward.
+  Verified on OS-2.ndpi L5 tile (3,0): in-image pixels (cols 0-895) match Python byte-for-byte; OOB strip (cols 896-1023) is mid-gray on Go, white on Python. Both sides individually byte-deterministic; the divergence is purely between languages and exclusively in the OOB region.
+
+  The v0.3 T30 task (`acc2282`) attempted this fix but reverted because the v0.3 fixtures already encoded the buggy mid-gray output — the "regression" was actually the correct behaviour returning. v0.4 Task 9 lands the fix and regenerates the fixtures together.
   Alternatively, submit an upstream issue to libjpeg-turbo asking
   whether CUSTOMFILTER is expected to be deterministic across two
   invocations with identical inputs.
