@@ -91,6 +91,18 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 	}
 	for i, lvl := range levels {
 		exp := fix.Levels[i]
+		if lvl.Index() != i {
+			t.Errorf("level %d: Index()=%d, want %d", i, lvl.Index(), i)
+		}
+		if lvl.PyramidIndex() != exp.PyramidIdx {
+			t.Errorf("level %d: PyramidIndex()=%d, want %d", i, lvl.PyramidIndex(), exp.PyramidIdx)
+		}
+		if mpp := lvl.MPP(); mpp.W < 0 || mpp.H < 0 {
+			t.Errorf("level %d: MPP negative %v", i, mpp)
+		}
+		if fp := lvl.FocalPlane(); fp < 0 {
+			t.Errorf("level %d: FocalPlane negative %v", i, fp)
+		}
 		if lvl.Size().W != exp.Size[0] || lvl.Size().H != exp.Size[1] {
 			t.Errorf("level %d size: got %v, want %v", i, lvl.Size(), exp.Size)
 		}
@@ -126,6 +138,13 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 				}
 			}
 		}
+	}
+
+	// ICCProfile: a non-nil slice must have non-zero length. Some slides
+	// legitimately return nil (no embedded profile); only catch the broken
+	// case where the tag was found but empty.
+	if icc := tiler.ICCProfile(); icc != nil && len(icc) == 0 {
+		t.Error("ICCProfile non-nil but empty")
 	}
 
 	// Sampled-walk mode: walk only deliberately-chosen positions.
