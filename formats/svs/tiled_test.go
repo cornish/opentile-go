@@ -3,6 +3,7 @@ package svs
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"testing"
@@ -528,5 +529,53 @@ func TestTiffCompressionToOpentileUnknown(t *testing.T) {
 		if got := tiffCompressionToOpentile(code); got != opentile.CompressionUnknown {
 			t.Errorf("code %d: got %v, want CompressionUnknown", code, got)
 		}
+	}
+}
+
+// patchSVSCompression rewrites the Compression tag's inline value in a
+// buffer produced by buildSVSTIFF. Layout (LE): header (8) + IFD count
+// (2) + ImageWidth entry (12) + ImageLength entry (12) + Compression
+// entry (12). Within the Compression entry the inline value-or-offset
+// cell starts at byte offset 8 (after tag+type+count = 2+2+4). Total:
+// 8 + 2 + 12 + 12 + 8 = 42.
+func patchSVSCompression(t *testing.T, data []byte, code uint16) {
+	t.Helper()
+	const compressionValueOffset = 42
+	binary.LittleEndian.PutUint16(data[compressionValueOffset:], code)
+}
+
+// TestSVSTileReturnsRawForUnknownCompression closes L3: an SVS page with
+// an unrecognized Compression tag must still open, advertise the level
+// as CompressionUnknown, and return raw tile bytes verbatim from Tile()
+// (passthrough — we don't know how to splice tables for an unknown codec
+// and we don't pretend to).
+func TestSVSTileReturnsRawForUnknownCompression(t *testing.T) {
+	data, tiles := buildSVSTIFF(t, 16, 16, 2, 1, "")
+	patchSVSCompression(t, data, 999)
+	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("tiff.Open: %v", err)
+	}
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("svs.New().Open: %v", err)
+	}
+	defer tiler.Close()
+
+	lvl, err := tiler.Level(0)
+	if err != nil {
+		t.Fatalf("Level(0): %v", err)
+	}
+	if got := lvl.Compression(); got != opentile.CompressionUnknown {
+		t.Errorf("Compression: got %v, want CompressionUnknown", got)
+	}
+	b, err := lvl.Tile(0, 0)
+	if err != nil {
+		t.Fatalf("Tile(0,0): %v", err)
+	}
+	if !bytes.Equal(b, tiles[0]) {
+		t.Errorf("Tile(0,0): unknown compression should passthrough; got %d bytes (first 8: %x), want %d (first 8: %x)",
+			len(b), b[:min(8, len(b))], len(tiles[0]), tiles[0][:min(8, len(tiles[0]))])
 	}
 }
