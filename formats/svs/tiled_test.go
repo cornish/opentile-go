@@ -496,3 +496,37 @@ func TestMetadataOfHandlesCyclicUnwrap(t *testing.T) {
 		t.Fatal("MetadataOf did not terminate on a cyclic wrapper")
 	}
 }
+
+// TestTiffCompressionToOpentileKnown locks in the documented mapping for
+// every TIFF compression code SVS slides actually produce. v0.1 had no
+// direct test for this — failures would only surface as wrong Compression()
+// strings on real fixtures.
+func TestTiffCompressionToOpentileKnown(t *testing.T) {
+	cases := []struct {
+		code uint32
+		want opentile.Compression
+	}{
+		{1, opentile.CompressionNone},
+		{5, opentile.CompressionLZW},
+		{7, opentile.CompressionJPEG},
+		{33003, opentile.CompressionJP2K}, // APERIO_JP2000_YCBC
+		{33005, opentile.CompressionJP2K}, // APERIO_JP2000_RGB
+	}
+	for _, c := range cases {
+		if got := tiffCompressionToOpentile(c.code); got != c.want {
+			t.Errorf("code %d: got %v, want %v", c.code, got, c.want)
+		}
+	}
+}
+
+// TestTiffCompressionToOpentileUnknown locks in that any code outside the
+// supported set falls through to CompressionUnknown rather than panicking
+// or silently mapping to a wrong codec. Required by the L3 limitation
+// (CompressionUnknown was previously untested).
+func TestTiffCompressionToOpentileUnknown(t *testing.T) {
+	for _, code := range []uint32{0, 2, 3, 4, 6, 8, 32773, 999, 65535} {
+		if got := tiffCompressionToOpentile(code); got != opentile.CompressionUnknown {
+			t.Errorf("code %d: got %v, want CompressionUnknown", code, got)
+		}
+	}
+}
