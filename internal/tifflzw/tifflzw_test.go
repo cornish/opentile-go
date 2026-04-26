@@ -57,3 +57,41 @@ func TestRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+
+// TestRoundTripLSB exercises the LSB byte-order branch of writer/reader.
+// Vendored from golang.org/x/image/tiff/lzw alongside MSB; opentile only
+// uses MSB (TIFF), but keeping LSB working preserves the upstream contract
+// and is a one-test gate against accidentally breaking it.
+func TestRoundTripLSB(t *testing.T) {
+	cases := [][]byte{
+		[]byte("hello LSB world"),
+		bytes.Repeat([]byte{0x42}, 512),
+		func() []byte {
+			out := make([]byte, 2048)
+			for i := range out {
+				out[i] = byte(i * 3)
+			}
+			return out
+		}(),
+	}
+	for i, data := range cases {
+		var buf bytes.Buffer
+		w := NewWriter(&buf, LSB, 8)
+		if _, err := w.Write(data); err != nil {
+			t.Fatalf("case %d write: %v", i, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("case %d close: %v", i, err)
+		}
+		r := NewReader(bytes.NewReader(buf.Bytes()), LSB, 8)
+		got, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatalf("case %d read: %v", i, err)
+		}
+		if !bytes.Equal(got, data) {
+			t.Errorf("case %d: round-trip mismatch (got %d bytes, want %d)", i, len(got), len(data))
+		}
+	}
+}
