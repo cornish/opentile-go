@@ -93,32 +93,15 @@ completeness milestone). Items closed during v0.3 are listed in §5.
   in `formats/ndpi/ndpi.go` Open() so NDPI associated is overview-only.
   Or keep it and add a README note calling it out.
 
-### L17 — NDPI label cropH rounded to MCU multiple, not full image height
+### L17 — NDPI label cropH rounded to MCU multiple, not full image height  *(resolved in v0.4)*
 
-- **Source:** L7 fix in v0.3 (Task 10) surfaced the divergence
-- **Severity:** v0.4 — needs the `CropWithBackground` ragged-height path (luminance + chroma DC math threaded through) before this can land cleanly. The OS-2 and Hamamatsu-1 fixtures regenerate once the fix lands.
-- **Detail:** `formats/ndpi.newLabelImage` computes `cropH` as
-  `(overview.size.H / mcuH) * mcuH` (rounded down to a whole-MCU multiple)
-  to satisfy libjpeg-turbo's `TJXOPT_PERFECT` requirement that crops are
-  MCU-aligned. Python opentile's `crop_multiple` tolerates ragged heights
-  via its CUSTOMFILTER. Result: when an overview's height is not a multiple
-  of its MCU height, our Go label is one MCU row shorter than Python's.
+- **Source:** L7 fix in v0.3 (Task 10) surfaced the divergence.
+- **Severity:** Fixed on `feat/v0.4` (Task 5). `formats/ndpi/associated.go::newLabelImage` now passes the FULL image height to `jpegturbo.Crop` (not the MCU-floored height) — matching Python's `_crop_parameters[3] = page.shape[0]` at `opentile/formats/ndpi/ndpi_image.py:144`. libjpeg-turbo's TJXOPT_PERFECT accepts the partial last MCU row when the crop ends exactly at the image edge; PyTurboJPEG's `__need_fill_background` gate (turbojpeg.py:839-863) returns False for label crops because `crop_y + crop_h == image_h` (not `>`), so Python takes the plain-crop path, not the CUSTOMFILTER path.
+- **Original detail:** Pre-v0.4 `formats/ndpi.newLabelImage` rounded the height to `(overview.size.H / mcuH) * mcuH`, dropping the last partial-MCU row. Visible on OS-2.ndpi (344x392 Go vs 344x396 Python) and Hamamatsu-1.ndpi (640x728 Go vs 640x732 Python). CMU-1.ndpi (352x408) was unaffected because its image height is divisible by mcuH.
 
-  Visible on OS-2.ndpi (344x392 Go vs 344x396 Python) and Hamamatsu-1.ndpi
-  (640x728 Go vs 640x732 Python). CMU-1.ndpi (352x408) is unaffected because
-  its image height is divisible by mcuH.
+  The pre-v0.4 deferred entry steered the fix through `CropWithBackground` "with luminance=1.0 and chroma DC=0 (matches Python)." That advice was wrong — based on an incomplete reading of upstream. Python doesn't route label crops through CUSTOMFILTER; it just passes the un-rounded image height to plain `tjTransform`, which handles the partial-MCU edge case natively. The fix turned out to be a one-line change to `cropH` plus dropping the now-unused `mcuH` argument.
 
-  *Why this is the v0.3 behavior:* fixing it cleanly requires routing
-  ragged-height label crops through `CropWithBackground` (with the white-
-  fill DC math from Theme 4) rather than the bare `Crop` path. That's a
-  multi-step change orthogonal to L7's MCU-detection fix. v0.3 ships with
-  the new MCU detection (more correct: CMU-1 now matches Python byte-for-
-  byte) and documents this remaining gap.
-
-  *How to fix in v0.4:* detect ragged height in `newLabelImage`, route
-  through `CropWithBackground` with luminance=1.0 and chroma DC=0 (matches
-  Python). The OS-2 and Hamamatsu-1 fixtures will need re-regeneration
-  once the fix lands.
+  **Status (2026-04-26):** fixed. OS-2.ndpi and Hamamatsu-1.ndpi NDPI fixtures regenerated. Lesson re-learned: confirm upstream's actual code path before designing the fix — the universal Step 0 in v0.4 plan tasks exists for cases like this.
 
 ---
 

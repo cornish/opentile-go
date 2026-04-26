@@ -143,11 +143,14 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		if err != nil {
 			return nil, fmt.Errorf("ndpi: read overview for MCU detection: %w", err)
 		}
-		mcuW, mcuH, err := jpeg.MCUSizeOf(ovBytes)
+		mcuW, _, err := jpeg.MCUSizeOf(ovBytes)
 		if err != nil {
 			return nil, fmt.Errorf("ndpi: derive overview MCU: %w", err)
 		}
-		associated = append(associated, newLabelImage(overview, 0.3, mcuW, mcuH))
+		// mcuH is no longer needed after the L17 fix — newLabelImage now
+		// uses the full image height, not an MCU-floored height. See
+		// formats/ndpi/associated.go::newLabelImage for the rule.
+		associated = append(associated, newLabelImage(overview, 0.3, mcuW))
 	}
 	return &tiler{md: md, levels: levels, associated: associated}, nil
 }
