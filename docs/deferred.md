@@ -193,11 +193,24 @@ the test that locks the change in.
 
 ---
 
-## 7. v0.4 gate outcomes (live)
+## 7. Gate outcomes (live)
 
-Tasks 1-4 of the v0.4 plan are JIT verification gates that decide
-done-when bars and fix paths for the rest of the milestone. Outcomes
-recorded here as they land.
+JIT verification gate outcomes from the v0.4 and v0.5 plans. Each
+gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.5 gates
+
+#### Task 1 — `is_philips` detection gate
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Tifffile's detection rule (`software[:10] == 'Philips DP'` AND `description[-16:].strip().endswith('</DataObject>')`) matches all 4 of our local Philips fixtures and produces zero false-positives across the other 13 fixtures (5 SVS, 3 NDPI, 2 OME, 2 Ventana .bif, 1 generic TIFF). Software values: `'Philips DP v1.0'` on every fixture; description tails: `'...</Attribute>\n</DataObject>'`. Non-Philips comparators that confirm the rule's specificity:
+  - OME TIFF: `software='OME Bio-Formats 6.0.0-rc1'`, description tail `'</OME>'` — fails both clauses.
+  - SVS: `software=None` — fails the prefix clause.
+  - NDPI: `software='NDP.scan'` etc. — fails the prefix clause.
+  - Ventana .bif: `software=None` or `'ScanOutputManager 1.1.0.15854'` — fails the prefix clause.
+- **Consequence:** the v0.5 Philips factory's `Supports()` predicate ports the rule verbatim. No additional disambiguation needed.
+
+### v0.4 gates
 
 ### Task 1 — JP2K determinism gate
 
