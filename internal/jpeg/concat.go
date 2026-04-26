@@ -142,8 +142,11 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		accumH += sofI.Height // widths are expected equal across fragments
 
 		// Find SOS in this fragment and append from scan_start onwards.
-		sosPos := bytes.Index(frag, []byte{0xFF, 0xDA})
-		if sosPos < 0 {
+		sosPos, ok, err := findMarkerOffset(frag, SOS)
+		if err != nil {
+			return nil, fmt.Errorf("fragment %d: %w", i, err)
+		}
+		if !ok {
 			return nil, fmt.Errorf("%w: fragment %d: SOS not found", ErrBadJPEG, i)
 		}
 		if sosPos+4 > len(frag) {
@@ -180,8 +183,11 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 			combined = append(combined, adobeAPP14...)
 			insert = combined
 		}
-		sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
-		if sosPos < 0 {
+		sosPos, ok, err := findMarkerOffset(frame, SOS)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("%w: SOS not found in assembled frame", ErrBadJPEG)
 		}
 		spliced := make([]byte, 0, len(frame)+len(insert))
@@ -228,16 +234,22 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		}
 		driPayload := []byte{0, 0}
 		binary.BigEndian.PutUint16(driPayload, uint16(opts.RestartInterval))
-		driPos := bytes.Index(frame, []byte{0xFF, 0xDD})
-		if driPos >= 0 {
+		driPos, driFound, err := findMarkerOffset(frame, DRI)
+		if err != nil {
+			return nil, err
+		}
+		if driFound {
 			if driPos+6 > len(frame) {
 				return nil, fmt.Errorf("%w: DRI truncated", ErrBadJPEG)
 			}
 			// payload is at driPos+4..driPos+6.
 			copy(frame[driPos+4:driPos+6], driPayload)
 		} else {
-			sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
-			if sosPos < 0 {
+			sosPos, ok, err := findMarkerOffset(frame, SOS)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
 				return nil, fmt.Errorf("%w: SOS not found for DRI insert", ErrBadJPEG)
 			}
 			// Insert FF DD 00 04 <payload> before SOS.
@@ -282,55 +294,81 @@ func firstFragmentSOF(frag []byte) (*SOF, error) {
 	return nil, fmt.Errorf("%w: no SOF in fragment", ErrBadJPEG)
 }
 
-// findFirstSOFOffset walks frame by segments and returns the byte offset
-// of the first FF C0 marker prefix (so the marker byte is at offset+1 and
-// the length is at offset+2..+4).
-func findFirstSOFOffset(frame []byte) (int, error) {
-	// Reproduce the positional accounting from jpeg.Scan by tracking bytes
-	// as we iterate. Scan yields parsed segments but hides positions; walk
-	// the bytes directly instead.
+// findMarkerOffset walks frame as a structural sequence of JPEG marker
+// segments and returns the byte offset of the FF prefix of the first
+// segment whose marker code equals target. The walk stops once SOS is
+// reached and consumed: entropy-coded scan data follows SOS, and
+// structural decoding doesn't apply.
+//
+// Return shape: (offset, ok, err). ok=true means the marker was found
+// at offset (the FF prefix byte). ok=false with err==nil means the walk
+// completed cleanly without seeing target — including the SOS-reached-
+// before-target case (DRI lookup typically wants this signal). err!=nil
+// means the input is malformed; callers should propagate.
+//
+// Special-case: when target == SOS, the SOS marker itself is reported
+// (rather than treated as the end-of-walk sentinel).
+//
+// Catches false-positive matches that a naive bytes.Index would conflate
+// with real markers — e.g., FF DA / FF DD bytes that appear inside a
+// DQT/DHT payload. Our SVS / NDPI fixtures have never produced such a
+// pattern in practice, but the structural walk eliminates the latent
+// fragility entirely.
+func findMarkerOffset(frame []byte, target Marker) (int, bool, error) {
 	pos := 0
 	for pos < len(frame)-1 {
 		if frame[pos] != 0xFF {
-			return -1, fmt.Errorf("%w: expected 0xFF at pos %d, got %02X", ErrBadJPEG, pos, frame[pos])
+			return 0, false, fmt.Errorf("%w: expected 0xFF at pos %d, got %02X", ErrBadJPEG, pos, frame[pos])
 		}
-		// Skip fill bytes.
 		start := pos
 		for pos < len(frame) && frame[pos] == 0xFF {
 			pos++
 		}
 		if pos >= len(frame) {
-			return -1, fmt.Errorf("%w: truncated at marker code", ErrBadJPEG)
+			return 0, false, fmt.Errorf("%w: truncated at marker code", ErrBadJPEG)
 		}
 		code := Marker(frame[pos])
-		if code == SOF0 {
-			// marker prefix is at pos-1 (0xFF) — return the FF offset.
-			return pos - 1, nil
+		if code == 0x00 {
+			return 0, false, fmt.Errorf("%w: 0xFF 00 outside scan data at pos %d", ErrBadJPEG, start)
+		}
+		if code == target {
+			return pos - 1, true, nil
 		}
 		pos++
-		if code == 0x00 {
-			return -1, fmt.Errorf("%w: 0xFF 00 outside scan data at pos %d", ErrBadJPEG, start)
-		}
 		if code.isStandalone() {
 			continue
 		}
 		if pos+2 > len(frame) {
-			return -1, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
+			return 0, false, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
 		}
 		segLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
 		if segLen < 2 {
-			return -1, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
+			return 0, false, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
 		}
 		if code == SOS {
-			// Past SOF; SOF missing in segment-walk region.
-			return -1, fmt.Errorf("%w: SOS reached without SOF", ErrBadJPEG)
+			// SOS was the end-of-structural-region; target wasn't found.
+			return 0, false, nil
 		}
 		pos += segLen
 		if pos > len(frame) {
-			return -1, fmt.Errorf("%w: segment past frame end", ErrBadJPEG)
+			return 0, false, fmt.Errorf("%w: segment past frame end", ErrBadJPEG)
 		}
 	}
-	return -1, fmt.Errorf("%w: no SOF in frame", ErrBadJPEG)
+	return 0, false, nil
+}
+
+// findFirstSOFOffset returns the offset of the first FF C0 marker prefix.
+// Wraps findMarkerOffset for back-compat with callers expecting an
+// (int, error) shape with a sentinel "no SOF" error.
+func findFirstSOFOffset(frame []byte) (int, error) {
+	off, ok, err := findMarkerOffset(frame, SOF0)
+	if err != nil {
+		return -1, err
+	}
+	if !ok {
+		return -1, fmt.Errorf("%w: no SOF in frame", ErrBadJPEG)
+	}
+	return off, nil
 }
 
 // initialCap pre-sizes the output buffer to avoid repeated grow-copy during
