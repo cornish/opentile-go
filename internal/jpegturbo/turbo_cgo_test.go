@@ -4,8 +4,10 @@ package jpegturbo
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/jpeg"
+	"sync"
 	"testing"
 )
 
@@ -135,5 +137,48 @@ func TestCropWithBackgroundLuminanceWhite(t *testing.T) {
 	// channel below 10000.
 	if r2 > 10000 || g2 > 10000 || b2 > 10000 {
 		t.Errorf("black OOB pixel at (40,16): RGB=(%d,%d,%d); expected each <= 10000", r2>>8, g2>>8, b2>>8)
+	}
+}
+
+
+// TestCropConcurrentSafe locks in the Crop godoc's safe-for-concurrent-use
+// contract: per-call tjInitTransform/tjDestroy means no shared state across
+// goroutines, so 32 goroutines × 200 crops should produce byte-identical
+// output to a single-threaded baseline. Run with -race to catch any
+// inadvertent shared mutation. Closes L9.
+func TestCropConcurrentSafe(t *testing.T) {
+	src := encodeTestJPEG(t, 64, 64)
+	region := Region{X: 0, Y: 0, Width: 16, Height: 16}
+	want, err := Crop(src, region)
+	if err != nil {
+		t.Fatalf("baseline Crop: %v", err)
+	}
+
+	const goroutines = 32
+	const cropsPerGoroutine = 200
+	var wg sync.WaitGroup
+	errs := make(chan error, goroutines*cropsPerGoroutine)
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for k := 0; k < cropsPerGoroutine; k++ {
+				got, err := Crop(src, region)
+				if err != nil {
+					errs <- fmt.Errorf("goroutine %d crop %d: %w", gid, k, err)
+					return
+				}
+				if !bytes.Equal(got, want) {
+					errs <- fmt.Errorf("goroutine %d crop %d: byte mismatch (got %d bytes, want %d)",
+						gid, k, len(got), len(want))
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent crop error: %v", err)
 	}
 }
