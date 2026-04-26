@@ -56,6 +56,14 @@ def _associated_for(tiler, kind: str):
         return tiler.overviews
     if kind == "thumbnail":
         return tiler.thumbnails
+    if kind == "map":
+        # Python opentile 0.20.0 does not surface NDPI Map pages. The Go
+        # side surfaces them as Kind() == "map" (deliberate extension —
+        # see formats/ndpi/mappage.go and docs/deferred.md L6 / R13).
+        # Returning [] makes the runner emit a zero-length response,
+        # which the Go parity test treats as "Python doesn't expose
+        # this, skip parity but verify Go produced output."
+        return []
     return []
 
 

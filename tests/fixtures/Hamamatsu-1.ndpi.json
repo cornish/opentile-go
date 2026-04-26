@@ -122,7 +122,7 @@
       "reason": "top-left corner"
     },
     "0:0:211": {
-      "sha256": "5fa6e93377bb6a02eb18bb26e9160992eb9644f6b6c5d5f24e64e6ca252ff738",
+      "sha256": "187d4034bd0bee533fd3da7ccb4022a54878c6d3599aacfe3585457d6c98f526",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "0:196:1": {
@@ -134,7 +134,7 @@
       "reason": "interior diagonal q2 (center)"
     },
     "0:196:211": {
-      "sha256": "c40f20ffbc306ec61443b62a345dbbdea7af3de1b964cd061b8b18530b286e73",
+      "sha256": "196d0d16ef6a81c0f1c26a714b1e8de3d41463167462dd28a51e3ea822366439",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "0:1:106": {
@@ -150,7 +150,7 @@
       "reason": "top-right corner; OOB fill in x"
     },
     "0:391:211": {
-      "sha256": "0f97d5a3fe8025417b2dffdee686af456f8de7b6ca09f15d4cef0b12ec80eadc",
+      "sha256": "26c219780c2505fec84826e50d0c5b369a2c38560521dd621662baef7afc0453",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "0:98:53": {
@@ -162,7 +162,7 @@
       "reason": "top-left corner"
     },
     "1:0:105": {
-      "sha256": "14dc58c74843222d9fb6292807be7c1ab63246bbea379d29ca3f43888820b119",
+      "sha256": "64571549726fca87a0652102a36e92f9f8cf527a05d7b2f7b2b4d6ee46ce93f8",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "1:147:79": {
@@ -174,7 +174,7 @@
       "reason": "top-right corner; OOB fill in x"
     },
     "1:195:105": {
-      "sha256": "a5475a49a2c4d754e9ff8e95d157311a29446e3cf4a3ff5c94cb0eb55351071b",
+      "sha256": "3f1ffaa384816f4ea29d3930282397c8158e4fce3bc3f796ef2c7c73b0a0d6b8",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "1:1:53": {
@@ -190,7 +190,7 @@
       "reason": "near-top mid-column"
     },
     "1:98:105": {
-      "sha256": "e9e59cdd77996109da64311c8ffe465d503f4ee76aabf9c243f47d4b2a056591",
+      "sha256": "cf331fbc758ef15fb2f06c5eeb1b9e2080de6ca78aa169fabf7d424b45663bea",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "1:98:53": {
@@ -202,7 +202,7 @@
       "reason": "top-left corner"
     },
     "2:0:52": {
-      "sha256": "ca1d2d5007285aba1aaef24aa27054ce0a1597226255c5fe1a38adac116edf0a",
+      "sha256": "b9c4e06b6c47e451a2d723d8839365bb405f142638203e1f987ee146afe3bfb7",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "2:1:26": {
@@ -222,7 +222,7 @@
       "reason": "interior diagonal q2 (center)"
     },
     "2:49:52": {
-      "sha256": "4f72d0a5b1266d95f9111ab69592f2b6e16d130112054558da83903c2fc01917",
+      "sha256": "dcc6df91430eb14af79743a2fb7b9cc4b246d1ef7aebf88067b9324f918b09b1",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "2:73:39": {
@@ -234,7 +234,7 @@
       "reason": "top-right corner; OOB fill in x"
     },
     "2:97:52": {
-      "sha256": "786e53e6c2afb22407f434dc43c8f162e3bc02b4bb32f455311b769552c199cb",
+      "sha256": "e9b44595f156868173cd1eda8704e3b4cf87bd555f94e0d21961b8c4a1a9658a",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "3:0:0": {
@@ -242,7 +242,7 @@
       "reason": "top-left corner"
     },
     "3:0:26": {
-      "sha256": "192100c8b807e318d3ab90164936a8ee8cbc8fc9e01b9ccd0be373acfca3cda7",
+      "sha256": "d2bffd316a39d5fd093fc1800dfe98892dd4de1b367d40d6002c4c2b3fc7eabc",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "3:12:6": {
@@ -262,7 +262,7 @@
       "reason": "interior diagonal q2 (center)"
     },
     "3:24:26": {
-      "sha256": "898ae98e34aaea55b2aae3d59b42195fb114324ab660f7445ea83277a704ac38",
+      "sha256": "030ccc7af1becbe93c3d843fe27190b677804cfc4133503710a4c616f9eb5966",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "3:36:20": {
@@ -274,7 +274,7 @@
       "reason": "top-right corner; OOB fill in x"
     },
     "3:48:26": {
-      "sha256": "6a5d6999bdf0d3e2d313227ff38c2908ddb00f457c4e9b040b678fee2b289629",
+      "sha256": "cb8b0384ba70860dc9e5727101f9886a95031505d3aab49b7af34c851275c157",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "4:0:0": {
@@ -282,7 +282,7 @@
       "reason": "top-left corner"
     },
     "4:0:13": {
-      "sha256": "2ce3441d6be4855b89b593f2998b04f736b009c90e81c210c288053db277ef92",
+      "sha256": "8684d000d39b38554971a1541a25cdb18b178c8c3b0b13461b998ad444c7b3c0",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "4:12:1": {
@@ -290,7 +290,7 @@
       "reason": "near-top mid-column"
     },
     "4:12:13": {
-      "sha256": "da66daaa490fb49fb8d8b7cc671262bf15fb0f0ef5a245f6666c84b2f826e8f1",
+      "sha256": "9d39f25d97f43cdd72035371b670440be229c09940febe1491683395e079cdbf",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "4:12:7": {
@@ -306,15 +306,15 @@
       "reason": "near-left mid-row"
     },
     "4:24:0": {
-      "sha256": "f91c315163d6eb7fe9459a3b90d6133ed9a7c3242d4134b4d5905d0ca3d8cbd0",
+      "sha256": "6db241d8290ddb374a8b87ed2f8015495619560a5cea6031349b015a31260839",
       "reason": "top-right corner; OOB fill in x"
     },
     "4:24:13": {
-      "sha256": "43b8036a767a577f5451791e5ea2a51caf5de3db4e1bb6776f934949647fb837",
+      "sha256": "13d014833c2616c66fa7c0838ac6c6beaf2c91183905f644d6aca2580c8a6e8e",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "4:24:7": {
-      "sha256": "2e4b641b70a0d194be8d8787c69670ee4eef7b277da212192f55d3894384a814",
+      "sha256": "e28104cf33eb439b015c2ab3c0cd2da2adc8884a46c00214d006d7ad00edccdd",
       "reason": "right-edge mid-column; OOB fill in x via 'right of image' callback"
     },
     "4:6:3": {
@@ -326,19 +326,19 @@
       "reason": "top-left corner"
     },
     "5:0:6": {
-      "sha256": "2de4f8fa1beabda1d20c73952a93bd91eef1a3f5fc6e895d1d8a8753ca2ab0bd",
+      "sha256": "2d6e25919864c23ab7f130fe3e9c18c303b53363df04cf81ea3036cd648f39e1",
       "reason": "bottom-left corner; OOB fill in y"
     },
     "5:12:0": {
-      "sha256": "d20b85a11eb8b4b57eb95c5ede94cafd3283abed3d51265f648e81b21d9dcb96",
+      "sha256": "16b5d2700b449d428d6f750c96f4b421ce36aa7b722991af092bc23735c85766",
       "reason": "top-right corner; OOB fill in x"
     },
     "5:12:3": {
-      "sha256": "c7f4d65de70b758ae8e056018f8fd22026e36af8745801422423e0ce65fe0656",
+      "sha256": "297ff650df4f06bcd0af192f6a07281dbd5b2c3dbef2b120b298059ffa505f79",
       "reason": "right-edge mid-column; OOB fill in x via 'right of image' callback"
     },
     "5:12:6": {
-      "sha256": "4ba6e0a87ed27b7b3b9486e0754035a389c0ed51fb56cc20014948884c7da83f",
+      "sha256": "b66d8c3dd1a26ffadcf4c3a86f691a1ac8ea09706e8f9345ce0086f6237768a2",
       "reason": "bottom-right corner; OOB fill in both axes"
     },
     "5:1:3": {
@@ -358,7 +358,7 @@
       "reason": "interior diagonal q2 (center)"
     },
     "5:6:6": {
-      "sha256": "f4ca75053338f85c87d23b3fe804a2e0513419c17c61af1e312e9559e9801160",
+      "sha256": "8f826b96322c77d4040d15db6f203ae87859215ed9bb1f6579a05001fcc0a374",
       "reason": "bottom-edge mid-row; OOB fill in y via 'below image' callback"
     },
     "5:9:5": {
@@ -377,13 +377,22 @@
       "sha256": "f29f224ed45e384a17ab1768354e02db3c22767d36923843557c7054771b90e8"
     },
     {
+      "kind": "map",
+      "size": [
+        600,
+        205
+      ],
+      "compression": "none",
+      "sha256": "611252f6b6d9a74f97f8be31b37bf2f616d20f421e6e7e86a5317022375294e4"
+    },
+    {
       "kind": "label",
       "size": [
         640,
-        728
+        732
       ],
       "compression": "jpeg",
-      "sha256": "8c084cb1d60228efe23ecceefffcbf2f1d5a5510c4ebc9091910219a4f910ac9"
+      "sha256": "0a102ea4e0d4b999408c25df0baddadcb08438a27a1b124c99f30140361d30cc"
     }
   ]
 }

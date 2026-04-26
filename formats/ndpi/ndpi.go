@@ -128,7 +128,15 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 			overview = ov
 			associated = append(associated, ov)
 		case pageMap:
-			// v0.2: Map pages are skipped. v0.3+ may expose them as associated.
+			// L6 / R13 (v0.4): surface Map pages as AssociatedImage with
+			// Kind() == "map". Deliberate Go-side extension — Python
+			// opentile 0.20.0 does not expose Map pages. See
+			// formats/ndpi/mappage.go for the rationale.
+			mp, err := newMapPage(p, file.ReaderAt())
+			if err != nil {
+				return nil, fmt.Errorf("ndpi: map page: %w", err)
+			}
+			associated = append(associated, mp)
 		case pageUnknown:
 			// Skip pages with no magnification tag; they're malformed or not
 			// part of the standard NDPI layout.
@@ -143,11 +151,14 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		if err != nil {
 			return nil, fmt.Errorf("ndpi: read overview for MCU detection: %w", err)
 		}
-		mcuW, mcuH, err := jpeg.MCUSizeOf(ovBytes)
+		mcuW, _, err := jpeg.MCUSizeOf(ovBytes)
 		if err != nil {
 			return nil, fmt.Errorf("ndpi: derive overview MCU: %w", err)
 		}
-		associated = append(associated, newLabelImage(overview, 0.3, mcuW, mcuH))
+		// mcuH is no longer needed after the L17 fix — newLabelImage now
+		// uses the full image height, not an MCU-floored height. See
+		// formats/ndpi/associated.go::newLabelImage for the rule.
+		associated = append(associated, newLabelImage(overview, 0.3, mcuW))
 	}
 	return &tiler{md: md, levels: levels, associated: associated}, nil
 }

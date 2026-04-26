@@ -70,23 +70,29 @@ type labelImage struct {
 	overview *overviewImage
 	cropFrom int // left pixel offset in source (MCU-aligned)
 	cropTo   int // right pixel offset in source (exclusive, MCU-aligned)
-	cropH    int // MCU-aligned height
+	cropH    int // full image height (may be MCU-ragged; libjpeg-turbo handles partial-MCU row at image edge)
 }
 
 // newLabelImage returns a labelImage whose Bytes() crops the overview to
 // [0, crop * overview.Width) horizontally, snapped down to the nearest MCU
-// boundary. mcuW / mcuH are the MCU dimensions of the overview's JPEG —
-// derive them via jpeg.MCUSizeOf on the overview bytes (16x16 for YCbCr
-// 4:2:0; 8x8 for the 4:4:4 case Hamamatsu actually uses on macro pages).
+// boundary. mcuW is the MCU width of the overview's JPEG — derive it via
+// jpeg.MCUSizeOf on the overview bytes (16 for YCbCr 4:2:0; 8 for the 4:4:4
+// or 4:2:2-horizontal case Hamamatsu actually uses on macro pages).
 //
 // Width is MCU-rounded the way Python opentile's _calculate_crop is
-// (int(W * crop / mcuW) * mcuW). Height is also rounded down to the nearest
-// mcuH multiple here because internal/jpegturbo.Crop uses TJXOPT_PERFECT
-// and rejects non-MCU-aligned regions; Python's PyTurboJPEG.crop_multiple
-// tolerates ragged crops, which is why upstream passes the un-rounded page
-// height. A v0.4 fix could route non-aligned cases through
-// CropWithBackground for full Python parity.
-func newLabelImage(overview *overviewImage, crop float64, mcuW, mcuH int) *labelImage {
+// (int(W * crop / mcuW) * mcuW). Height passes through the FULL image
+// height — matching Python's `_crop_parameters[3] = page.shape[0]` at
+// `opentile/formats/ndpi/ndpi_image.py:144`. libjpeg-turbo with
+// TJXOPT_PERFECT accepts the partial last MCU row when the crop ends
+// exactly at the image edge, which is what's happening here:
+// PyTurboJPEG's __need_fill_background gate (turbojpeg.py:839-863)
+// returns False because `crop_y + crop_h == image_h` (not `>`), so
+// Python takes the plain-crop path, not the CUSTOMFILTER path.
+//
+// Pre-v0.4 we rounded the height down to a whole-MCU multiple, dropping
+// the last partial-MCU row and producing a label one MCU shorter than
+// Python's. Closes L17.
+func newLabelImage(overview *overviewImage, crop float64, mcuW int) *labelImage {
 	pixelTo := int(float64(overview.size.W) * crop)
 	pixelTo = (pixelTo / mcuW) * mcuW
 	if pixelTo <= 0 {
@@ -96,7 +102,7 @@ func newLabelImage(overview *overviewImage, crop float64, mcuW, mcuH int) *label
 		overview: overview,
 		cropFrom: 0,
 		cropTo:   pixelTo,
-		cropH:    (overview.size.H / mcuH) * mcuH,
+		cropH:    overview.size.H,
 	}
 }
 

@@ -14,26 +14,30 @@ Format per item:
 
 Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a prior or current milestone).
 
-**v0.4 scope:** finish what we already support — close every real bug
-and parity gap on SVS and NDPI before adding any new format.
+**v0.4 scope (final):** close every real bug and parity gap on SVS and NDPI that we have a fixture to drive. Landed: L12 (NDPI edge-tile OOB fill), L17 (NDPI label cropH), L6 / R13 (NDPI Map pages). Permanent items (L4, L5, L14) stay documented as design choices.
 
-**v0.5+ scope:** new format support (Philips, 3DHistech, OME).
+**v0.5+ scope:** new format support (Philips, 3DHistech, OME), plus
+SVS corrupt-edge reconstruct (R4) + JP2K decode/encode (R9) parked at
+[#1](https://github.com/cornish/opentile-go/issues/1) until a real
+slide motivates the work — none of our local SVS fixtures exhibits
+the corrupt-edge bug, so v0.4 deferred R4/R9 rather than ship 12
+tasks of speculative cgo work.
 
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
 | R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ landed (Batches 2-7, parity verified) |
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
-| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.4 | deferred (was v1.0; promoted as part of SVS-completeness focus) |
+| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
 | R5 | Philips TIFF (sparse-tile filler) | v0.5 | deferred (was v0.4; demoted in favour of v0.4 SVS/NDPI completeness) |
 | R6 | 3DHistech TIFF | v0.5 | deferred |
 | R7 | OME TIFF | v0.5 | deferred |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
-| R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.4 | deferred (was v0.3+; needed by R4) |
+| R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
-| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | deferred (was v0.3+; same milestone as L6) |
+| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
 
 ---
 
@@ -55,51 +59,6 @@ completeness milestone). Items closed during v0.3 are listed in §5.
 - **Severity:** Permanent — design decision. NDPI files share classic TIFF magic 42 with no header-level distinguisher, so something has to peek to dispatch the NDPI-layout walker. The peek is encapsulated in `sniffNDPI` (see N-9 godoc on that function).
 - **Detail:** `internal/tiff/file.go` reads tag 65420 (Hamamatsu NDPI FileFormat) in the first IFD to decide whether to dispatch the NDPI-layout IFD walker. A cleaner split would have `tiff.Open` expose a generic "layout" hint and let format packages drive selection — but that requires callers to know NDPI exists, which inverts the dependency. Revisit only if adding Philips/OME forces a more general dialect-detection scheme.
 
-### L6 — NDPI Map pages (`mag == -2.0`) are silently dropped
-- **Source:** NDPI classifier port (post-Batch 4)
-- **Severity:** v0.4 — paired with R13. Needs a `"map"` `AssociatedImage` Kind plus a real test fixture (a Hamamatsu slide with a Map page).
-- **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image.
-
-### L12 — NDPI edge-tile entropy-encoding divergence
-- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2)
-- **Severity:** v0.4 — tjTransform CUSTOMFILTER non-determinism. Pixel output is visually equivalent but a handful of bytes per edge tile differ between Go and Python; root cause not pinned down. Investigating likely needs a minimal C-side reproduction to isolate libjpeg-turbo state.
-- **Detail:** `internal/jpegturbo.CropWithBackground` now uses the
-  canonical PyTurboJPEG white-fill algorithm: `internal/jpeg.LumaDCQuant`
-  parses the source's DQT table 0, `LuminanceToDCCoefficient` computes
-  `round((luminance * 2047 - 1024) / dc_quant)` (banker's rounding), and
-  our CUSTOMFILTER callback plants the resulting DC coefficient in
-  OOB luma blocks — identical math to
-  `turbojpeg.py:__map_luminance_to_dc_dct_coefficient`. DC values
-  verified to match Python byte-for-byte on CMU-1.ndpi L0 (dq=6 →
-  dc=170 for luminance=1.0).
-
-  Despite matching DC inputs, NDPI edge tiles still show small
-  byte-level differences vs Python opentile — typically a single byte
-  in the entropy stream for CMU-1.ndpi, up to ~130 bytes for OS-2.ndpi.
-  The divergence propagates through JPEG's differential DC encoding so
-  decoded pixels differ visibly in the OOB region only. Root cause is
-  a subtle tjTransform / libjpeg-turbo non-determinism we haven't
-  pinned down: same flags (`TJXOPT_PERFECT | TJXOPT_CROP`), same
-  CUSTOMFILTER output, different entropy encoding. Possibly related to
-  MCU boundary handling at sub-MCU-aligned image edges or DC predictor
-  state across the callback boundary.
-
-  Parity-visible area (inside the image): byte-identical. Only the
-  OOB background region diverges.
-
-  *Why this is the v0.2 behavior:* unblocks parity-oracle green on all
-  5 sample slides; chasing the remaining divergence would require
-  in-depth libjpeg-turbo source instrumentation. Parity test downgrades
-  NDPI-only edge-tile mismatches to `t.Log`.
-
-  *How to fix in v0.3+:* instrument tjTransform to dump the coefficient
-  buffer state before and after the CUSTOMFILTER callback on both
-  Python and Go sides for a known-diverging tile, diff the buffers,
-  identify the single coefficient that differs, trace backward.
-  Alternatively, submit an upstream issue to libjpeg-turbo asking
-  whether CUSTOMFILTER is expected to be deterministic across two
-  invocations with identical inputs.
-
 ### L14 — NDPI label synthesis is Go-specific; Python opentile does not expose NDPI labels
 - **Source:** Batch 7 parity oracle extension
 - **Severity:** Permanent — deliberate Go-side extension. Removable via `WithNDPISynthesizedLabel(false)` (the v0.3 N-5 fix); see `formats/ndpi/synthlabel_test.go` for the opt-out path.
@@ -120,33 +79,6 @@ completeness milestone). Items closed during v0.3 are listed in §5.
   *How to fix if we decide it's unwanted:* drop the `newLabelImage` call
   in `formats/ndpi/ndpi.go` Open() so NDPI associated is overview-only.
   Or keep it and add a README note calling it out.
-
-### L17 — NDPI label cropH rounded to MCU multiple, not full image height
-
-- **Source:** L7 fix in v0.3 (Task 10) surfaced the divergence
-- **Severity:** v0.4 — needs the `CropWithBackground` ragged-height path (luminance + chroma DC math threaded through) before this can land cleanly. The OS-2 and Hamamatsu-1 fixtures regenerate once the fix lands.
-- **Detail:** `formats/ndpi.newLabelImage` computes `cropH` as
-  `(overview.size.H / mcuH) * mcuH` (rounded down to a whole-MCU multiple)
-  to satisfy libjpeg-turbo's `TJXOPT_PERFECT` requirement that crops are
-  MCU-aligned. Python opentile's `crop_multiple` tolerates ragged heights
-  via its CUSTOMFILTER. Result: when an overview's height is not a multiple
-  of its MCU height, our Go label is one MCU row shorter than Python's.
-
-  Visible on OS-2.ndpi (344x392 Go vs 344x396 Python) and Hamamatsu-1.ndpi
-  (640x728 Go vs 640x732 Python). CMU-1.ndpi (352x408) is unaffected because
-  its image height is divisible by mcuH.
-
-  *Why this is the v0.3 behavior:* fixing it cleanly requires routing
-  ragged-height label crops through `CropWithBackground` (with the white-
-  fill DC math from Theme 4) rather than the bare `Crop` path. That's a
-  multi-step change orthogonal to L7's MCU-detection fix. v0.3 ships with
-  the new MCU detection (more correct: CMU-1 now matches Python byte-for-
-  byte) and documents this remaining gap.
-
-  *How to fix in v0.4:* detect ragged height in `newLabelImage`, route
-  through `CropWithBackground` with luminance=1.0 and chroma DC=0 (matches
-  Python). The OS-2 and Hamamatsu-1 fixtures will need re-regeneration
-  once the fix lands.
 
 ---
 
@@ -232,6 +164,129 @@ locks the change in.
 
 ---
 
-## 6. Triage process
+## 6. Retired in v0.4
+
+Items closed during the v0.4 existing-format completeness milestone.
+One line per ID; named commit's message has the full rationale and
+the test that locks the change in.
+
+**Limitations (L-prefix):**
+
+- **L6** — NDPI Map pages (`mag == -2.0`) surface as `AssociatedImage` with `Kind() == "map"` (`7ac3f88`, paired with R13). OS-2.ndpi page 11 and Hamamatsu-1.ndpi page 7 exposed as 8-bit grayscale uncompressed strip-passthrough; CMU-1.ndpi unchanged (no Map page). Deliberate Go-side extension paralleling L14 — Python opentile does not expose Map pages even though tifffile classifies them as `series.name == 'Map'`.
+- **L12** — NDPI edge-tile OOB fill (`f4c647b`). Control-flow bug, not the "tjTransform CUSTOMFILTER non-determinism" the v0.2/v0.3 entry claimed. `formats/ndpi/striped.go::Tile` now dispatches geometry-first against image size (matching Python's `__need_fill_background` gate at `turbojpeg.py:839-863`); pre-v0.4 it tried plain `Crop` first and silently returned mid-gray OOB fills on edge tiles where Crop happened to succeed. CMU-1 + OS-2 + Hamamatsu-1 NDPI fixtures regenerated; parity oracle's L12 `t.Logf` carve-out removed in the same commit. Every NDPI tile now byte-equal to Python opentile.
+- **L17** — NDPI label cropH passes full image height (`bdaa44e`). One-line `cropH` change in `formats/ndpi/associated.go::newLabelImage` plus dropping the now-unused `mcuH` argument. Matches Python's `_crop_parameters[3] = page.shape[0]` at `ndpi_image.py:144`; libjpeg-turbo's `TJXOPT_PERFECT` accepts the partial last MCU row when the crop ends at the image edge. The pre-v0.4 entry's "needs CropWithBackground" advice was wrong (incomplete read of upstream).
+
+**Roadmap items (R-prefix):**
+
+- **R13** — NDPI Map pages exposed as associated images (`7ac3f88`, paired with L6).
+
+**JIT verification gates (Tasks 1-4 of the v0.4 plan):**
+
+- **T1** — JP2K determinism gate (`c27d9f8`): byte-deterministic. R4's done-when bar (when it lands) is byte-parity with Python opentile.
+- **T2** — NDPI Map fixture audit (`e6bbcd5`): OS-2 + Hamamatsu-1 carry Map pages; tifffile classifies them, Python opentile chooses not to surface them. Validated the L6 / R13 path.
+- **T3** — L12 reproduction shape (`1b651bf`): Case D — control-flow bug in our Go-side dispatch (the plan offered Cases A/B/C; the actual finding was sharper). Drove the L12 fix above.
+- **T4** — R4 mechanism audit (`d2fe107`): port notes at `docs/superpowers/notes/2026-04-26-svs-reconstruct-port.md`. Identified that R4 pulls in 4 new pieces of cgo + Pillow-port infrastructure for a feature whose only test would be synthetic. Drove the v0.4 → v0.5+ deferral of R4 / R9 to issue [#1](https://github.com/cornish/opentile-go/issues/1).
+
+**Deferred (not retired, but resolved by punting to a tracked issue):**
+
+- **R4** (SVS corrupt-edge reconstruct) and **R9** (JP2K decode/encode) — moved from v0.4 to v0.5+ on 2026-04-26. Filed as [#1](https://github.com/cornish/opentile-go/issues/1) with the full upstream algorithm, Go-side dependency tree, byte-parity bar, and trigger conditions for picking the work back up. Audit confirmed none of our 5 local SVS slides exhibit the corrupt-edge bug; 12 tasks of speculative cgo work for a synthetic-fixture-only feature didn't pass the project's "fix bugs we can demonstrate, don't write defensive code for hypothetical inputs" rule.
+
+---
+
+## 7. v0.4 gate outcomes (live)
+
+Tasks 1-4 of the v0.4 plan are JIT verification gates that decide
+done-when bars and fix paths for the rest of the milestone. Outcomes
+recorded here as they land.
+
+### Task 1 — JP2K determinism gate
+
+- **Date:** 2026-04-26
+- **Outcome:** byte-deterministic. Two passes through
+  `imagecodecs.jpeg2k_encode` with the upstream Python opentile
+  options (level=80, codecformat=J2K, colorspace=SRGB, mct=True,
+  reversible=False, bitspersample=8) on the JP2K-33003-1.svs L0
+  tile (0,0) produced identical bytes:
+  ```
+  pass1 sha256=5862056ca6dcbd079403c1f5debd36ce104afe9bbb2fd56ffc5fec2ca7f82080 len=58366
+  pass2 sha256=5862056ca6dcbd079403c1f5debd36ce104afe9bbb2fd56ffc5fec2ca7f82080 len=58366
+  identical=True
+  pixel_equal=True
+  ```
+- **Consequence:** v0.4 R4 (SVS corrupt-edge reconstruct) targets
+  **byte-parity** with Python opentile. Tasks 12 / 16 enforce
+  byte-equality assertions; the alternative pixel-equivalent fallback
+  is not needed.
+
+### Task 3 — L12 reproduction shape
+
+- **Date:** 2026-04-26
+- **Outcome:** **Case D — neither libjpeg-turbo bug nor cgo wrapper bug. The divergence is in our control flow above the wrapper.** The plan offered Cases A/B/C; the actual finding is sharper.
+
+  Determinism check (5 passes each, OS-2.ndpi L5 tile (3,0)):
+  - Go side: byte-deterministic (sha `16996cac…6fbc`, 76,418 bytes, 5/5 identical)
+  - Python side: byte-deterministic (sha `a1173319…8a24`, 76,307 bytes, 5/5 identical)
+  - Each side individually deterministic; the divergence is purely between languages.
+
+  Pixel comparison of the two outputs (after libjpeg decode):
+  - Image content (cols 0-895, the in-image region): byte-equal pixel-for-pixel ✓
+  - OOB strip (cols 896-1023, image x=3968-4095 past the L5 image's x=3968 right edge):
+    - Go: RGB = (128, 128, 128) — mid-gray
+    - Python: RGB = (255, 255, 255) — white
+
+  Our `LuminanceToDCCoefficient(luminance=1.0)` returns the correct DC=170 (verified locally on the same OS-2 L5 JPEGHeader). So the cached `dcBackground` is right; we just don't use it on this tile because the dispatch never reaches `CropWithBackgroundLuminanceOpts`.
+
+  Root cause:
+  - **Python** (`turbojpeg.py:608-694` `crop_multiple`, gated by `__need_fill_background` at `turbojpeg.py:839-863`) decides geometry-first: route through CUSTOMFILTER iff `crop_region.x + crop_region.w > image_size[0]` (or similar in y) AND luminance ≠ 0.5. Doesn't try plain `Crop` first.
+  - **Go** (`formats/ndpi/striped.go::Tile` post-acc2282) tries plain `Crop` first, falls through to `CropWithBackgroundLuminanceOpts` only if `Crop` errors. For OS-2 L5 tile (3,0) and similar edge tiles, `Crop` SUCCEEDS (libjpeg-turbo accepts the MCU-aligned geometry even though it extends past the image). We never call `CropWithBackground`. Plain `Crop`'s default OOB fill is mid-gray (DC=0), not the white-fill DC the cached `dcBackground` would have planted.
+
+  This is the same divergence the v0.3 T30 task uncovered — and reverted (`acc2282`). The revert was the wrong call: T30's geometry-first inversion was the correct fix; the v0.3 fixtures that "broke" were encoding the buggy mid-gray output. Deferred entry L12 currently misframes this as "tjTransform CUSTOMFILTER non-determinism," which is wrong on every count.
+
+- **Consequence:** L12 is a control-flow fix, not a libjpeg-turbo investigation. Two changes needed in v0.4 Task 9:
+  1. Replace `frameSize`-based `extendsBeyond` with the **image-size-based** geometry check that matches Python's `__need_fill_background`. Specifically:
+     `extendsBeyond := tileXOrigin+l.tileSize.W > l.size.W || tileYOrigin+l.tileSize.H > l.size.H`
+     where `tileXOrigin = x * l.tileSize.W` (position in the image, not the assembled frame).
+  2. Always route through `CropWithBackgroundLuminanceOpts` when `extendsBeyond` is true, regardless of whether `Crop` would succeed.
+  3. Regenerate the OS-2 / Hamamatsu-1 NDPI fixtures with the corrected output (the v0.3 fixtures currently encode the wrong mid-gray fill on edge tiles). Confirm new fixtures byte-match Python via the parity oracle.
+
+  No C-only repro needed; no upstream-bug ticket; no L12 → Permanent demotion.
+
+  **Status (2026-04-26): fixed.** Task 9 landed the dispatch change and regen'd CMU-1 / OS-2 / Hamamatsu-1 NDPI fixtures. Parity oracle removes the L12 carve-out in the same commit; every NDPI tile is now byte-equal to Python opentile.
+
+### Task 2 — NDPI Map fixture audit
+
+- **Date:** 2026-04-26
+- **Outcome:** Map pages present on two of three local NDPI fixtures.
+  ```
+  CMU-1.ndpi          : no Map page (5 pages, max mag = 20.0, min = -1.0)
+  OS-2.ndpi           : page 11 (198x580)  mag=-2.0  <-- MAP
+  Hamamatsu-1.ndpi    : page  7 (205x600)  mag=-2.0  <-- MAP
+  ```
+  Upstream confirmation, two layers:
+  - **tifffile** (`_series_ndpi`, tifffile.py:5049-5072) DOES classify
+    Map pages — `s.name = 'Map'` for `mag == -2.0`. The data is
+    structurally exposed at the tifffile layer; a consumer reaches
+    them via `TiffFile(path).series[i]` then `pages[0].asarray()`.
+  - **Python opentile** (`NdpiTiler` in `ndpi_tiler.py:88-102`) does
+    NOT expose Map pages. `_is_label_series` and `_is_thumbnail_series`
+    both return False; only `_is_overview_series` (matching "Macro")
+    surfaces anything. There's no `_is_map_series` predicate and no
+    `tiler.maps` property.
+  Surfacing Map pages on the Go side is therefore filling an
+  opentile-level scope decision, not inventing a new category — the
+  precedent exists at the tifffile layer. Parallels the v0.2 NDPI
+  label synthesis (L14).
+  Both Map pages on our fixtures are 8-bit grayscale (uint8, 2D
+  shape — no third dim). Task 6's `mapPage` implementation should
+  byte-passthrough the strip (same pattern as `KindLabel` for SVS
+  LZW labels: bytes the source carried, with whatever Compression
+  the page advertises). Downstream consumers decoding the Map page
+  need to expect a single-channel image, not RGB.
+- **Consequence:** L6 / R13 stays in v0.4 scope. Tasks 6-8 proceed
+  using OS-2 + Hamamatsu-1 fixtures.
+
+---
+
+## 8. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

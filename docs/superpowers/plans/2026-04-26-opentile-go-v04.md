@@ -961,79 +961,205 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 9: L12 fix or document (per Task 3 outcome)
+## Task 9: L12 fix — geometry-first OOB dispatch (Case D per T3)
 
-**Goal:** Apply the fix path Task 3 selected.
+**Background — what T3 found.** The plan originally offered Cases
+A/B/C for Task 3's outcome (cgo bug / upstream non-determinism /
+call-site parameter). The actual finding (`docs/deferred.md` §6 Task
+3) is **Case D — control-flow bug in our Go-side dispatch**:
 
-**Files (if Case A — local cgo bug):**
-- Modify: `internal/jpegturbo/turbo_cgo.go`
-- Modify: `internal/jpegturbo/turbo_cgo_test.go` (add regression test)
-- Regen: affected fixtures
+- Both Go and Python sides are individually byte-deterministic.
+- In-image pixels match Python pixel-for-pixel.
+- Only the OOB strip diverges: Go produces RGB(128,128,128)
+  mid-gray; Python produces RGB(255,255,255) white.
+- Our cached `dcBackground` is correct (170 for luminance=1.0 on
+  the typical NDPI luma DQT) — we just never use it on these tiles
+  because `Crop` succeeds first and we skip the
+  `CropWithBackgroundLuminanceOpts` path entirely.
+- Python's `__need_fill_background` (`turbojpeg.py:839-863`) is
+  geometry-only: route through CUSTOMFILTER iff the crop region
+  extends past `image_size` AND luminance ≠ 0.5. No "try Crop first"
+  pattern.
 
-**Files (if Case B — upstream non-determinism):**
-- Modify: `docs/deferred.md` (mark L12 Permanent)
-- Modify: `tests/oracle/parity_test.go` (already skips L12 via `t.Logf`;
-  upgrade comment to reference the upstream issue)
+This is the v0.3 T30 attempt that landed in `acc2282` as a revert.
+The revert was wrong — T30's geometry-first inversion was correct
+in spirit, but it used `frameSize` instead of `image_size` as the
+geometry comparator, and the v0.3 fixtures already encoded the
+buggy mid-gray output (which is what made T30's "correct" output
+look like a regression). v0.4 lands the right fix and regenerates
+the fixtures.
 
-**Files (if Case C — call-site bug):**
-- Modify: `formats/ndpi/striped.go` (or wherever the parameter
-  divergence lives)
-- Regen: affected fixtures
+**Files:**
+- Modify: `formats/ndpi/striped.go` (Tile method's OOB dispatch)
+- Regen: `tests/fixtures/OS-2.ndpi.json`, `tests/fixtures/Hamamatsu-1.ndpi.json`
 
 - [ ] **Step 0: Confirm upstream**
 
-Refer back to Task 3's outcome record in `docs/deferred.md`. The fix
-path is determined entirely by the gate result — no fresh upstream
-audit needed.
-
-- [ ] **Step 1: Apply the chosen path**
-
-Concrete steps depend on Task 3 outcome. The plan author cannot pre-
-specify the fix without knowing whether the bug is in our code, in
-libjpeg-turbo, or at the call site. Whoever executes this task
-follows Task 3's branch directly.
-
-- [ ] **Step 2: Run regression tests**
-
-If the fix changes our output, regen affected fixtures and re-run
-TestSlideParity + parity oracle.
-
-- [ ] **Step 3: Commit**
-
-Commit message templates:
-
-**Case A (local cgo fix):**
+Re-read `turbojpeg.py:839-863` (`__need_fill_background`). Run:
+```sh
+sed -n '839,863p' /private/tmp/opentile-py/lib/python3.12/site-packages/turbojpeg.py
 ```
-fix(jpegturbo): L12 — <one-line description of the cgo bug>
+Expected: the gate is `(crop_region.x + crop_region.w > image_size[0]) OR
+(crop_region.y + crop_region.h > image_size[1])`, AND
+`background_luminance != 0.5`. The geometry comparator is
+`image_size`, not the assembled-frame size.
 
-Resolves the NDPI edge-tile entropy divergence flagged in v0.2 / v0.3.
-<root cause + how it manifested>. <Edge-tile fixtures regenerated.>
+The rule the Go fix must match: dispatch on tile-position-vs-image-size,
+not tile-position-vs-frame-size.
+
+- [ ] **Step 1: Write the failing parity oracle assertion**
+
+Pick one known-divergent tile (e.g. OS-2.ndpi L5 (3,0)). Add a Go
+test in `formats/ndpi/striped_test.go` (new file or append) that
+opens OS-2.ndpi, decodes the Tile (3,0) at L5, and asserts the OOB
+strip (cols 896-1023) is white (RGB ≥ 250 per channel). Run the
+test before the fix to confirm it fails with mid-gray output:
+
+```sh
+OPENTILE_TESTDIR="$PWD/sample_files" go test ./formats/ndpi/... -run TestL12OOBFillIsWhite -v
+```
+Expected: FAIL — sees RGB(128,128,128) instead of RGB(255,255,255).
+
+- [ ] **Step 2: Apply the dispatch change**
+
+In `formats/ndpi/striped.go::Tile`, replace the current pattern
+(post-`acc2282`):
+
+```go
+// CURRENT (buggy):
+out, err := jpegturbo.Crop(frame, region)
+if err != nil {
+    extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
+    if extendsBeyond {
+        out, err = jpegturbo.CropWithBackgroundLuminanceOpts(...)
+    }
+    if err != nil { return nil, &opentile.TileError{...} }
+}
+return out, nil
+```
+
+with:
+
+```go
+// FIX (matches Python's __need_fill_background):
+//
+// Dispatch on whether the tile (in IMAGE coordinates) extends past
+// the image bounds — not on whether plain Crop happens to succeed
+// on the assembled-frame geometry. Aligned with
+// turbojpeg.py:839-863's gate.
+tileXOrigin := x * l.tileSize.W
+tileYOrigin := y * l.tileSize.H
+extendsBeyond := tileXOrigin+l.tileSize.W > l.size.W || tileYOrigin+l.tileSize.H > l.size.H
+var out []byte
+if extendsBeyond {
+    out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
+        frame, region, jpegturbo.DefaultBackgroundLuminance,
+        jpegturbo.CropOpts{DCBackground: l.dcBackground},
+    )
+} else {
+    out, err = jpegturbo.Crop(frame, region)
+}
+if err != nil {
+    return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+}
+return out, nil
+```
+
+Remove the v0.3 `acc2282` "geometry-first inversion is unsafe"
+comment that justified the broken try-Crop-first dispatch — the
+inversion IS safe; what was unsafe was using `frameSize` instead
+of image-size as the comparator. Replace with a comment naming
+this fix:
+
+```go
+// Dispatch matches Python's __need_fill_background gate at
+// turbojpeg.py:839-863: CropWithBackground iff the tile crosses
+// the image edge in image coordinates. The v0.3 try-Crop-first
+// pattern silently returned mid-gray OOB fills (libjpeg-turbo's
+// default) on tiles where Crop succeeded despite extending past
+// the image — see L12 / Task 9 for the full reproduction.
+```
+
+- [ ] **Step 3: Run the test, watch it pass**
+
+```sh
+OPENTILE_TESTDIR="$PWD/sample_files" go test ./formats/ndpi/... -run TestL12OOBFillIsWhite -v
+```
+Expected: PASS.
+
+- [ ] **Step 4: Regenerate the affected NDPI fixtures**
+
+```sh
+OPENTILE_TESTDIR="$PWD/sample_files" \
+  go test ./tests -tags generate -run 'TestGenerateFixtures/(OS-2|Hamamatsu-1)\.ndpi' \
+    -generate -v -timeout 30m
+```
+
+Expected: each fixture's affected edge tiles get new (correct) SHAs.
+The CMU-1.ndpi fixture is untouched (its tile sizes divide its
+image dimensions evenly, so no edge tiles need OOB fill).
+
+- [ ] **Step 5: Run the full integration parity sweep**
+
+```sh
+OPENTILE_TESTDIR="$PWD/sample_files" go test ./tests -run TestSlideParity -v -timeout 10m
+```
+Expected: green on all 8 fixtures.
+
+- [ ] **Step 6: Run the parity oracle**
+
+```sh
+OPENTILE_ORACLE_PYTHON=/private/tmp/opentile-py/bin/python OPENTILE_TESTDIR="$PWD/sample_files" \
+  go test ./tests/oracle/... -tags parity -v -timeout 10m
+```
+Expected: the L12 `t.Logf` divergence lines disappear from the
+output. Every previously-divergent NDPI edge tile now byte-matches
+Python opentile.
+
+- [ ] **Step 7: Remove the parity-oracle L12 carve-out**
+
+In `tests/oracle/parity_test.go`, find the block that downgrades
+NDPI edge-tile divergences to `t.Logf` (the `if isNDPI && isEdge`
+branch). Delete it — divergences are now real failures again. Keep
+only the L10 SVS-label carve-out.
+
+- [ ] **Step 8: Commit**
+
+```sh
+git add formats/ndpi/striped.go formats/ndpi/striped_test.go \
+  tests/fixtures/OS-2.ndpi.json tests/fixtures/Hamamatsu-1.ndpi.json \
+  tests/oracle/parity_test.go
+git commit -m "fix(ndpi): L12 — geometry-first OOB dispatch matches Python
+
+Closes L12 — the NDPI edge-tile divergence flagged from v0.2 onward.
+Root cause was control-flow, not entropy encoding:
+
+Python (turbojpeg.py:839-863) decides geometry-first — route
+through CUSTOMFILTER iff the crop region extends past image_size.
+Our striped.go::Tile tried plain Crop first; for edge tiles where
+Crop succeeded despite extending past the image, we never reached
+the CropWithBackground path and silently returned libjpeg-turbo's
+default mid-gray OOB fill (DC=0) instead of the cached white-fill
+(DC=170 for luminance=1.0).
+
+Fix: dispatch on tile-position-vs-image-size up front; matches
+__need_fill_background's gate exactly.
+
+OS-2.ndpi and Hamamatsu-1.ndpi fixtures regenerated. The
+parity_test.go L12 t.Logf carve-out is removed; every NDPI tile is
+now byte-equal to Python opentile.
 
 Closes L12.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
 
-**Case B (upstream):**
-```
-docs(jpegturbo): L12 — pin upstream issue and document parity skip
-
-The NDPI edge-tile entropy divergence reproduces in a C-only test
-calling tjTransform with identical CUSTOMFILTER inputs. Filed as
-libjpeg-turbo issue #<NNN>. parity_test.go's existing t.Logf skip is
-upgraded to point at the issue; L12 stays in deferred.md as a
-Permanent (pending upstream fix).
-```
-
-**Case C (call-site fix):**
-```
-fix(ndpi): L12 — <call-site parameter divergence>
-
-The NDPI edge-tile entropy divergence was caused by <which parameter>
-being computed differently between Go and Python. Fixed at the call
-site; output now byte-identical to Python on every edge tile sampled
-in the parity oracle.
-
-Closes L12.
-```
+Note: this commit reverses the v0.3 \`acc2282\` "geometry-first
+inversion is unsafe" claim. The inversion itself was safe; the
+v0.3 attempt used the wrong comparator (assembled-frame size
+instead of image size) and the v0.3 fixtures already encoded the
+buggy output, masking the fact that the inversion produced the
+correct bytes.
 
 ---
 

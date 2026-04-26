@@ -7,7 +7,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	opentile "github.com/tcornish/opentile-go"
@@ -70,10 +69,8 @@ func runParityOnSlide(t *testing.T, slide string) {
 		}
 	}()
 
-	isNDPI := strings.EqualFold(filepath.Ext(slide), ".ndpi")
 	for li, lvl := range tiler.Levels() {
 		positions := samplePositions(lvl.Grid(), *fullParity)
-		imgSize := lvl.Size()
 		for _, pos := range positions {
 			our, err := lvl.Tile(pos.X, pos.Y)
 			if err != nil {
@@ -86,22 +83,6 @@ func runParityOnSlide(t *testing.T, slide string) {
 				continue
 			}
 			if !bytes.Equal(our, theirs) {
-				// NDPI edge tiles (pixel extent exceeds image bounds) go
-				// through a CUSTOMFILTER-driven OOB fill inside tjTransform.
-				// Our callback and Python's emit identical DC values
-				// (verified by LumaDCQuant + LuminanceToDCCoefficient
-				// agreement) but the two encoded entropy streams still
-				// diverge in a handful of bytes. Root cause is a subtle
-				// tjTransform non-determinism we haven't pinned down;
-				// pixel output is visually equivalent but not byte-equal.
-				// Downgrade to t.Log on NDPI edge tiles only — see
-				// docs/deferred.md L12.
-				isEdge := (pos.X+1)*tileSize > imgSize.W || (pos.Y+1)*tileSize > imgSize.H
-				if isNDPI && isEdge {
-					t.Logf("slide %s level %d tile (%d,%d): NDPI edge-tile entropy divergence (L12) — go=%d bytes py=%d bytes",
-						filepath.Base(slide), li, pos.X, pos.Y, len(our), len(theirs))
-					continue
-				}
 				t.Errorf("slide %s level %d tile (%d,%d): byte-level divergence (go=%d bytes, py=%d bytes)",
 					filepath.Base(slide), li, pos.X, pos.Y, len(our), len(theirs))
 			}
