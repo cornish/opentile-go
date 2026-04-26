@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test (Go ${{ matrix.go }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.23']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Install libjpeg-turbo (macOS)
+        if: runner.os == 'macOS'
+        run: brew install jpeg-turbo
+
+      - name: Install libjpeg-turbo (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libturbojpeg0-dev pkg-config
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (cgo, with race)
+        run: go test ./... -race -count=1 -timeout 5m
+
+      - name: go build (nocgo)
+        env:
+          CGO_ENABLED: '0'
+        run: go build ./...
+
+      - name: go test (nocgo)
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./... -tags nocgo -count=1 -timeout 5m
+
+  # Integration suite (TestSlideParity etc.) and the parity oracle
+  # require sample slides that aren't checked into the repo (they're
+  # ~10 GB of WSI data, gitignored). Both are run locally before
+  # release tags but skipped in CI.
+  #
+  # Coverage gate (make cover) is skipped for the same reason — without
+  # OPENTILE_TESTDIR the integration-backed paths report ~0% and the
+  # 80%-per-package threshold can't be met. Coverage is enforced in
+  # release-readiness sweeps where the env is provisioned.
