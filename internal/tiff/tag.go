@@ -68,6 +68,12 @@ func (e Entry) fitsInline() bool {
 
 // decodeInline decodes the inline cell (cell) as a slice of uint32 values
 // according to the entry's Type. cell must be the raw bytes in file order.
+//
+// The *byteReader argument is used only for b.order when interpreting
+// multi-byte values; the reader's position / file state is irrelevant
+// here. Passing the whole reader keeps the call sites uniform with the
+// other decode helpers in this file (decodeExternal, decodeASCII)
+// which actually do read from the underlying file.
 func (e Entry) decodeInline(b *byteReader, cell []byte) ([]uint32, error) {
 	if !e.fitsInline() {
 		return nil, fmt.Errorf("tiff: tag %d: value does not fit inline", e.Tag)
@@ -125,8 +131,13 @@ func (e Entry) decodeBuffer(b *byteReader, buf []byte) ([]uint32, error) {
 	return out, nil
 }
 
-// decodeASCII reads the string value for an ASCII entry.
-// cell is the inline cell used when the value fits inline.
+// decodeASCII reads the string value for an ASCII entry. cell is the
+// inline cell used when the value fits inline.
+//
+// NUL terminators are silently tolerated: TIFF 6.0 mandates NUL
+// termination for ASCII tags but Aperio / Hamamatsu slides in the wild
+// occasionally omit it on non-final tags. The returned string is the
+// authoritative content; callers should treat it as already trimmed.
 func (e Entry) decodeASCII(b *byteReader, cell []byte) (string, error) {
 	var data []byte
 	if e.fitsInline() {

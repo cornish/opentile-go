@@ -70,6 +70,12 @@ func walkNDPIIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 // sniffNDPI parses the first IFD of a classic-TIFF file and reports whether
 // it carries the Hamamatsu SourceLens tag (65420), which identifies an NDPI
 // file. Used by File.Open to decide whether to re-parse in NDPI mode.
+//
+// This is a deliberate format-specific peek inside an otherwise
+// format-agnostic package. NDPI files share classic TIFF magic 42 with
+// no header-level distinguisher — sniffing a vendor tag is the cleanest
+// way to dispatch the NDPI-layout IFD walker without making every
+// caller pre-classify. See docs/deferred.md L5.
 func sniffNDPI(b *byteReader, firstIFDOffset int64) (bool, error) {
 	count16, err := b.uint16(firstIFDOffset)
 	if err != nil {

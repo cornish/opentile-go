@@ -11,5 +11,11 @@ type Metadata struct {
 	ScannerModel        string
 	ScannerSoftware     []string
 	ScannerSerial       string
-	AcquisitionDateTime time.Time // zero if unknown
+	// AcquisitionDateTime is the time the slide was scanned. Partial Date
+	// or Time values that fail time.Parse yield the zero value
+	// (time.Time{}); time.Time{}.IsZero() == true is the "unknown"
+	// sentinel. Callers should always check IsZero rather than comparing
+	// against a specific time — different scanner vendors emit dates in
+	// different formats and our parsers are lenient but not exhaustive.
+	AcquisitionDateTime time.Time
 }

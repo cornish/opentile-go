@@ -312,8 +312,12 @@ func Crop(src []byte, r Region) ([]byte, error) {
 // coefficient for OOB luma blocks is computed per-JPEG from the source's
 // luma quantization table (DQT table ID 0), reproducing
 // PyTurboJPEG.__map_luminance_to_dc_dct_coefficient exactly. Chroma DC
-// coefficients are left at 0 (level-shift-neutral 128), producing white
-// output when combined with the luma fill.
+// coefficients are left at 0 (level-shift-neutral 128), producing
+// pixels that decode close-to-but-not-exactly white (the small residual
+// chroma offset comes from JPEG's centred-128 chroma representation).
+// This matches PyTurboJPEG's behavior bit-for-bit; for exact white the
+// caller would need a chroma extension that we don't currently
+// implement (tracked as a future enhancement).
 //
 // For non-white fills (e.g. background_luminance=0 for black), use
 // CropWithBackgroundLuminance.

@@ -37,6 +37,12 @@ const (
 // modeClassic: magic 42, uint16 count, 12-byte entries, uint32 offsets.
 // modeBigTIFF: magic 43, uint64 count, 20-byte entries, uint64 offsets.
 // modeNDPI:    magic 42 with Hamamatsu high-bits extension for 64-bit offsets.
+//
+// Cycle detection uses an exact-offset seen-map (offset → bool). Files
+// where one IFD's body literally contains the start of another IFD
+// (overlapping IFDs at non-equal offsets) are NOT detected — only
+// duplicate offsets are. In practice this never fires on real slides;
+// noted here as a v0.4+ TODO.
 func walkIFDs(b *byteReader, offset int64, mode tiffMode) ([]*ifd, error) {
 	switch mode {
 	case modeBigTIFF:
