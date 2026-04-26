@@ -42,11 +42,6 @@ Caught by the three-slide integration tests or during implementation. The librar
 - **Detail:** Real Aperio `ImageDescription` strings use CRLF line endings, so `desc[:newline]` in `parseDescription` leaves a trailing `\r` on `SoftwareLine`. Example: `"Aperio Image Library v11.2.1 \r"`.
 - **Fix sketch:** `strings.TrimRight(desc[:newline], "\r\n ")` in `formats/svs/metadata.go`.
 
-### L2 — Non-tiled pages silently skipped
-- **Source:** Task 16/20 page-classification fix (`f7a27c4`)
-- **Severity:** Limitation (intended for v0.1 scope)
-- **Detail:** `Factory.Open` skips TIFF pages without `TileWidth` rather than surfacing them. This hides thumbnail, label, and macro images. Correct behavior once R3 (associated images) lands: classify and expose these pages as `AssociatedImage`.
-
 ### L3 — `CompressionUnknown` untested against a real-world slide
 - **Source:** Task 16 quality review
 - **Severity:** Limitation (no real example yet)
@@ -71,11 +66,6 @@ Caught by the three-slide integration tests or during implementation. The librar
 - **Source:** Task 19 plan note
 - **Severity:** Limitation (format-assumption)
 - **Detail:** `newLabelImage` receives hard-coded `mcuW=16, mcuH=16` from `Factory.Open`, assuming Hamamatsu always uses YCbCr 4:2:0. If a macro page ever uses 4:4:4 (MCU 8×8) or 4:2:2 (MCU 16×8), the crop region computed with 16×16 may not be MCU-aligned and `TJXOPT_PERFECT` will reject the crop. Refinement: read each macro page's SOF and use its actual MCU size. Not observed on any of the three local NDPI slides, but worth fixing when the first real user reports it.
-
-### L8 — SVS v0.1 page classifier was guessed, not ported from upstream
-- **Source:** Architecture audit (post-Batch 4)
-- **Severity:** Limitation (needs verification in Task 21)
-- **Detail:** `formats/svs/svs.go` skips non-tiled pages (v0.1 scope) and Task 21's plan had a classifier based on `ImageDescription == "label"`/`"macro"`. Upstream tifffile's SVS detection derives series names from the first line of `ImageDescription` (Aperio's format embeds markers there). Before implementing Task 21, read `cgohlke/tifffile`'s `_series_svs` or similar and `imi-bigpicture/opentile`'s SVS tiler, then port whatever the real classification logic is. Do not carry forward v0.1's guess.
 
 ### L9 — Concurrency stress on `internal/jpegturbo.Crop` is undocumented
 - **Source:** Batch 3 quality review (suggestion 7)
@@ -146,26 +136,6 @@ Caught by the three-slide integration tests or during implementation. The librar
   Alternatively, submit an upstream issue to libjpeg-turbo asking
   whether CUSTOMFILTER is expected to be deterministic across two
   invocations with identical inputs.
-
-### L13 — v0.2 NDPI striped path was architecturally wrong for ~50 hours before benchmarking caught it
-- **Source:** NDPI v0.2 architectural rewrite (feat/v0.2, post-Batch 4)
-- **Severity:** Limitation (process note; resolved)
-- **Detail:** `formats/ndpi/striped.go` originally gated on TIFF tag 322
-  (TileWidth), which NDPI pages never carry. Every pyramid level fell
-  through to a whole-level `tjTransform` crop per tile — ~3000x slower
-  than Python opentile for L0 of CMU-1.ndpi (3.3s/tile vs 0.97ms/tile;
-  projected ~9h for a full-level fixture). Fixed by porting tifffile's
-  `_page._gettags` McuStarts rewrite (`internal/jpeg/ndpi_tile.go` +
-  `formats/ndpi/stripes.go`) plus Python opentile's
-  `NdpiStripedImage._read_extended_frame` tile-assembly path
-  (`formats/ndpi/striped.go`).
-
-  *Lesson captured in `feedback_ndpi_architecture.md`.* Reinforces the
-  "don't guess — read upstream" rule already codified in CLAUDE.md:
-  "does the slide open?" is not a sufficient NDPI smoke test; the
-  `NDPI_BENCH_SLIDE` benchmark (`formats/ndpi/bench_test.go`) now
-  forces a per-tile-time regression gate so this specific failure mode
-  cannot recur silently.
 
 ### L14 — NDPI label synthesis is Go-specific; Python opentile does not expose NDPI labels
 - **Source:** Batch 7 parity oracle extension
