@@ -22,7 +22,7 @@ var sampledMode = flag.Bool("sampled", false, "generate sampled (not full) tile 
 
 func sampledByDefault(slide string) bool {
 	base := filepath.Base(slide)
-	return base == "Hamamatsu-1.ndpi"
+	return base == "Hamamatsu-1.ndpi" || base == "svs_40x_bigtiff.svs"
 }
 
 // TestGenerateFixtures is a dev-only helper. Run with:
