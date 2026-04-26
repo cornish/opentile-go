@@ -3,7 +3,6 @@ package ndpi
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"iter"
@@ -326,7 +325,10 @@ func (l *stripedImage) getPatchedHeader(frameSize opentile.Size) ([]byte, error)
 	}
 	l.headerMu.Unlock()
 
-	patched, err := patchSOFSize(l.stripes.JPEGHeader, frameSize.H, frameSize.W)
+	if frameSize.H < 0 || frameSize.W < 0 || frameSize.H > 0xFFFF || frameSize.W > 0xFFFF {
+		return nil, fmt.Errorf("ndpi: SOF size %dx%d out of uint16 range", frameSize.W, frameSize.H)
+	}
+	patched, err := jpeg.ReplaceSOFDimensions(l.stripes.JPEGHeader, uint16(frameSize.W), uint16(frameSize.H))
 	if err != nil {
 		return nil, err
 	}
@@ -339,39 +341,6 @@ func (l *stripedImage) getPatchedHeader(frameSize opentile.Size) ([]byte, error)
 	l.headersByFrameSize[frameSize] = patched
 	l.headerMu.Unlock()
 	return patched, nil
-}
-
-// patchSOFSize returns a copy of header with its SOF0 (FF C0) segment's
-// height/width fields overwritten. Kept package-private; the upstream
-// ReplaceSOFDimensions helper in internal/jpeg is semantically equivalent
-// but pre-dates stripes.go and uses a different byte-order argument order.
-func patchSOFSize(header []byte, newH, newW int) ([]byte, error) {
-	if newH < 0 || newW < 0 || newH > 0xFFFF || newW > 0xFFFF {
-		return nil, fmt.Errorf("ndpi: SOF size %dx%d out of uint16 range", newW, newH)
-	}
-	// Locate SOF0. The header is assembled from NDPIStripeJPEGHeader's
-	// output which keeps markers intact; a byte scan for FF C0 is safe.
-	sof := -1
-	for i := 0; i < len(header)-1; i++ {
-		if header[i] == 0xFF && jpeg.Marker(header[i+1]) == jpeg.SOF0 {
-			sof = i
-			break
-		}
-	}
-	if sof < 0 {
-		return nil, fmt.Errorf("ndpi: SOF0 not found in header")
-	}
-	// Payload starts at sof+4 (marker(2) + length(2)). Height at payload+1,
-	// width at payload+3.
-	payload := sof + 4
-	if payload+5 > len(header) {
-		return nil, fmt.Errorf("ndpi: SOF payload truncated")
-	}
-	out := make([]byte, len(header))
-	copy(out, header)
-	binary.BigEndian.PutUint16(out[payload+1:payload+3], uint16(newH))
-	binary.BigEndian.PutUint16(out[payload+3:payload+5], uint16(newW))
-	return out, nil
 }
 
 func maxSize(a, b opentile.Size) opentile.Size {
