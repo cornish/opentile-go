@@ -13,11 +13,19 @@ import (
 // data after SOS — callers that need the scan bytes use ReadScan on the
 // reader after the SOS Segment is yielded.
 //
+// If r is already a *bufio.Reader the same reader is reused (no double
+// buffering), so the caller can chain Scan -> ReadScan on the same
+// underlying stream and pick up reading exactly where Scan left off.
+// Otherwise a new 4KiB-buffered *bufio.Reader is created internally.
+//
 // Malformed inputs yield a Segment with a zero-valued Marker and a non-nil
 // error. Callers must honor the error yield and stop iterating.
 func Scan(r io.Reader) iter.Seq2[Segment, error] {
 	return func(yield func(Segment, error) bool) {
-		br := bufio.NewReader(r)
+		br, ok := r.(*bufio.Reader)
+		if !ok {
+			br = bufio.NewReaderSize(r, 4096)
+		}
 		for {
 			// Every marker begins with 0xFF, possibly preceded by any number
 			// of 0xFF fill bytes.
