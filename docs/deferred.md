@@ -210,6 +210,12 @@ gate decides a done-when bar or fix path for subsequent tasks.
   - Ventana .bif: `software=None` or `'ScanOutputManager 1.1.0.15854'` — fails the prefix clause.
 - **Consequence:** the v0.5 Philips factory's `Supports()` predicate ports the rule verbatim. No additional disambiguation needed.
 
+#### Task 2 — `FillFrame` determinism gate
+
+- **Date:** 2026-04-26
+- **Outcome:** byte-deterministic. 5 passes through `Jpeg.fill_frame(src, 1.0)` in Python opentile (which wraps libjpeg-turbo's `tjTransform` with a CUSTOMFILTER that zeros all DCT coefficients, then sets the luma DC at the first block of each MCU) produced identical output bytes for the same source tile (SHA `05c3789cc691d9a207659e250b3fc9c799eca7c5019c4b084a441c4dca9da243`, 2,364 bytes; source: CMU-1-Small-Region.svs L0 tile (0,0), 3,985 bytes).
+- **Consequence:** v0.5 sparse-tile blank-tile output (`internal/jpegturbo.FillFrame`) must byte-match Python opentile. Tasks 5 / 10 enforce byte-equality; the alternative pixel-equivalent fallback is not needed.
+
 ### v0.4 gates
 
 ### Task 1 — JP2K determinism gate
