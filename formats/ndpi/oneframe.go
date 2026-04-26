@@ -28,9 +28,15 @@ type oneFrameImage struct {
 
 	// paddedJPEG is the full-level JPEG payload with its SOF rewritten to
 	// MCU-aligned dimensions. Built lazily on first tile read and cached
-	// for the lifetime of the level. Populated under paddedJPEGOnce.
-	paddedJPEGOnce bool
+	// for the lifetime of the level. Single-entry guarantee comes from
+	// paddedJPEGOnce; the previous v0.2 implementation used a plain bool
+	// guard which only worked because the sole caller (extendedOnce.Do
+	// in getExtendedFrame) provided the memory barrier transitively.
+	// sync.Once makes the contract explicit so a future caller adding a
+	// non-extendedOnce.Do entry can't regress concurrency safety.
+	paddedJPEGOnce sync.Once
 	paddedJPEG     []byte
+	paddedJPEGErr  error
 	mcuW, mcuH     int
 
 	// extendedFrame is the padded JPEG further widened to a tile-aligned
@@ -129,16 +135,19 @@ func (l *oneFrameImage) Tiles(ctx context.Context) iter.Seq2[opentile.TilePos, o
 
 // getPaddedJPEG reads the level's JPEG payload once and returns a slice
 // where the SOF dimensions are rounded up to MCU boundaries (safe for
-// tjTransform's TJXOPT_PERFECT). Called on first Tile; result is cached for
-// the level's lifetime.
-//
-// Concurrency note: this method is only reached through extendedOnce.Do in
-// Tile()'s extended-frame path, which supplies the memory barrier and
-// single-entry guarantee. paddedJPEGOnce therefore cannot race in practice.
+// tjTransform's TJXOPT_PERFECT). Cached for the level's lifetime via
+// paddedJPEGOnce.
 func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
-	if l.paddedJPEGOnce {
-		return l.paddedJPEG, nil
-	}
+	l.paddedJPEGOnce.Do(func() {
+		l.paddedJPEG, l.paddedJPEGErr = l.buildPaddedJPEG()
+	})
+	return l.paddedJPEG, l.paddedJPEGErr
+}
+
+// buildPaddedJPEG carries the actual work of getPaddedJPEG; separated
+// out so paddedJPEGOnce.Do receives a no-arg closure with no return
+// values.
+func (l *oneFrameImage) buildPaddedJPEG() ([]byte, error) {
 	// NDPI one-frame level pages use StripOffsets (273) / StripByteCounts (279)
 	// rather than TileOffsets (324) / TileByteCounts (325).
 	offsets, err := l.page.ScalarArrayU64(tiff.TagStripOffsets)
@@ -181,16 +190,13 @@ func (l *oneFrameImage) getPaddedJPEG() ([]byte, error) {
 		return nil, fmt.Errorf("%w: one-frame level %dx%d exceeds SOF uint16 range", opentile.ErrBadJPEGBitstream, paddedW, paddedH)
 	}
 	if paddedW == l.size.W && paddedH == l.size.H {
-		l.paddedJPEG = buf
-	} else {
-		rewrote, err := jpeg.ReplaceSOFDimensions(buf, uint16(paddedW), uint16(paddedH))
-		if err != nil {
-			return nil, fmt.Errorf("pad SOF: %w", err)
-		}
-		l.paddedJPEG = rewrote
+		return buf, nil
 	}
-	l.paddedJPEGOnce = true
-	return l.paddedJPEG, nil
+	rewrote, err := jpeg.ReplaceSOFDimensions(buf, uint16(paddedW), uint16(paddedH))
+	if err != nil {
+		return nil, fmt.Errorf("pad SOF: %w", err)
+	}
+	return rewrote, nil
 }
 
 // getExtendedFrame produces the tile-aligned "extended frame" from which
