@@ -46,10 +46,13 @@ type Segment struct {
 }
 
 // isStandalone reports whether m is a stand-alone marker (no length / payload).
+// Includes SOI, EOI, the JPEG 0x01 reserved marker, and the eight RSTn
+// markers (RST0..RST7 at 0xD0..0xD7), expressed here as a range comparison
+// against RST0 so additions to the marker constants don't drift the literal
+// list out of sync.
 func (m Marker) isStandalone() bool {
-	switch m {
-	case SOI, EOI, 0x01, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7:
+	if m == SOI || m == EOI || m == 0x01 {
 		return true
 	}
-	return false
+	return m >= RST0 && m <= RST0+7
 }
