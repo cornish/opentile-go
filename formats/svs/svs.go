@@ -58,38 +58,55 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		return nil, err
 	}
 
-	// Pyramid levels are tiled; non-tiled pages (thumbnail, label, macro)
-	// are classified and exposed via Tiler.Associated(). Level indices are
-	// contiguous (0..N-1) in pyramid order and do not correspond to physical
-	// page indices in the TIFF.
-	levels := make([]opentile.Level, 0, len(pages))
+	// Classify pages into Baseline / Thumbnail / Label / Macro series via
+	// the tifffile-style algorithm in classifyPages. Level indices in the
+	// returned Tiler are contiguous (0..N-1) in pyramid order and do not
+	// correspond to physical page indices in the TIFF. Associated images are
+	// emitted in tifffile's series order: Thumbnail, Label, Macro (any of
+	// which may be absent).
 	baseSize, err := pageSize(basePage)
 	if err != nil {
 		return nil, err
 	}
-	levelIdx := 0
-	var associated []opentile.AssociatedImage
-	for pageIdx, p := range pages {
+	metas := make([]pageMeta, len(pages))
+	for i, p := range pages {
 		_, tiled := p.TileWidth()
-		subfileType, _ := p.ScalarU32(tiff.TagNewSubfileType)
-		kind := classifyAssociatedKind(pageIdx, subfileType, tiled)
-		if kind != "" {
-			a, err := newAssociatedImage(kind, p, file.ReaderAt())
-			if err != nil {
-				return nil, fmt.Errorf("svs: associated %s (page %d): %w", kind, pageIdx, err)
-			}
-			associated = append(associated, a)
-			continue
+		sub, _ := p.ScalarU32(tiff.TagNewSubfileType)
+		metas[i] = pageMeta{
+			Tiled:       tiled,
+			Reduced:     sub&0x1 != 0,
+			SubfileType: sub,
 		}
-		if !tiled {
-			continue // non-associated, non-tiled page — skip
-		}
-		lvl, err := newTiledImage(levelIdx, p, baseSize, md.MPP, file.ReaderAt(), cfg)
+	}
+	class, err := classifyPages(metas)
+	if err != nil {
+		return nil, err
+	}
+	levels := make([]opentile.Level, 0, len(class.Levels))
+	for levelIdx, pageIdx := range class.Levels {
+		lvl, err := newTiledImage(levelIdx, pages[pageIdx], baseSize, md.MPP, file.ReaderAt(), cfg)
 		if err != nil {
 			return nil, fmt.Errorf("svs: page %d (level %d): %w", pageIdx, levelIdx, err)
 		}
 		levels = append(levels, lvl)
-		levelIdx++
+	}
+	var associated []opentile.AssociatedImage
+	for _, spec := range []struct {
+		kind    string
+		pageIdx int
+	}{
+		{"thumbnail", class.Thumbnail},
+		{"label", class.Label},
+		{"overview", class.Macro},
+	} {
+		if spec.pageIdx < 0 {
+			continue
+		}
+		a, err := newAssociatedImage(spec.kind, pages[spec.pageIdx], file.ReaderAt())
+		if err != nil {
+			return nil, fmt.Errorf("svs: associated %s (page %d): %w", spec.kind, spec.pageIdx, err)
+		}
+		associated = append(associated, a)
 	}
 	icc, _ := basePage.ICCProfile()
 	return &tiler{md: md, levels: levels, associated: associated, icc: icc}, nil

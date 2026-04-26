@@ -3,6 +3,7 @@ package svs
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	opentile "github.com/tcornish/opentile-go"
 	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/tcornish/opentile-go/opentile/opentiletest"
 )
 
 // buildSVSTIFF builds a TIFF with one tiled page carrying tileCount*tileCount
@@ -104,7 +106,7 @@ func TestSvsTilerOpenAndLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("svs.New().Open: %v", err)
@@ -146,7 +148,7 @@ func TestSvsTilerOpenAndLevel(t *testing.T) {
 func TestSvsLevelTileOutOfBounds(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 	_, err := lvl.Tile(99, 99)
@@ -165,7 +167,7 @@ func TestSvsLevelTileOutOfBounds(t *testing.T) {
 func TestSvsLevelTilesIterator(t *testing.T) {
 	data, tiles := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 
@@ -189,7 +191,7 @@ func TestSvsLevelTilesIterator(t *testing.T) {
 func TestSvsLevelTileReader(t *testing.T) {
 	data, tiles := buildSVSTIFF(t, 16, 16, 2, 2, "")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, _ := New().Open(f, cfg)
 	lvl, _ := tiler.Level(0)
 	rc, err := lvl.TileReader(1, 1)
@@ -235,7 +237,7 @@ func TestSvsLevelTileBenignEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -255,7 +257,7 @@ func TestSvsLevelTileBenignEOF(t *testing.T) {
 func TestMetadataOfExtractsAperioExtras(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "AppMag = 40|MPP = 0.25|Filename = slide-x")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -411,7 +413,7 @@ func TestSvsTilerSkipsNonTiledPages(t *testing.T) {
 	if len(f.Pages()) != 2 {
 		t.Fatalf("expected 2 TIFF pages, got %d", len(f.Pages()))
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: non-tiled page should not cause Open to fail: %v", err)
@@ -445,7 +447,7 @@ func (w *wrapperTiler) UnwrapTiler() opentile.Tiler { return w.Tiler }
 func TestMetadataOfUnwrapsWrappers(t *testing.T) {
 	data, _ := buildSVSTIFF(t, 16, 16, 1, 1, "MPP = 0.25")
 	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
-	cfg := opentile.NewTestConfig(opentile.Size{}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -493,5 +495,87 @@ func TestMetadataOfHandlesCyclicUnwrap(t *testing.T) {
 		// good — MetadataOf terminated
 	case <-time.After(2 * time.Second):
 		t.Fatal("MetadataOf did not terminate on a cyclic wrapper")
+	}
+}
+
+// TestTiffCompressionToOpentileKnown locks in the documented mapping for
+// every TIFF compression code SVS slides actually produce. v0.1 had no
+// direct test for this — failures would only surface as wrong Compression()
+// strings on real fixtures.
+func TestTiffCompressionToOpentileKnown(t *testing.T) {
+	cases := []struct {
+		code uint32
+		want opentile.Compression
+	}{
+		{1, opentile.CompressionNone},
+		{5, opentile.CompressionLZW},
+		{7, opentile.CompressionJPEG},
+		{33003, opentile.CompressionJP2K}, // APERIO_JP2000_YCBC
+		{33005, opentile.CompressionJP2K}, // APERIO_JP2000_RGB
+	}
+	for _, c := range cases {
+		if got := tiffCompressionToOpentile(c.code); got != c.want {
+			t.Errorf("code %d: got %v, want %v", c.code, got, c.want)
+		}
+	}
+}
+
+// TestTiffCompressionToOpentileUnknown locks in that any code outside the
+// supported set falls through to CompressionUnknown rather than panicking
+// or silently mapping to a wrong codec. Required by the L3 limitation
+// (CompressionUnknown was previously untested).
+func TestTiffCompressionToOpentileUnknown(t *testing.T) {
+	for _, code := range []uint32{0, 2, 3, 4, 6, 8, 32773, 999, 65535} {
+		if got := tiffCompressionToOpentile(code); got != opentile.CompressionUnknown {
+			t.Errorf("code %d: got %v, want CompressionUnknown", code, got)
+		}
+	}
+}
+
+// patchSVSCompression rewrites the Compression tag's inline value in a
+// buffer produced by buildSVSTIFF. Layout (LE): header (8) + IFD count
+// (2) + ImageWidth entry (12) + ImageLength entry (12) + Compression
+// entry (12). Within the Compression entry the inline value-or-offset
+// cell starts at byte offset 8 (after tag+type+count = 2+2+4). Total:
+// 8 + 2 + 12 + 12 + 8 = 42.
+func patchSVSCompression(t *testing.T, data []byte, code uint16) {
+	t.Helper()
+	const compressionValueOffset = 42
+	binary.LittleEndian.PutUint16(data[compressionValueOffset:], code)
+}
+
+// TestSVSTileReturnsRawForUnknownCompression closes L3: an SVS page with
+// an unrecognized Compression tag must still open, advertise the level
+// as CompressionUnknown, and return raw tile bytes verbatim from Tile()
+// (passthrough — we don't know how to splice tables for an unknown codec
+// and we don't pretend to).
+func TestSVSTileReturnsRawForUnknownCompression(t *testing.T) {
+	data, tiles := buildSVSTIFF(t, 16, 16, 2, 1, "")
+	patchSVSCompression(t, data, 999)
+	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("tiff.Open: %v", err)
+	}
+	cfg := opentiletest.NewConfig(opentile.Size{}, opentile.CorruptTileError)
+	tiler, err := New().Open(f, cfg)
+	if err != nil {
+		t.Fatalf("svs.New().Open: %v", err)
+	}
+	defer tiler.Close()
+
+	lvl, err := tiler.Level(0)
+	if err != nil {
+		t.Fatalf("Level(0): %v", err)
+	}
+	if got := lvl.Compression(); got != opentile.CompressionUnknown {
+		t.Errorf("Compression: got %v, want CompressionUnknown", got)
+	}
+	b, err := lvl.Tile(0, 0)
+	if err != nil {
+		t.Fatalf("Tile(0,0): %v", err)
+	}
+	if !bytes.Equal(b, tiles[0]) {
+		t.Errorf("Tile(0,0): unknown compression should passthrough; got %d bytes (first 8: %x), want %d (first 8: %x)",
+			len(b), b[:min(8, len(b))], len(tiles[0]), tiles[0][:min(8, len(tiles[0]))])
 	}
 }

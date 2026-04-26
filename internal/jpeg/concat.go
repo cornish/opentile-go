@@ -31,10 +31,15 @@ import (
 //     happens — callers are expected to pass non-empty tables when
 //     using ConcatenateScans.
 //
-//   - ColorspaceFix: when true, emit an Adobe APP14 segment signaling
-//     RGB colorspace (ColorTransform=0) immediately after the inserted
-//     tables. Required for Aperio SVS non-standard RGB JPEGs. The exact
-//     bytes come from the shared adobeAPP14 literal in insert_tables.go.
+//   - ColorspaceFix: when true AND JPEGTables is non-empty, emit an
+//     Adobe APP14 segment signaling RGB colorspace (ColorTransform=0)
+//     immediately after the inserted tables. Required for Aperio SVS
+//     non-standard RGB JPEGs. The exact bytes come from the shared
+//     adobeAPP14 literal in insert_tables.go. Silently skipped when
+//     JPEGTables is absent — matches upstream opentile, where the
+//     colorspace fix is layered inside the tables splice
+//     (opentile/jpeg/jpeg.py:192-198). Strips that lack shared tables
+//     (Grundium-style) carry their own colorspace info inline.
 //
 //   - RestartInterval: when >0, either (a) update the existing DRI
 //     payload if one is present in the fragment header, or (b) insert a
@@ -119,14 +124,12 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 	frame = append(frame, fragments[0]...)
 
 	for i := 1; i < len(fragments); i++ {
-		// Between-fragment: rewrite the trailing EOI of the previous
-		// fragment (currently at the end of frame) into FF RSTn. Python
-		// does this at the END of iteration i-1; we do it at the START
-		// of iteration i for exactly the same effect.
-		if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
-			return nil, fmt.Errorf("%w: fragment %d: expected trailing EOI before appending next fragment, got %02X %02X",
-				ErrBadJPEG, i-1, frame[len(frame)-2], frame[len(frame)-1])
-		}
+		// Between-fragment: rewrite the last 2 bytes of the previous
+		// fragment (currently at the end of frame) into FF RSTn.
+		// Python's concatenate_scans does frame += scan[:-2] followed by
+		// frame += b"\xff" + restart_mark(i-1), which has the same net
+		// effect as unconditionally overwriting the last 2 bytes — no EOI
+		// validation is performed upstream.
 		// restart_mark(i-1) = 0xD0 + ((i-1) % 8).
 		frame[len(frame)-2] = 0xFF
 		frame[len(frame)-1] = byte(0xD0 + ((i - 1) % 8))
@@ -139,8 +142,11 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		accumH += sofI.Height // widths are expected equal across fragments
 
 		// Find SOS in this fragment and append from scan_start onwards.
-		sosPos := bytes.Index(frag, []byte{0xFF, 0xDA})
-		if sosPos < 0 {
+		sosPos, ok, err := findMarkerOffset(frag, SOS)
+		if err != nil {
+			return nil, fmt.Errorf("fragment %d: %w", i, err)
+		}
+		if !ok {
 			return nil, fmt.Errorf("%w: fragment %d: SOS not found", ErrBadJPEG, i)
 		}
 		if sosPos+4 > len(frag) {
@@ -154,10 +160,18 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		frame = append(frame, frag[scanStart:]...)
 	}
 
-	// Sanity: the frame should end with the LAST fragment's EOI (0xFF 0xD9).
-	if len(frame) < 2 || frame[len(frame)-2] != 0xFF || frame[len(frame)-1] != 0xD9 {
-		return nil, fmt.Errorf("%w: assembled frame does not end with EOI", ErrBadJPEG)
+	// Overwrite the last 2 bytes of the assembled frame with EOI (FF D9).
+	// Python's concatenate_scans ends with frame[-2:] = self.end_of_image()
+	// — an unconditional overwrite, not a validation. This handles fragments
+	// whose StripByteCounts is over-allocated (e.g. Aperio BigTIFF SVS
+	// thumbnails where the trailing bytes are zero padding rather than EOI).
+	// JPEG decoders stop at the first real EOI they encounter, so any padding
+	// past the real EOI inside the assembled frame is harmless.
+	if len(frame) < 2 {
+		return nil, fmt.Errorf("%w: assembled frame too short", ErrBadJPEG)
 	}
+	frame[len(frame)-2] = 0xFF
+	frame[len(frame)-1] = 0xD9
 
 	// --- Step 2: splice tables[2:-2] (+ APP14) before first SOS. ------------
 
@@ -169,8 +183,11 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 			combined = append(combined, adobeAPP14...)
 			insert = combined
 		}
-		sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
-		if sosPos < 0 {
+		sosPos, ok, err := findMarkerOffset(frame, SOS)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			return nil, fmt.Errorf("%w: SOS not found in assembled frame", ErrBadJPEG)
 		}
 		spliced := make([]byte, 0, len(frame)+len(insert))
@@ -178,14 +195,13 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		spliced = append(spliced, insert...)
 		spliced = append(spliced, frame[sosPos:]...)
 		frame = spliced
-	} else if opts.ColorspaceFix {
-		// ColorspaceFix without tables is a caller bug for our use cases —
-		// if they're asking for the Adobe marker, there must be tables to
-		// splice it after. Match Python's layering (APP14 goes with the
-		// tables insert); refuse rather than silently producing a frame
-		// that doesn't match upstream.
-		return nil, fmt.Errorf("%w: ColorspaceFix requires non-empty JPEGTables", ErrBadJPEG)
 	}
+	// When JPEGTables is absent, both the tables splice AND the APP14
+	// colorspace-fix splice are skipped — matching upstream's gate at
+	// opentile/jpeg/jpeg.py:192-198, where rgb_colorspace_fix is layered
+	// inside the `if jpeg_tables is not None:` branch. Required by
+	// scanners (e.g. Grundium) that omit the shared JPEGTables tag and
+	// embed DQT/DHT/SOF inline in each strip.
 
 	// --- Step 3: patch SOF dimensions. --------------------------------------
 
@@ -218,16 +234,22 @@ func ConcatenateScans(fragments [][]byte, opts ConcatOpts) ([]byte, error) {
 		}
 		driPayload := []byte{0, 0}
 		binary.BigEndian.PutUint16(driPayload, uint16(opts.RestartInterval))
-		driPos := bytes.Index(frame, []byte{0xFF, 0xDD})
-		if driPos >= 0 {
+		driPos, driFound, err := findMarkerOffset(frame, DRI)
+		if err != nil {
+			return nil, err
+		}
+		if driFound {
 			if driPos+6 > len(frame) {
 				return nil, fmt.Errorf("%w: DRI truncated", ErrBadJPEG)
 			}
 			// payload is at driPos+4..driPos+6.
 			copy(frame[driPos+4:driPos+6], driPayload)
 		} else {
-			sosPos := bytes.Index(frame, []byte{0xFF, 0xDA})
-			if sosPos < 0 {
+			sosPos, ok, err := findMarkerOffset(frame, SOS)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
 				return nil, fmt.Errorf("%w: SOS not found for DRI insert", ErrBadJPEG)
 			}
 			// Insert FF DD 00 04 <payload> before SOS.
@@ -272,55 +294,81 @@ func firstFragmentSOF(frag []byte) (*SOF, error) {
 	return nil, fmt.Errorf("%w: no SOF in fragment", ErrBadJPEG)
 }
 
-// findFirstSOFOffset walks frame by segments and returns the byte offset
-// of the first FF C0 marker prefix (so the marker byte is at offset+1 and
-// the length is at offset+2..+4).
-func findFirstSOFOffset(frame []byte) (int, error) {
-	// Reproduce the positional accounting from jpeg.Scan by tracking bytes
-	// as we iterate. Scan yields parsed segments but hides positions; walk
-	// the bytes directly instead.
+// findMarkerOffset walks frame as a structural sequence of JPEG marker
+// segments and returns the byte offset of the FF prefix of the first
+// segment whose marker code equals target. The walk stops once SOS is
+// reached and consumed: entropy-coded scan data follows SOS, and
+// structural decoding doesn't apply.
+//
+// Return shape: (offset, ok, err). ok=true means the marker was found
+// at offset (the FF prefix byte). ok=false with err==nil means the walk
+// completed cleanly without seeing target — including the SOS-reached-
+// before-target case (DRI lookup typically wants this signal). err!=nil
+// means the input is malformed; callers should propagate.
+//
+// Special-case: when target == SOS, the SOS marker itself is reported
+// (rather than treated as the end-of-walk sentinel).
+//
+// Catches false-positive matches that a naive bytes.Index would conflate
+// with real markers — e.g., FF DA / FF DD bytes that appear inside a
+// DQT/DHT payload. Our SVS / NDPI fixtures have never produced such a
+// pattern in practice, but the structural walk eliminates the latent
+// fragility entirely.
+func findMarkerOffset(frame []byte, target Marker) (int, bool, error) {
 	pos := 0
 	for pos < len(frame)-1 {
 		if frame[pos] != 0xFF {
-			return -1, fmt.Errorf("%w: expected 0xFF at pos %d, got %02X", ErrBadJPEG, pos, frame[pos])
+			return 0, false, fmt.Errorf("%w: expected 0xFF at pos %d, got %02X", ErrBadJPEG, pos, frame[pos])
 		}
-		// Skip fill bytes.
 		start := pos
 		for pos < len(frame) && frame[pos] == 0xFF {
 			pos++
 		}
 		if pos >= len(frame) {
-			return -1, fmt.Errorf("%w: truncated at marker code", ErrBadJPEG)
+			return 0, false, fmt.Errorf("%w: truncated at marker code", ErrBadJPEG)
 		}
 		code := Marker(frame[pos])
-		if code == SOF0 {
-			// marker prefix is at pos-1 (0xFF) — return the FF offset.
-			return pos - 1, nil
+		if code == 0x00 {
+			return 0, false, fmt.Errorf("%w: 0xFF 00 outside scan data at pos %d", ErrBadJPEG, start)
+		}
+		if code == target {
+			return pos - 1, true, nil
 		}
 		pos++
-		if code == 0x00 {
-			return -1, fmt.Errorf("%w: 0xFF 00 outside scan data at pos %d", ErrBadJPEG, start)
-		}
 		if code.isStandalone() {
 			continue
 		}
 		if pos+2 > len(frame) {
-			return -1, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
+			return 0, false, fmt.Errorf("%w: truncated length at pos %d", ErrBadJPEG, pos)
 		}
 		segLen := int(binary.BigEndian.Uint16(frame[pos : pos+2]))
 		if segLen < 2 {
-			return -1, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
+			return 0, false, fmt.Errorf("%w: segment length %d < 2", ErrBadJPEG, segLen)
 		}
 		if code == SOS {
-			// Past SOF; SOF missing in segment-walk region.
-			return -1, fmt.Errorf("%w: SOS reached without SOF", ErrBadJPEG)
+			// SOS was the end-of-structural-region; target wasn't found.
+			return 0, false, nil
 		}
 		pos += segLen
 		if pos > len(frame) {
-			return -1, fmt.Errorf("%w: segment past frame end", ErrBadJPEG)
+			return 0, false, fmt.Errorf("%w: segment past frame end", ErrBadJPEG)
 		}
 	}
-	return -1, fmt.Errorf("%w: no SOF in frame", ErrBadJPEG)
+	return 0, false, nil
+}
+
+// findFirstSOFOffset returns the offset of the first FF C0 marker prefix.
+// Wraps findMarkerOffset for back-compat with callers expecting an
+// (int, error) shape with a sentinel "no SOF" error.
+func findFirstSOFOffset(frame []byte) (int, error) {
+	off, ok, err := findMarkerOffset(frame, SOF0)
+	if err != nil {
+		return -1, err
+	}
+	if !ok {
+		return -1, fmt.Errorf("%w: no SOF in frame", ErrBadJPEG)
+	}
+	return off, nil
 }
 
 // initialCap pre-sizes the output buffer to avoid repeated grow-copy during

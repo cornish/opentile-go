@@ -3,7 +3,6 @@ package ndpi
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"iter"
@@ -41,6 +40,21 @@ type stripedImage struct {
 	// frameSize = max(tileSize, stripeSize) — the default frame geometry
 	// for non-edge tiles. Stored so we don't recompute on every Tile call.
 	frameSize opentile.Size
+
+	// dcBackground is the post-quantisation luma DC coefficient to plant
+	// in OOB DCT blocks during edge-tile CropWithBackground calls. Derived
+	// once at construction from the level's shared JPEGHeader DQT (the DC
+	// quant doesn't vary across stripes/tiles of the same level), then
+	// passed via jpegturbo.CropOpts on every edge-tile call. Saves a
+	// per-call DQT byte-scan inside libjpeg-turbo's wrapper.
+	//
+	// Always uses luminance=1.0 (the white-fill default that matches
+	// Python opentile's PyTurboJPEG.crop_multiple). If a future caller
+	// needs a different luminance per tile they must compute the DC
+	// themselves and pass it via CropOpts; the legacy
+	// CropWithBackground / CropWithBackgroundLuminance APIs still derive
+	// per-call.
+	dcBackground int
 
 	// Patched-header cache. Keyed by frame size (the crop-safe frame
 	// geometry varies at the image edges). Populated lazily; an entry
@@ -82,6 +96,14 @@ func newStripedImage(
 	size := opentile.Size{W: int(iw), H: int(il)}
 	gridW := (size.W + tileSize.W - 1) / tileSize.W
 	gridH := (size.H + tileSize.H - 1) / tileSize.H
+	// Pre-compute the OOB-fill DC coefficient from the level's shared
+	// DQT so edge-tile CropWithBackground calls can skip the per-call
+	// DQT parse. The header carries the DQT verbatim — no need to
+	// assemble a frame to look it up.
+	dc, err := jpeg.LuminanceToDCCoefficient(stripes.JPEGHeader, float64(jpegturbo.DefaultBackgroundLuminance))
+	if err != nil {
+		return nil, fmt.Errorf("ndpi: derive luma DC for level %d: %w", index, err)
+	}
 	return &stripedImage{
 		index:              index,
 		size:               size,
@@ -91,6 +113,7 @@ func newStripedImage(
 		compression:        opentile.CompressionJPEG,
 		reader:             r,
 		frameSize:          maxSize(tileSize, opentile.Size{W: stripes.StripeW, H: stripes.StripeH}),
+		dcBackground:       dc,
 		headersByFrameSize: make(map[opentile.Size][]byte),
 		framesByKey:        make(map[frameKey][]byte),
 	}, nil
@@ -136,9 +159,19 @@ func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 		// (this can happen when the image dimensions are not a multiple
 		// of tileSize). Fall through to CropWithBackground to fill the
 		// OOB region.
+		//
+		// The geometry-first inversion suggested by N-10 is not
+		// byte-equivalent in this codebase: extendsBeyond is broader
+		// than "Crop errored," and routing through CropWithBackground
+		// when Crop would have succeeded produces different bytes
+		// (different libjpeg-turbo transform path). The fixtures encode
+		// the try-Crop-then-fall-through outputs.
 		extendsBeyond := left+l.tileSize.W > frameSize.W || top+l.tileSize.H > frameSize.H
 		if extendsBeyond {
-			out, err = jpegturbo.CropWithBackground(frame, region)
+			out, err = jpegturbo.CropWithBackgroundLuminanceOpts(
+				frame, region, jpegturbo.DefaultBackgroundLuminance,
+				jpegturbo.CropOpts{DCBackground: l.dcBackground},
+			)
 		}
 		if err != nil {
 			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
@@ -326,7 +359,10 @@ func (l *stripedImage) getPatchedHeader(frameSize opentile.Size) ([]byte, error)
 	}
 	l.headerMu.Unlock()
 
-	patched, err := patchSOFSize(l.stripes.JPEGHeader, frameSize.H, frameSize.W)
+	if frameSize.H < 0 || frameSize.W < 0 || frameSize.H > 0xFFFF || frameSize.W > 0xFFFF {
+		return nil, fmt.Errorf("ndpi: SOF size %dx%d out of uint16 range", frameSize.W, frameSize.H)
+	}
+	patched, err := jpeg.ReplaceSOFDimensions(l.stripes.JPEGHeader, uint16(frameSize.W), uint16(frameSize.H))
 	if err != nil {
 		return nil, err
 	}
@@ -339,39 +375,6 @@ func (l *stripedImage) getPatchedHeader(frameSize opentile.Size) ([]byte, error)
 	l.headersByFrameSize[frameSize] = patched
 	l.headerMu.Unlock()
 	return patched, nil
-}
-
-// patchSOFSize returns a copy of header with its SOF0 (FF C0) segment's
-// height/width fields overwritten. Kept package-private; the upstream
-// ReplaceSOFDimensions helper in internal/jpeg is semantically equivalent
-// but pre-dates stripes.go and uses a different byte-order argument order.
-func patchSOFSize(header []byte, newH, newW int) ([]byte, error) {
-	if newH < 0 || newW < 0 || newH > 0xFFFF || newW > 0xFFFF {
-		return nil, fmt.Errorf("ndpi: SOF size %dx%d out of uint16 range", newW, newH)
-	}
-	// Locate SOF0. The header is assembled from NDPIStripeJPEGHeader's
-	// output which keeps markers intact; a byte scan for FF C0 is safe.
-	sof := -1
-	for i := 0; i < len(header)-1; i++ {
-		if header[i] == 0xFF && jpeg.Marker(header[i+1]) == jpeg.SOF0 {
-			sof = i
-			break
-		}
-	}
-	if sof < 0 {
-		return nil, fmt.Errorf("ndpi: SOF0 not found in header")
-	}
-	// Payload starts at sof+4 (marker(2) + length(2)). Height at payload+1,
-	// width at payload+3.
-	payload := sof + 4
-	if payload+5 > len(header) {
-		return nil, fmt.Errorf("ndpi: SOF payload truncated")
-	}
-	out := make([]byte, len(header))
-	copy(out, header)
-	binary.BigEndian.PutUint16(out[payload+1:payload+3], uint16(newH))
-	binary.BigEndian.PutUint16(out[payload+3:payload+5], uint16(newW))
-	return out, nil
 }
 
 func maxSize(a, b opentile.Size) opentile.Size {

@@ -312,8 +312,12 @@ func Crop(src []byte, r Region) ([]byte, error) {
 // coefficient for OOB luma blocks is computed per-JPEG from the source's
 // luma quantization table (DQT table ID 0), reproducing
 // PyTurboJPEG.__map_luminance_to_dc_dct_coefficient exactly. Chroma DC
-// coefficients are left at 0 (level-shift-neutral 128), producing white
-// output when combined with the luma fill.
+// coefficients are left at 0 (level-shift-neutral 128), producing
+// pixels that decode close-to-but-not-exactly white (the small residual
+// chroma offset comes from JPEG's centred-128 chroma representation).
+// This matches PyTurboJPEG's behavior bit-for-bit; for exact white the
+// caller would need a chroma extension that we don't currently
+// implement (tracked as a future enhancement).
 //
 // For non-white fills (e.g. background_luminance=0 for black), use
 // CropWithBackgroundLuminance.
@@ -325,19 +329,37 @@ func CropWithBackground(src []byte, r Region) ([]byte, error) {
 
 // CropWithBackgroundLuminance is the full-featured variant of
 // CropWithBackground with a caller-specified background luminance in
-// the range [0, 1] (0 = black, 1 = white, 0.5 = mid-gray).
+// the range [0, 1] (0 = black, 1 = white, 0.5 = mid-gray). Equivalent
+// to CropWithBackgroundLuminanceOpts with empty opts (per-call DQT
+// parse).
 func CropWithBackgroundLuminance(src []byte, r Region, luminance BackgroundLuminance) ([]byte, error) {
+	return CropWithBackgroundLuminanceOpts(src, r, luminance, CropOpts{})
+}
+
+// CropWithBackgroundLuminanceOpts is the full-featured variant. If
+// opts.DCBackground != 0, that value is used directly as the OOB luma DC
+// coefficient; otherwise the function parses the source's DQT and
+// computes it via internal/jpeg.LuminanceToDCCoefficient (the per-call
+// path). Tilers reading many tiles from the same source amortise the
+// DQT parse by caching the DC value at level construction.
+func CropWithBackgroundLuminanceOpts(src []byte, r Region, luminance BackgroundLuminance, opts CropOpts) ([]byte, error) {
 	if len(src) == 0 {
 		return nil, fmt.Errorf("jpegturbo: empty source")
 	}
-	// Derive the luma DC coefficient to write into OOB blocks. Match
-	// Python opentile's PyTurboJPEG: scan the source's DQT (table 0)
-	// for the DC quantization element, then compute
-	// round((luminance * 2047 - 1024) / dc_quant). See
-	// internal/jpeg/dqt.go for the port.
-	lum, err := jpeg.LuminanceToDCCoefficient(src, float64(luminance))
-	if err != nil {
-		return nil, fmt.Errorf("jpegturbo: derive luma DC from source: %w", err)
+	var lum int
+	if opts.DCBackground != 0 {
+		lum = opts.DCBackground
+	} else {
+		// Derive the luma DC coefficient to write into OOB blocks. Match
+		// Python opentile's PyTurboJPEG: scan the source's DQT (table 0)
+		// for the DC quantization element, then compute
+		// round((luminance * 2047 - 1024) / dc_quant). See
+		// internal/jpeg/dqt.go for the port.
+		var err error
+		lum, err = jpeg.LuminanceToDCCoefficient(src, float64(luminance))
+		if err != nil {
+			return nil, fmt.Errorf("jpegturbo: derive luma DC from source: %w", err)
+		}
 	}
 
 	// Read the source image dimensions so the callback knows what's OOB.

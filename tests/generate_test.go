@@ -18,6 +18,12 @@ import (
 )
 
 var regenerate = flag.Bool("generate", false, "regenerate fixtures from live slides")
+var sampledMode = flag.Bool("sampled", false, "generate sampled (not full) tile fixture; auto-on for slides expected to exceed the 5 MB cap")
+
+func sampledByDefault(slide string) bool {
+	base := filepath.Base(slide)
+	return base == "Hamamatsu-1.ndpi" || base == "svs_40x_bigtiff.svs"
+}
 
 // TestGenerateFixtures is a dev-only helper. Run with:
 //
@@ -54,10 +60,13 @@ func generateFixture(slide string) error {
 	defer tiler.Close()
 
 	name := filepath.Base(slide)
+	useSampled := *sampledMode || sampledByDefault(slide)
 	f := &tests.Fixture{
-		Slide:      name,
-		Format:     string(tiler.Format()),
-		TileSHA256: make(map[string]string),
+		Slide:  name,
+		Format: string(tiler.Format()),
+	}
+	if !useSampled {
+		f.TileSHA256 = make(map[string]string)
 	}
 	for i, lvl := range tiler.Levels() {
 		f.Levels = append(f.Levels, tests.LevelFixture{
@@ -69,14 +78,32 @@ func generateFixture(slide string) error {
 			MPPUm:       lvl.MPP().W * 1000,
 			PyramidIdx:  lvl.PyramidIndex(),
 		})
-		for y := 0; y < lvl.Grid().H; y++ {
-			for x := 0; x < lvl.Grid().W; x++ {
-				b, err := lvl.Tile(x, y)
+		if useSampled {
+			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
+			if f.SampledTileSHA256 == nil {
+				f.SampledTileSHA256 = make(map[string]tests.SampledTile)
+			}
+			for _, p := range positions {
+				b, err := lvl.Tile(p.X, p.Y)
 				if err != nil {
-					return fmt.Errorf("Tile(%d,%d) level %d: %w", x, y, i, err)
+					return fmt.Errorf("Tile(%d,%d) level %d: %w", p.X, p.Y, i, err)
 				}
 				sum := sha256.Sum256(b)
-				f.TileSHA256[tests.TileKey(i, x, y)] = hex.EncodeToString(sum[:])
+				f.SampledTileSHA256[tests.SampleKey(i, p)] = tests.SampledTile{
+					SHA256: hex.EncodeToString(sum[:]),
+					Reason: p.Reason,
+				}
+			}
+		} else {
+			for y := 0; y < lvl.Grid().H; y++ {
+				for x := 0; x < lvl.Grid().W; x++ {
+					b, err := lvl.Tile(x, y)
+					if err != nil {
+						return fmt.Errorf("Tile(%d,%d) level %d: %w", x, y, i, err)
+					}
+					sum := sha256.Sum256(b)
+					f.TileSHA256[tests.TileKey(i, x, y)] = hex.EncodeToString(sum[:])
+				}
 			}
 		}
 	}

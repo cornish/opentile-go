@@ -61,7 +61,7 @@
     "magnification": 20,
     "scanner_manufacturer": "Aperio",
     "scanner_serial": "CPAPERIOCS",
-    "software_line": "Aperio Image Library v10.0.51\r",
+    "software_line": "Aperio Image Library v10.0.51",
     "mpp_um": 0.499,
     "acquisition_rfc3339": "2009-12-29T09:59:15Z"
   },
@@ -24897,7 +24897,7 @@
         463
       ],
       "compression": "lzw",
-      "sha256": "84ff007cd98608be83edf7c275591a4cafd9da95063ccb64ecdc0a85d69cd4b8"
+      "sha256": "fddb552f9bd2e4401a78931ef65521ccb1ff1e5a68cc70bd35a6ef4c74421052"
     },
     {
       "kind": "overview",

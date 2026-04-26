@@ -3,6 +3,8 @@ package opentile
 import (
 	"errors"
 	"fmt"
+
+	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
 var (
@@ -12,6 +14,12 @@ var (
 	ErrCorruptTile            = errors.New("opentile: corrupt tile")
 	ErrLevelOutOfRange        = errors.New("opentile: level index out of range")
 	ErrInvalidTIFF            = errors.New("opentile: invalid TIFF structure")
+
+	// ErrTooManyIFDs is returned when a TIFF IFD chain exceeds the safety cap
+	// (1024 IFDs) before terminating. Either the file is corrupt, presents a
+	// cycle, or is malicious. Re-exports internal/tiff.ErrTooManyIFDs so
+	// callers can errors.Is(err, opentile.ErrTooManyIFDs).
+	ErrTooManyIFDs = tiff.ErrTooManyIFDs
 
 	// Returned (wrapped in TileError) when internal/jpeg cannot parse a JPEG
 	// bitstream or assemble a valid one from TIFF fragments.

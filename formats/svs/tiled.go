@@ -30,8 +30,8 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets    []uint32
-	counts     []uint32
+	offsets    []uint64
+	counts     []uint64
 	jpegTables []byte // TIFF tag 347 payload (SOI..DQT/DHT..EOI); nil for non-JPEG pages
 	reader     io.ReaderAt
 
@@ -66,11 +66,11 @@ func newTiledImage(
 	if err != nil {
 		return nil, err
 	}
-	offsets, err := p.TileOffsets()
+	offsets, err := p.TileOffsets64()
 	if err != nil {
 		return nil, err
 	}
-	counts, err := p.TileByteCounts()
+	counts, err := p.TileByteCounts64()
 	if err != nil {
 		return nil, err
 	}
@@ -130,11 +130,21 @@ func (l *tiledImage) Compression() opentile.Compression { return l.compression }
 func (l *tiledImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *tiledImage) FocalPlane() float64               { return 0 }
 
+// indexOf computes the row-major tile index for (x, y) and validates the
+// tile entry's byte count. Out-of-grid coords yield ErrTileOutOfBounds;
+// a zero-length tile entry (which the SVS spec uses to signal a corrupt
+// or missing edge tile) yields ErrCorruptTile. Both are wrapped in
+// opentile.TileError. Tile and TileReader rely on the zero-length check
+// happening here, so they don't need to repeat it.
 func (l *tiledImage) indexOf(x, y int) (int, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
 	}
-	return y*l.grid.W + x, nil
+	idx := y*l.grid.W + x
+	if l.counts[idx] == 0 {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrCorruptTile}
+	}
+	return idx, nil
 }
 
 // Tile returns the tile at (x, y) as a standalone valid JPEG (for
@@ -151,9 +161,6 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 		return nil, err
 	}
 	length := l.counts[idx]
-	if length == 0 {
-		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrCorruptTile}
-	}
 	off := int64(l.offsets[idx])
 	buf := make([]byte, length)
 	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
@@ -182,9 +189,6 @@ func (l *tiledImage) TileReader(x, y int) (io.ReadCloser, error) {
 		return nil, err
 	}
 	length := l.counts[idx]
-	if length == 0 {
-		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrCorruptTile}
-	}
 	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
 		b, err := l.Tile(x, y)
 		if err != nil {

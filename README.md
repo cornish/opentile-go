@@ -5,17 +5,28 @@
 Pure-Go port of [opentile](https://github.com/imi-bigpicture/opentile), a library for reading
 tiles from whole-slide imaging (WSI) TIFF files used in digital pathology.
 
-**Status — v0.2**: Aperio SVS (JPEG and JPEG 2000) and Hamamatsu NDPI, including
-the 64-bit offset extension for slides larger than 4 GB. BigTIFF is supported
-transparently. Associated images (label, overview, thumbnail) are exposed
-on both formats. Output is byte-identical to Python
-[opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 for all SVS tiles
-and all NDPI interior tiles; a documented residual divergence affects the
-out-of-bounds fill region of NDPI edge tiles (see `docs/deferred.md` L12).
+**Status — v0.3**: Polish milestone over v0.2. Aperio SVS (JPEG and JPEG 2000)
+and Hamamatsu NDPI fully supported, with associated images (label, overview,
+thumbnail), BigTIFF, and Hamamatsu's 64-bit offset extension. Public API frozen
+from this point: every name in `go doc ./...` after v0.3 survives v0.3 → v0.4
+unchanged unless explicitly versioned.
 
-Philips, 3DHistech, and OME TIFF are on the roadmap (v0.4+). See
-[`docs/deferred.md`](./docs/deferred.md) for the full roadmap and known
-limitations.
+Output is byte-identical to Python
+[opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 for all SVS tiles
+(including the BigTIFF Grundium variants) and all NDPI interior tiles; a
+documented residual divergence affects the out-of-bounds fill region of NDPI
+edge tiles only — decoded pixels still match Python (see `docs/deferred.md`
+L12; queued for v0.4 investigation).
+
+The v0.2 review surface (16 limitations + 25+ reviewer suggestions) closed in
+v0.3 except for six entries documented as either permanent design choices
+(L4 missing-MPP, L5 NDPI sniff, L14 Go-side label synthesis) or v0.4
+work-items (L6 NDPI Map pages, L12 edge-tile entropy, L17 NDPI label cropH).
+
+v0.4 closes the v0.4 work-items above plus SVS corrupt-edge reconstruct (R4)
+and JPEG 2000 decode/encode (R9). New format support (Philips, 3DHistech,
+OME TIFF) is v0.5+. See [`docs/deferred.md`](./docs/deferred.md) for the full
+roadmap.
 
 ## Prerequisites
 
@@ -180,17 +191,32 @@ OPENTILE_TESTDIR="$PWD/sample_files" \
 ```
 
 Set `OPENTILE_ORACLE_PYTHON` to point at the interpreter that has opentile
-installed (typically a venv). The default run samples up to 10 tile positions
-per level per slide (corners + interior); pass `-parity-full` to walk every
-tile (adds minutes to tens of minutes per slide).
+installed (typically a venv). The default run samples ~100 tile positions per
+level per slide (corners + diagonals + a 10×10 stride fill); pass
+`-parity-full` to walk every tile (adds minutes to tens of minutes per slide).
+A persistent stdin/stdout protocol keeps one Python subprocess resident per
+slide rather than spawning one per request, so the default sweep on all 7
+oracle slides completes in under 10 seconds on an M-series Mac.
 
 The harness reports byte-identical output on all sampled tiles for all
 committed fixtures, with the L12 edge-tile divergence on NDPI downgraded to
 `t.Log` (see `docs/deferred.md`).
 
+### Test helpers
+
+Test helpers (config builders, fixture types) live in the
+[`opentiletest`](./opentile/opentiletest) sibling package, mirroring the stdlib
+idiom (`httptest`, `iotest`):
+
+```go
+import "github.com/tcornish/opentile-go/opentile/opentiletest"
+
+cfg := opentiletest.NewConfig(opentile.Size{W: 512, H: 512}, opentile.CorruptTileError)
+```
+
 ## Scope
 
-See [`docs/superpowers/specs/2026-04-21-opentile-go-v02-design.md`](./docs/superpowers/specs/2026-04-21-opentile-go-v02-design.md) for the full v0.2 design and non-goals, and [`docs/deferred.md`](./docs/deferred.md) for the roadmap and known limitations.
+See [`docs/superpowers/specs/2026-04-24-opentile-go-v03-design.md`](./docs/superpowers/specs/2026-04-24-opentile-go-v03-design.md) for the v0.3 design and the [`docs/deferred.md`](./docs/deferred.md) for the active roadmap and known limitations. Earlier milestone specs are kept under `docs/superpowers/specs/` for reference (v0.1: 2026-04-19, v0.2: 2026-04-21).
 
 ## License
 

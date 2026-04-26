@@ -19,3 +19,9 @@ func CropWithBackground(src []byte, r Region) ([]byte, error) {
 func CropWithBackgroundLuminance(src []byte, r Region, luminance BackgroundLuminance) ([]byte, error) {
 	return nil, ErrCGORequired
 }
+
+// CropWithBackgroundLuminanceOpts returns ErrCGORequired in nocgo builds.
+// See turbo_cgo.go for the real implementation.
+func CropWithBackgroundLuminanceOpts(src []byte, r Region, luminance BackgroundLuminance, opts CropOpts) ([]byte, error) {
+	return nil, ErrCGORequired
+}

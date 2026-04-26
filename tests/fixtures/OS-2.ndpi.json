@@ -47835,11 +47835,11 @@
     {
       "kind": "label",
       "size": [
-        336,
-        384
+        344,
+        392
       ],
       "compression": "jpeg",
-      "sha256": "1113a8a311b691ca94b69f6ad0d1f230e67c6b9c203d2fa764e64801090f347f"
+      "sha256": "28a1b2657c1a688ac5d7c26f82fec365ec5bd5ee6d31e6b642099a9b50aceea6"
     }
   ]
 }

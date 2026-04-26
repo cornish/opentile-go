@@ -6,6 +6,7 @@ import (
 
 	opentile "github.com/tcornish/opentile-go"
 	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/tcornish/opentile-go/opentile/opentiletest"
 )
 
 // buildNDPIStub returns a tiny NDPI-layout TIFF with:
@@ -140,7 +141,7 @@ func TestNdpiOpenClassifiesPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
 	}
-	cfg := opentile.NewTestConfig(opentile.Size{W: 640, H: 640}, opentile.CorruptTileError)
+	cfg := opentiletest.NewConfig(opentile.Size{W: 640, H: 640}, opentile.CorruptTileError)
 	tiler, err := New().Open(f, cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

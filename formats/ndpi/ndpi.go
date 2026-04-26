@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	opentile "github.com/tcornish/opentile-go"
+	"github.com/tcornish/opentile-go/internal/jpeg"
 	"github.com/tcornish/opentile-go/internal/tiff"
 )
 
@@ -133,10 +134,20 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 			// part of the standard NDPI layout.
 		}
 	}
-	if overview != nil {
-		// Default label crop: 0 → 30% of macro width. MCU sizes default to
-		// 16x16 (YCbCr 4:2:0 — Hamamatsu standard).
-		associated = append(associated, newLabelImage(overview, 0.3, 16, 16))
+	if overview != nil && cfg.NDPISynthesizedLabel() {
+		// Default label crop: 0 → 30% of macro width. Derive MCU pixel size
+		// from the overview's actual JPEG SOF0 sampling factors rather than
+		// hardcoding 16x16 (correct for the Hamamatsu YCbCr 4:2:0 default,
+		// but wrong for 4:2:2 or 4:4:4 inputs).
+		ovBytes, err := overview.Bytes()
+		if err != nil {
+			return nil, fmt.Errorf("ndpi: read overview for MCU detection: %w", err)
+		}
+		mcuW, mcuH, err := jpeg.MCUSizeOf(ovBytes)
+		if err != nil {
+			return nil, fmt.Errorf("ndpi: derive overview MCU: %w", err)
+		}
+		associated = append(associated, newLabelImage(overview, 0.3, mcuW, mcuH))
 	}
 	return &tiler{md: md, levels: levels, associated: associated}, nil
 }

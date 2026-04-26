@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/tcornish/opentile-go/internal/tiff"
@@ -32,11 +33,19 @@ func Register(f FormatFactory) {
 	registry = append(registry, f)
 }
 
-// resetRegistry is for tests only.
-func resetRegistry() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registry = nil
+// Formats returns the format identifiers that have been registered via
+// Register, sorted lexicographically. Useful for diagnostics and for
+// callers that want to enumerate compiled-in formats without importing
+// each format package directly.
+func Formats() []Format {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	out := make([]Format, 0, len(registry))
+	for _, f := range registry {
+		out = append(out, f.Format())
+	}
+	sort.Slice(out, func(i, j int) bool { return string(out[i]) < string(out[j]) })
+	return out
 }
 
 // Open parses r as a WSI TIFF and returns a Tiler for the matching format.
@@ -67,17 +76,17 @@ func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 func OpenFile(path string, opts ...Option) (Tiler, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opentile: open %q: %w", path, err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("opentile: stat %q: %w", path, err)
 	}
 	t, err := Open(f, info.Size(), opts...)
 	if err != nil {
 		f.Close()
-		return nil, err
+		return nil, fmt.Errorf("opentile: %s: %w", path, err)
 	}
 	return &fileCloser{Tiler: t, f: f}, nil
 }

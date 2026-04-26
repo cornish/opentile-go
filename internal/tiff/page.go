@@ -89,6 +89,13 @@ func (p *Page) ImageDescription() (string, bool) {
 }
 
 // JPEGTables returns the JPEG tables blob used as a prefix for tiles, if present.
+//
+// Note: e.Count is uint64. On 32-bit platforms int(e.Count) truncates if
+// Count > 2 GiB. In practice JPEGTables is bounded by real-world tag
+// values (<1 MB on every Aperio / Hamamatsu slide we've seen), so the
+// truncation cannot fire on the 64-bit targets we support. If 32-bit
+// support is ever in scope, audit this site (and ICCProfile + Entry.Values64
+// in tag.go) and add explicit bounds checks.
 func (p *Page) JPEGTables() ([]byte, bool) {
 	e, ok := p.ifd.get(TagJPEGTables)
 	if !ok {

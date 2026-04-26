@@ -22,6 +22,8 @@ var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
 	"CMU-1.svs",
 	"JP2K-33003-1.svs",
+	"scan_620_.svs",
+	"svs_40x_bigtiff.svs",
 	"CMU-1.ndpi",
 	"OS-2.ndpi",
 }
@@ -54,6 +56,20 @@ func runParityOnSlide(t *testing.T, slide string) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer tiler.Close()
+
+	// One Python subprocess per slide — keeps the ~200 ms import + open
+	// cost out of the per-tile path so we can sample ~100 positions per
+	// level in the same wall-time budget as the v0.2 ~10-positions runs.
+	sess, err := oracle.NewSession(slide, tileSize)
+	if err != nil {
+		t.Fatalf("oracle session: %v", err)
+	}
+	defer func() {
+		if err := sess.Close(); err != nil {
+			t.Logf("oracle session close: %v", err)
+		}
+	}()
+
 	isNDPI := strings.EqualFold(filepath.Ext(slide), ".ndpi")
 	for li, lvl := range tiler.Levels() {
 		positions := samplePositions(lvl.Grid(), *fullParity)
@@ -64,7 +80,7 @@ func runParityOnSlide(t *testing.T, slide string) {
 				t.Errorf("level %d tile (%d,%d): Go error: %v", li, pos.X, pos.Y, err)
 				continue
 			}
-			theirs, err := oracle.Tile(slide, li, pos.X, pos.Y, tileSize)
+			theirs, err := sess.Tile(li, pos.X, pos.Y)
 			if err != nil {
 				t.Errorf("level %d tile (%d,%d): Python oracle error: %v", li, pos.X, pos.Y, err)
 				continue
@@ -100,12 +116,24 @@ func runParityOnSlide(t *testing.T, slide string) {
 	// emits zero-length stdout and we treat that as "skip" (the Go side may
 	// still expose a synthesized image, e.g. NDPI's cropped-overview label).
 	for _, a := range tiler.Associated() {
+		// Skip parity for label images on every format. Python opentile
+		// 0.20.0 returns only strip 0 of multi-strip labels (an upstream
+		// bug — see L10); our Go side decode-restitch-encodes the full
+		// image, so the byte streams legitimately diverge. We'll file an
+		// upstream PR so this skip can be removed once Python lands the
+		// same fix. Until then, skip uniformly (NDPI labels are also
+		// affected since some are synthesized from cropped overviews).
+		if a.Kind() == "label" {
+			t.Logf("slide %s associated %q: skipping parity (Python opentile 0.20.0 returns strip 0 only — see L10)",
+				filepath.Base(slide), a.Kind())
+			continue
+		}
 		ourB, err := a.Bytes()
 		if err != nil {
 			t.Errorf("slide %s associated %q: Go error: %v", filepath.Base(slide), a.Kind(), err)
 			continue
 		}
-		theirB, err := oracle.Associated(slide, a.Kind(), tileSize)
+		theirB, err := sess.Associated(a.Kind())
 		if err != nil {
 			t.Errorf("slide %s associated %q: Python oracle error: %v", filepath.Base(slide), a.Kind(), err)
 			continue
@@ -126,6 +154,13 @@ func runParityOnSlide(t *testing.T, slide string) {
 // corners, edges, and interior, clamped to grid bounds. Full mode enumerates
 // every position — opt in with -parity-full; it's minutes per slide, hours
 // for OS-2.ndpi.
+//
+// Default (non-full) mode aims for ~100 distinct positions per level: the
+// 10 deliberate corner / edge / diagonal anchors that have always covered
+// the documented edge-tile code paths, plus a stride-based fill that
+// covers ~10x10 = 100 interior samples on grids large enough to support
+// the stride. Smaller grids contribute fewer samples (capped by the grid
+// size itself). Deduplicated; ordering is row-major after the dedup.
 func samplePositions(grid opentile.Size, full bool) []opentile.TilePos {
 	if full {
 		out := make([]opentile.TilePos, 0, grid.W*grid.H)
@@ -147,6 +182,22 @@ func samplePositions(grid opentile.Size, full bool) []opentile.TilePos {
 		{X: 1, Y: grid.H / 2},
 		{X: grid.W / 2, Y: 1},
 		{X: grid.W - 2, Y: grid.H - 2},
+	}
+	// Stride-based 10x10 fill. For grids smaller than 10 cells on either
+	// axis, stride=1 and we just enumerate every position on that axis.
+	const stride = 10
+	stepX := grid.W / stride
+	if stepX < 1 {
+		stepX = 1
+	}
+	stepY := grid.H / stride
+	if stepY < 1 {
+		stepY = 1
+	}
+	for y := 0; y < grid.H; y += stepY {
+		for x := 0; x < grid.W; x += stepX {
+			cand = append(cand, opentile.TilePos{X: x, Y: y})
+		}
 	}
 	seen := make(map[opentile.TilePos]bool)
 	out := cand[:0]

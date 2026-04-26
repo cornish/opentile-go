@@ -1,6 +1,7 @@
 package svs
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,5 +88,76 @@ func TestParseDescriptionRejectsMalformedDate(t *testing.T) {
 	_, err := parseDescription(desc)
 	if err == nil {
 		t.Fatal("expected error on malformed date")
+	}
+}
+
+func TestParseDescriptionTrimsCRLFFromSoftwareLine(t *testing.T) {
+	desc := "Aperio Image Library v11.2.1 \r\n46000x32914 [42673,5576 2220x2967] (240x240) JPEG/RGB Q=30"
+	md, err := parseDescription(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasSuffix(md.SoftwareLine, "\r") || strings.HasSuffix(md.SoftwareLine, "\n") {
+		t.Errorf("SoftwareLine retains line ending: %q", md.SoftwareLine)
+	}
+	want := "Aperio Image Library v11.2.1"
+	if md.SoftwareLine != want {
+		t.Errorf("SoftwareLine: got %q, want %q", md.SoftwareLine, want)
+	}
+}
+
+// TestParseDescriptionLineEndings exercises every line-ending and
+// trailing-whitespace variant we've seen on real Aperio slides plus a
+// minimal "no whitespace before newline" case. Each variant must produce
+// the same trimmed SoftwareLine. Locks in the L1 fix so future edits to
+// parseDescription cannot regress without breaking a test.
+func TestParseDescriptionLineEndings(t *testing.T) {
+	const wantSoftware = "Aperio v1.0"
+	cases := []struct {
+		name string
+		desc string
+	}{
+		{
+			name: "CRLF",
+			desc: "Aperio v1.0 \r\n100x100 [0,0 100x100] (256x256) JPEG/RGB",
+		},
+		{
+			name: "LF only",
+			desc: "Aperio v1.0 \n100x100 [0,0 100x100] (256x256) JPEG/RGB",
+		},
+		{
+			name: "trailing whitespace",
+			desc: "Aperio v1.0   \n100x100 [0,0 100x100] (256x256) JPEG/RGB",
+		},
+		{
+			name: "no whitespace before newline",
+			desc: "Aperio v1.0\n100x100 [0,0 100x100] (256x256) JPEG/RGB",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			md, err := parseDescription(c.desc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if md.SoftwareLine != wantSoftware {
+				t.Errorf("SoftwareLine: got %q, want %q", md.SoftwareLine, wantSoftware)
+			}
+		})
+	}
+}
+
+// TestParseDescriptionDuplicateKeyLastWins documents the v0.1 parser
+// convention for repeated key=value pairs in the Aperio header: the last
+// occurrence wins. Locks the convention in so future parser refactors
+// cannot silently change semantics.
+func TestParseDescriptionDuplicateKeyLastWins(t *testing.T) {
+	desc := "Aperio v1.0 \n100x100 [0,0 100x100] (256x256) JPEG/RGB Q=30|MPP = 0.5|MPP = 0.25"
+	md, err := parseDescription(desc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md.MPP != 0.25 {
+		t.Errorf("duplicate MPP: got %v, want 0.25 (last-wins)", md.MPP)
 	}
 }

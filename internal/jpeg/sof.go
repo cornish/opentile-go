@@ -94,10 +94,13 @@ func BuildSOF(s *SOF) []byte {
 // a JPEG to MCU-aligned dimensions before a lossless crop: the header
 // advertises the MCU-rounded size even though the scan data is the same.
 //
-// Note: SOF0 could appear inside entropy-coded scan data (byte-stuffed as FF 00 C0).
-// However, in a valid JPEG, SOF0 appears BEFORE SOS, and SOS is the last marker-framed
-// segment before scan data starts. Searching from the start, the first FF C0 is
-// guaranteed to be the SOF0 marker — no need to walk segments properly.
+// Byte-scan invariant: scanning for FF C0 from offset 0 is safe because
+// SOF0 must precede SOS in well-formed JPEGs, and SOS is the only marker
+// after which raw 0xFF bytes can legitimately appear (byte-stuffed as
+// FF 00). Pathological inputs that prepend non-JPEG bytes containing
+// FF C0 would cause this to find a wrong "SOF" and patch garbage; we
+// don't defend against that. Real Aperio / Hamamatsu / Grundium fixtures
+// have never produced such an input.
 func ReplaceSOFDimensions(jpg []byte, width, height uint16) ([]byte, error) {
 	// Locate the SOF0 marker.
 	sofStart := -1
