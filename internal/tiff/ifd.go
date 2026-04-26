@@ -51,6 +51,11 @@ func walkIFDs(b *byteReader, offset int64, mode tiffMode) ([]*ifd, error) {
 // walkClassicIFDs reads the classic TIFF IFD chain starting at offset.
 // The chain terminates when next-IFD-offset is zero or maxIFDs is reached
 // (returning an error in the latter case).
+//
+// One IFD body is read in two ReadAt calls: a 2-byte count, then the
+// remainder (count * 12 entry bytes + 4 next-IFD-offset bytes) in a
+// single bulk read. Replaces the v0.2 per-field reader pattern that
+// issued ~4 ReadAts per entry.
 func walkClassicIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 	var out []*ifd
 	seen := make(map[int64]bool)
@@ -67,51 +72,35 @@ func walkClassicIFDs(b *byteReader, offset int64) ([]*ifd, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tiff: IFD entry count at %d: %w", offset, err)
 		}
+		body, err := b.bytes(offset+2, int(count)*12+4)
+		if err != nil {
+			return nil, fmt.Errorf("tiff: IFD body at %d: %w", offset, err)
+		}
 		ifd := &ifd{entries: make(map[uint16]Entry, count)}
-		pos := offset + 2
-		for i := uint16(0); i < count; i++ {
-			entry, err := readEntry(b, pos)
-			if err != nil {
-				return nil, err
-			}
+		for i := 0; i < int(count); i++ {
+			entry := decodeClassicEntry(body[i*12:i*12+12], b.order)
 			entry.inlineCap = 4
 			ifd.entries[entry.Tag] = entry
-			pos += 12
 		}
 		out = append(out, ifd)
-		next, err := b.uint32(pos)
-		if err != nil {
-			return nil, fmt.Errorf("tiff: next IFD offset at %d: %w", pos, err)
-		}
+		next := b.order.Uint32(body[int(count)*12 : int(count)*12+4])
 		offset = int64(next)
 	}
 	return out, nil
 }
 
-// readEntry reads a 12-byte IFD entry at offset.
-func readEntry(b *byteReader, offset int64) (Entry, error) {
-	tag, err := b.uint16(offset)
-	if err != nil {
-		return Entry{}, err
-	}
-	typ, err := b.uint16(offset + 2)
-	if err != nil {
-		return Entry{}, err
-	}
-	count, err := b.uint32(offset + 4)
-	if err != nil {
-		return Entry{}, err
-	}
-	cell, err := b.bytes(offset+8, 4)
-	if err != nil {
-		return Entry{}, err
-	}
-	vo := b.order.Uint32(cell)
+// decodeClassicEntry decodes a 12-byte classic TIFF IFD entry from buf
+// (length must be >= 12). The inlineCap field is left at its zero value;
+// callers set it to 4 (classic / NDPI) before storing.
+func decodeClassicEntry(buf []byte, order interface {
+	Uint16([]byte) uint16
+	Uint32([]byte) uint32
+}) Entry {
 	var e Entry
-	e.Tag = tag
-	e.Type = DataType(typ)
-	e.Count = uint64(count)
-	e.valueOrOffset = uint64(vo)
-	copy(e.valueBytes[:], cell)
-	return e, nil
+	e.Tag = order.Uint16(buf[0:2])
+	e.Type = DataType(order.Uint16(buf[2:4]))
+	e.Count = uint64(order.Uint32(buf[4:8]))
+	e.valueOrOffset = uint64(order.Uint32(buf[8:12]))
+	copy(e.valueBytes[:], buf[8:12])
+	return e
 }

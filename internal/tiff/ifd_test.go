@@ -3,6 +3,8 @@ package tiff
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -132,4 +134,32 @@ func TestWalkIFDsRejectsCycle(t *testing.T) {
 		t.Fatalf("walkIFDs: expected cycle/cap error, got nil and %d IFDs", len(ifds))
 	}
 	t.Logf("cycle correctly rejected: %v", err)
+}
+
+// BenchmarkWalkIFDs measures the cost of walking the IFD chain of a real
+// multi-page slide. The relevant variant is OS-2.ndpi (the slide with the
+// most pages in our fixture set). Skipped when OPENTILE_TESTDIR is unset
+// or the slide is missing.
+func BenchmarkWalkIFDs(b *testing.B) {
+	dir := os.Getenv("OPENTILE_TESTDIR")
+	if dir == "" {
+		b.Skip("OPENTILE_TESTDIR not set")
+	}
+	slide := filepath.Join(dir, "ndpi", "OS-2.ndpi")
+	if _, err := os.Stat(slide); err != nil {
+		b.Skipf("slide not present: %v", err)
+	}
+	f, err := os.Open(slide)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := Open(f, st.Size())
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
