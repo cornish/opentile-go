@@ -14,31 +14,36 @@ Format per item:
 
 Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a prior or current milestone).
 
+**v0.4 scope:** finish what we already support — close every real bug
+and parity gap on SVS and NDPI before adding any new format.
+
+**v0.5+ scope:** new format support (Philips, 3DHistech, OME).
+
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
 | R1 | NDPI format support (Hamamatsu) | v0.2 | ✅ landed (Batches 2-7, parity verified) |
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
-| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v1.0 | deferred |
-| R5 | Philips TIFF (sparse-tile filler) | v0.4 | deferred |
+| R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.4 | deferred (was v1.0; promoted as part of SVS-completeness focus) |
+| R5 | Philips TIFF (sparse-tile filler) | v0.5 | deferred (was v0.4; demoted in favour of v0.4 SVS/NDPI completeness) |
 | R6 | 3DHistech TIFF | v0.5 | deferred |
 | R7 | OME TIFF | v0.5 | deferred |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
-| R9 | JPEG 2000 decode/encode (native tiles pass through; decoding only matters once associated-image re-encoding lands) | v0.3+ | deferred |
+| R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.4 | deferred (was v0.3+; needed by R4) |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
-| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.3+ | deferred (currently dropped in classifier) |
+| R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | deferred (was v0.3+; same milestone as L6) |
 
 ---
 
-## 2. Active limitations (open in v0.3 / v0.4+)
+## 2. Active limitations (open after v0.3)
 
 Real behaviour gaps that have not been closed. Each entry's **Severity**
 field declares whether it's a permanent design choice (the library
 cannot reasonably address it without breaking compatibility) or a
-v0.4+ punt (a real fix is queued but out of scope for v0.3). Items
-closed during v0.3 are listed in §6.
+v0.4 work-item (a real fix is queued for the existing-format
+completeness milestone). Items closed during v0.3 are listed in §5.
 
 ### L4 — MPP may be absent from some slides' ImageDescription
 - **Source:** diagnostic run during Task 20
@@ -52,12 +57,12 @@ closed during v0.3 are listed in §6.
 
 ### L6 — NDPI Map pages (`mag == -2.0`) are silently dropped
 - **Source:** NDPI classifier port (post-Batch 4)
-- **Severity:** v0.4+ — tracked as R13. No known consumer is asking for Map content; landing this requires a "map" `AssociatedImage` Kind plus a real test fixture.
+- **Severity:** v0.4 — paired with R13. Needs a `"map"` `AssociatedImage` Kind plus a real test fixture (a Hamamatsu slide with a Map page).
 - **Detail:** `classifyPage` returns `pageMap` for Magnification tag value -2.0, and `Factory.Open` ignores that kind. Upstream opentile also does not expose Map pages as a first-class associated image.
 
 ### L12 — NDPI edge-tile entropy-encoding divergence
 - **Source:** NDPI v0.2 architectural rewrite (feat/v0.2)
-- **Severity:** v0.4+ — tjTransform CUSTOMFILTER non-determinism. Pixel output is visually equivalent but a handful of bytes per edge tile differ between Go and Python; root cause not pinned down.
+- **Severity:** v0.4 — tjTransform CUSTOMFILTER non-determinism. Pixel output is visually equivalent but a handful of bytes per edge tile differ between Go and Python; root cause not pinned down. Investigating likely needs a minimal C-side reproduction to isolate libjpeg-turbo state.
 - **Detail:** `internal/jpegturbo.CropWithBackground` now uses the
   canonical PyTurboJPEG white-fill algorithm: `internal/jpeg.LumaDCQuant`
   parses the source's DQT table 0, `LuminanceToDCCoefficient` computes
@@ -119,7 +124,7 @@ closed during v0.3 are listed in §6.
 ### L17 — NDPI label cropH rounded to MCU multiple, not full image height
 
 - **Source:** L7 fix in v0.3 (Task 10) surfaced the divergence
-- **Severity:** v0.4+ — needs the `CropWithBackground` ragged-height path (luminance + chroma DC math threaded through) before this can land cleanly.
+- **Severity:** v0.4 — needs the `CropWithBackground` ragged-height path (luminance + chroma DC math threaded through) before this can land cleanly. The OS-2 and Hamamatsu-1 fixtures regenerate once the fix lands.
 - **Detail:** `formats/ndpi.newLabelImage` computes `cropH` as
   `(overview.size.H / mcuH) * mcuH` (rounded down to a whole-MCU multiple)
   to satisfy libjpeg-turbo's `TJXOPT_PERFECT` requirement that crops are
