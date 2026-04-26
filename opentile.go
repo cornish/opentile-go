@@ -48,13 +48,6 @@ func Formats() []Format {
 	return out
 }
 
-// resetRegistry is for tests only.
-func resetRegistry() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registry = nil
-}
-
 // Open parses r as a WSI TIFF and returns a Tiler for the matching format.
 // size is the total file size in bytes.
 func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
