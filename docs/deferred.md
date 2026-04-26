@@ -266,13 +266,26 @@ recorded here as they land.
   OS-2.ndpi           : page 11 (198x580)  mag=-2.0  <-- MAP
   Hamamatsu-1.ndpi    : page  7 (205x600)  mag=-2.0  <-- MAP
   ```
-  Upstream confirmation: no `tiler.maps` property in Python opentile
-  0.20.0; no `kind == "map"` references anywhere in
-  `imi-bigpicture/opentile`. Surfacing Map pages is a deliberate
-  Go-side extension paralleling the v0.2 NDPI label synthesis (L14).
-  Both Map pages report a 2D shape (no third dim) — single-component;
-  Task 6's `mapPage` implementation needs to handle the grayscale
-  decode rather than assuming RGB.
+  Upstream confirmation, two layers:
+  - **tifffile** (`_series_ndpi`, tifffile.py:5049-5072) DOES classify
+    Map pages — `s.name = 'Map'` for `mag == -2.0`. The data is
+    structurally exposed at the tifffile layer; a consumer reaches
+    them via `TiffFile(path).series[i]` then `pages[0].asarray()`.
+  - **Python opentile** (`NdpiTiler` in `ndpi_tiler.py:88-102`) does
+    NOT expose Map pages. `_is_label_series` and `_is_thumbnail_series`
+    both return False; only `_is_overview_series` (matching "Macro")
+    surfaces anything. There's no `_is_map_series` predicate and no
+    `tiler.maps` property.
+  Surfacing Map pages on the Go side is therefore filling an
+  opentile-level scope decision, not inventing a new category — the
+  precedent exists at the tifffile layer. Parallels the v0.2 NDPI
+  label synthesis (L14).
+  Both Map pages on our fixtures are 8-bit grayscale (uint8, 2D
+  shape — no third dim). Task 6's `mapPage` implementation should
+  byte-passthrough the strip (same pattern as `KindLabel` for SVS
+  LZW labels: bytes the source carried, with whatever Compression
+  the page advertises). Downstream consumers decoding the Map page
+  need to expect a single-channel image, not RGB.
 - **Consequence:** L6 / R13 stays in v0.4 scope. Tasks 6-8 proceed
   using OS-2 + Hamamatsu-1 fixtures.
 
