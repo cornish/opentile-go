@@ -64,3 +64,29 @@ func InsertTablesAndAPP14(frame, tables []byte) ([]byte, error) {
 	out = append(out, frame[sosIdx:]...)
 	return out, nil
 }
+
+// InsertTables returns a copy of frame with the JPEGTables DQT/DHT
+// segments inserted immediately before the first SOS marker. Unlike
+// InsertTablesAndAPP14, it does not splice an Adobe APP14 marker —
+// matches Python opentile's `Jpeg._add_jpeg_tables` helper byte-for-byte
+// (jpeg/jpeg.py:421-430).
+//
+// Used by Philips TIFF tiles, which encode standard YCbCr (no
+// colorspace fix needed) but still require the per-page JPEGTables to
+// be spliced before the abbreviated TIFF scan bytes can decode.
+func InsertTables(frame, tables []byte) ([]byte, error) {
+	if len(tables) < 4 {
+		return nil, fmt.Errorf("%w: JPEGTables too short (%d bytes, want >=4)", ErrBadJPEG, len(tables))
+	}
+	sosIdx := bytes.Index(frame, []byte{0xFF, byte(SOS)})
+	if sosIdx < 0 {
+		return nil, fmt.Errorf("%w: SOS marker not found", ErrBadJPEG)
+	}
+	tablesMid := tables[2 : len(tables)-2]
+
+	out := make([]byte, 0, len(frame)+len(tablesMid))
+	out = append(out, frame[:sosIdx]...)
+	out = append(out, tablesMid...)
+	out = append(out, frame[sosIdx:]...)
+	return out, nil
+}

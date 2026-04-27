@@ -16,12 +16,27 @@ Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a p
 
 **v0.4 scope (final):** close every real bug and parity gap on SVS and NDPI that we have a fixture to drive. Landed: L12 (NDPI edge-tile OOB fill), L17 (NDPI label cropH), L6 / R13 (NDPI Map pages). Permanent items (L4, L5, L14) stay documented as design choices.
 
-**v0.5+ scope:** new format support (Philips, 3DHistech, OME), plus
-SVS corrupt-edge reconstruct (R4) + JP2K decode/encode (R9) parked at
-[#1](https://github.com/cornish/opentile-go/issues/1) until a real
-slide motivates the work — none of our local SVS fixtures exhibits
-the corrupt-edge bug, so v0.4 deferred R4/R9 rather than ship 12
-tasks of speculative cgo work.
+**v0.6+ scope (revised on 2026-04-26 after the v0.5 ship):** OME TIFF
+in v0.6 closes the last upstream-opentile format. After that we venture
+beyond upstream's coverage starting with **Ventana BIF** in v0.7 — a
+clinically-common Roche / Ventana iScan format that openslide reads but
+upstream opentile doesn't. **Leica SCN** and **Generic Tiled TIFF** are
+tentative v0.8+ candidates, gated on real-slide demand. **3DHistech
+TIFF** (R6) and **Sakura SVSlide** (R15) are parked behind GH issues —
+3DHistech is a niche MRXS conversion target we've never encountered in
+the wild; Sakura is rare enough to follow the same trigger-driven
+deferral as R4/R9.
+
+The methodology shift starting in v0.7: opentile-go leaves the
+"port-from-upstream-opentile-byte-for-byte" pattern. Openslide is the
+practical reference for BIF / SCN / Generic TIFF, but it's LGPL 2.1, so
+we read it for understanding rather than direct port; correctness bar
+shifts from byte-parity to pixel-equivalence with openslide on decoded
+tiles.
+
+R4 / R9 (SVS corrupt-edge reconstruct + JP2K decode/encode) remain
+parked at [#1](https://github.com/cornish/opentile-go/issues/1) until a
+real slide motivates the work.
 
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
@@ -29,15 +44,19 @@ tasks of speculative cgo work.
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
-| R5 | Philips TIFF (sparse-tile filler) | v0.5 | deferred (was v0.4; demoted in favour of v0.4 SVS/NDPI completeness) |
-| R6 | 3DHistech TIFF | v0.5 | deferred |
-| R7 | OME TIFF | v0.5 | deferred |
+| R5 | Philips TIFF (sparse-tile filler) | v0.5 | ✅ landed (commits `1ad463c..7e7bde0`, parity verified across 4 fixtures) |
+| R6 | 3DHistech TIFF | parked | parked behind GH issue (TBD). MRXS conversion target produced by 3DHistech software; rare in practice. Trigger to take it on is a real slide. Upstream opentile has a ~200 LOC reader; cheap to revive if motivated. |
+| R7 | OME TIFF | v0.6 | next milestone. Closes the upstream-opentile format set. Uses sub-IFDs for pyramid levels rather than top-level IFDs (pattern hint surfaced from the v0.5 spec's "wrapper-page pattern" forward-looking note). |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
 | R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
 | R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
+| R14 | Ventana BIF (Roche / iScan) | v0.7 | first format beyond upstream opentile's coverage. BigTIFF-based; openslide has a reader (LGPL 2.1, read-for-understanding only). Local fixtures already present in `sample_files/ventana-bif/`. Correctness bar: pixel-equivalence with openslide on decoded tiles (no byte-stable Python reference). |
+| R15 | Sakura SVSlide | parked | parked behind GH issue (TBD). Rare format; openslide reads it. Trigger-driven deferral. |
+| R16 | Leica SCN | v0.8 (tentative) | BigTIFF-based; common in research microscopy. Openslide reader as reference. Decide based on real-slide demand. |
+| R17 | Generic Tiled TIFF | v0.8+ (tentative) | catch-all fallback for unknown vendors with standard TIFF tile layout. Decide based on real-slide demand and whether end users are hitting `ErrUnsupportedFormat` on standards-compliant slides. |
 
 ---
 
@@ -193,11 +212,104 @@ the test that locks the change in.
 
 ---
 
-## 7. v0.4 gate outcomes (live)
+## 7. Retired in v0.5
 
-Tasks 1-4 of the v0.4 plan are JIT verification gates that decide
-done-when bars and fix paths for the rest of the milestone. Outcomes
-recorded here as they land.
+Items closed during the v0.5 Philips TIFF milestone. One line per ID;
+named commits' messages have the full rationale and the parity check
+that locks the change in.
+
+**Roadmap items (R-prefix):**
+
+- **R5** — Philips TIFF support landed end-to-end (`1ad463c..7e7bde0`).
+  New `formats/philips/` package, new `internal/jpegturbo.FillFrame`
+  cgo entry point, new `internal/jpeg.InsertTables` (no-APP14 sibling
+  to `InsertTablesAndAPP14`). All 4 sample fixtures
+  (`Philips-{1,2,3,4}.tiff`) open cleanly: byte-identical to Python
+  opentile 0.20.0 across every sampled tile and every associated
+  image we expose. Parity oracle slate extended (11 slides total);
+  integration suite covers all 12 fixtures (5 SVS + 3 NDPI + 4
+  Philips) green on every commit.
+
+**JIT verification gates (Tasks 1-3 of the v0.5 plan):**
+
+- **T1** — `is_philips` detection gate (`f3ac48c`): all 4 Philips
+  fixtures match upstream's `software[:10] == 'Philips DP'` AND
+  `description[-16:].strip().endswith('</DataObject>')` rule; zero
+  false positives across 13 non-Philips fixtures. No detection-rule
+  refinement needed.
+- **T2** — `FillFrame` determinism gate (`aa49f96`): Python's
+  `Jpeg.fill_frame(src, 1.0)` is byte-deterministic across 5 passes
+  (sha256 `05c3789cc691d9a207659e250b3fc9c799eca7c5019c4b084a441c4dca9da243`,
+  2,364 bytes). Set the v0.5 sparse-tile blank-tile bar to byte
+  equality. Cross-check during the FillFrame implementation (commit
+  `e5ae3ac`) confirmed our Go `FillFrame` produces the SAME sha on
+  the same input.
+- **T3** — DICOM XML schema audit (`17cce32`): 11 DICOM_* tags
+  inventoried across 4 fixtures. `DICOM_ACQUISITION_DATETIME` and
+  `DICOM_DEVICE_SERIAL_NUMBER` absent on 3/4 fixtures (Philips-4
+  only); multi-value strings (DICOM_SOFTWARE_VERSIONS,
+  DICOM_LOSSY_IMAGE_COMPRESSION_*) are space-separated quoted. Drove
+  the metadata parser's per-tag tolerant-of-absence design.
+
+**Mid-task discoveries (where reading upstream changed the design):**
+
+- The v0.5 plan's `computeCorrectedSizes` test expectation was based
+  on a misread of `tifffile._philips_load_pages` (assumed N PS
+  entries → N corrected sizes including baseline). Reading upstream
+  byte-by-byte (the easily-missed `i += 1` at line 6540) corrected
+  this: N PS entries → N-1 corrected sizes, with the first PS entry
+  calibrating only.
+- The synthesised-XML metadata tests passed under a flat
+  `encoding/xml` schema, but the real Philips fixtures wrap
+  level-specific Attributes inside `PIM_DP_SCANNED_IMAGES > Array >
+  DataObject`. Smoke test against real fixtures forced a rewrite to
+  a stack-based token decoder mirroring
+  `ElementTree.iter('Attribute')`.
+- `NativeTiledTiffImage.get_tile` always splices JPEGTables onto
+  whatever `_read_frame` returns, including the cached blank tile
+  (which already has tables inside `FillFrame`'s input). Result is
+  duplicate DQT/DHT segments in the sparse-tile output — JPEG
+  decoders accept this. Cross-check against Python at Philips-4 L0
+  (0,0) caught our initial single-splice version.
+
+---
+
+## 8. Gate outcomes (live)
+
+JIT verification gate outcomes from the v0.4 and v0.5 plans. Each
+gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.5 gates
+
+#### Task 1 — `is_philips` detection gate
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Tifffile's detection rule (`software[:10] == 'Philips DP'` AND `description[-16:].strip().endswith('</DataObject>')`) matches all 4 of our local Philips fixtures and produces zero false-positives across the other 13 fixtures (5 SVS, 3 NDPI, 2 OME, 2 Ventana .bif, 1 generic TIFF). Software values: `'Philips DP v1.0'` on every fixture; description tails: `'...</Attribute>\n</DataObject>'`. Non-Philips comparators that confirm the rule's specificity:
+  - OME TIFF: `software='OME Bio-Formats 6.0.0-rc1'`, description tail `'</OME>'` — fails both clauses.
+  - SVS: `software=None` — fails the prefix clause.
+  - NDPI: `software='NDP.scan'` etc. — fails the prefix clause.
+  - Ventana .bif: `software=None` or `'ScanOutputManager 1.1.0.15854'` — fails the prefix clause.
+- **Consequence:** the v0.5 Philips factory's `Supports()` predicate ports the rule verbatim. No additional disambiguation needed.
+
+#### Task 2 — `FillFrame` determinism gate
+
+- **Date:** 2026-04-26
+- **Outcome:** byte-deterministic. 5 passes through `Jpeg.fill_frame(src, 1.0)` in Python opentile (which wraps libjpeg-turbo's `tjTransform` with a CUSTOMFILTER that zeros all DCT coefficients, then sets the luma DC at the first block of each MCU) produced identical output bytes for the same source tile (SHA `05c3789cc691d9a207659e250b3fc9c799eca7c5019c4b084a441c4dca9da243`, 2,364 bytes; source: CMU-1-Small-Region.svs L0 tile (0,0), 3,985 bytes).
+- **Consequence:** v0.5 sparse-tile blank-tile output (`internal/jpegturbo.FillFrame`) must byte-match Python opentile. Tasks 5 / 10 enforce byte-equality; the alternative pixel-equivalent fallback is not needed.
+
+#### Task 3 — DICOM XML schema audit
+
+- **Date:** 2026-04-26
+- **Outcome:** the 11 attributes in upstream's TAGS list are all extractable from our 4 fixtures, but **two of them are missing on 3 of 4 fixtures** and three have multi-value formats. Concretely:
+  - **Always present (4/4):** `DICOM_PIXEL_SPACING` (per-level series, count varies 9-11), `DICOM_BITS_ALLOCATED` (8), `DICOM_BITS_STORED` (8), `DICOM_HIGH_BIT` (7), `DICOM_LOSSY_IMAGE_COMPRESSION_METHOD`, `DICOM_LOSSY_IMAGE_COMPRESSION_RATIO`, `DICOM_MANUFACTURER`, `DICOM_PIXEL_REPRESENTATION` (0), `DICOM_SOFTWARE_VERSIONS`.
+  - **Sometimes missing (1/4):** `DICOM_ACQUISITION_DATETIME` (only in Philips-4: `'20160718122300.000000'`), `DICOM_DEVICE_SERIAL_NUMBER` (only in Philips-4: `'FMT0107'`). Parser must return zero/empty for these on the other 3 fixtures.
+  - **Multi-value strings** (space-separated, quoted): `DICOM_SOFTWARE_VERSIONS` (e.g. `'"1.6.6186" "20150402_R48" "4.0.3"'` on Philips-4), `DICOM_LOSSY_IMAGE_COMPRESSION_METHOD` (e.g. `'"PHILIPS_DP_1_0" "PHILIPS_TIFF_1_0"'`), `DICOM_LOSSY_IMAGE_COMPRESSION_RATIO`. Parser strips quotes and splits on whitespace.
+  - **Scanner manufacturer is not always "Philips":** Philips-1 + Philips-3 say `Hamamatsu`, Philips-2 says `3D Histech`, Philips-4 says `PHILIPS`. The format is open — non-Philips scanners can emit Philips TIFF. Surfacing the actual manufacturer string verbatim is correct (no normalisation).
+  - **`DICOM_PIXEL_SPACING` example value:** `'"0.000226891" "0.000226907"'` — quoted, space-separated `(W, H)` in metres-per-pixel. Floats with quotes around each. Parser strips quotes and splits.
+  - **`DICOM_ACQUISITION_DATETIME` format:** `'20160718122300.000000'` — Go layout: `"20060102150405.000000"`. Microseconds are always zero in our one example.
+- **Consequence:** Task 11 (PhilipsTiffMetadata XML parser) handles missing values via Optional / pointer-to-T patterns, splits on whitespace + strips `"` for the multi-value string fields, parses dates with the documented Go layout. No additional disambiguation needed beyond what upstream's parser already encodes.
+
+### v0.4 gates
 
 ### Task 1 — JP2K determinism gate
 
@@ -287,6 +399,6 @@ recorded here as they land.
 
 ---
 
-## 8. Triage process
+## 9. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

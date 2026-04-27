@@ -169,6 +169,47 @@ func equalU64(a, b []uint64) bool {
 	return true
 }
 
+func TestPageSoftware(t *testing.T) {
+	// Build a minimal TIFF with the Software tag (305) carrying an ASCII
+	// value with the Philips DP prefix. Should round-trip via Page.Software().
+	buf := new(bytes.Buffer)
+	buf.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0}) // header, first IFD at 8
+
+	const tSoftware uint16 = 305
+	// 1 entry. count(u16) + 12 entry bytes + 4 nextIFD = 18 bytes.
+	// External data starts at 8 + 18 = 26.
+	externalBase := uint32(26)
+	sw := []byte("Philips DP v1.0\x00")
+
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(buf, binary.LittleEndian, tSoftware)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(DTASCII))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(len(sw)))
+	_ = binary.Write(buf, binary.LittleEndian, externalBase)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // next IFD
+	buf.Write(sw)
+
+	data := buf.Bytes()
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got, ok := f.Pages()[0].Software()
+	if !ok {
+		t.Fatal("Software: expected ok=true")
+	}
+	if got != "Philips DP v1.0" {
+		t.Errorf("Software: got %q, want %q", got, "Philips DP v1.0")
+	}
+
+	// Page without the tag → ok=false.
+	data2 := buildPageTIFF(t)
+	f2, _ := Open(bytes.NewReader(data2), int64(len(data2)))
+	if _, ok := f2.Pages()[0].Software(); ok {
+		t.Error("Software on missing tag: expected ok=false")
+	}
+}
+
 func TestPageFloat32(t *testing.T) {
 	// Build a minimal TIFF with one FLOAT tag: tag=65421, type=11, count=1,
 	// value (inline) = 20.0 → IEEE 754 bits 0x41A00000.

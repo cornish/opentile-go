@@ -141,6 +141,68 @@ func TestCropWithBackgroundLuminanceWhite(t *testing.T) {
 }
 
 
+// TestFillFrameWhite confirms FillFrame with luminance=1.0 produces a
+// solid-near-white image. Mirrors the parity check Python opentile's
+// JpegFiller.fill_image performs when filling a sparse Philips tile.
+func TestFillFrameWhite(t *testing.T) {
+	src := encodeTestJPEG(t, 64, 64)
+	out, err := FillFrame(src, 1.0)
+	if err != nil {
+		t.Fatalf("FillFrame: %v", err)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if img.Bounds().Dx() != 64 || img.Bounds().Dy() != 64 {
+		t.Errorf("dims: got %v, want 64x64", img.Bounds())
+	}
+	// Sample several positions; every pixel should be near-white.
+	for _, p := range []struct{ x, y int }{{0, 0}, {32, 32}, {63, 63}, {16, 48}} {
+		r, g, b, _ := img.At(p.x, p.y).RGBA()
+		if r>>8 < 240 || g>>8 < 240 || b>>8 < 240 {
+			t.Errorf("non-white pixel at (%d,%d): RGB=(%d,%d,%d); expected each >= 240",
+				p.x, p.y, r>>8, g>>8, b>>8)
+		}
+	}
+}
+
+// TestFillFrameBlack confirms FillFrame with luminance=0.0 produces a
+// solid-near-black image.
+func TestFillFrameBlack(t *testing.T) {
+	src := encodeTestJPEG(t, 32, 32)
+	out, err := FillFrame(src, 0.0)
+	if err != nil {
+		t.Fatalf("FillFrame: %v", err)
+	}
+	img, err := jpeg.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	r, g, b, _ := img.At(16, 16).RGBA()
+	if r>>8 > 16 || g>>8 > 16 || b>>8 > 16 {
+		t.Errorf("non-black pixel at (16,16): RGB=(%d,%d,%d); expected each <= 16", r>>8, g>>8, b>>8)
+	}
+}
+
+// TestFillFrameDeterministic locks in the v0.5 T2 gate finding: FillFrame
+// with the same input is byte-identical across calls. Sparse-tile parity
+// hinges on this.
+func TestFillFrameDeterministic(t *testing.T) {
+	src := encodeTestJPEG(t, 64, 64)
+	a, err := FillFrame(src, 1.0)
+	if err != nil {
+		t.Fatalf("FillFrame a: %v", err)
+	}
+	b, err := FillFrame(src, 1.0)
+	if err != nil {
+		t.Fatalf("FillFrame b: %v", err)
+	}
+	if !bytes.Equal(a, b) {
+		t.Errorf("FillFrame non-deterministic: pass1 %d bytes, pass2 %d bytes", len(a), len(b))
+	}
+}
+
 // TestCropConcurrentSafe locks in the Crop godoc's safe-for-concurrent-use
 // contract: per-call tjInitTransform/tjDestroy means no shared state across
 // goroutines, so 32 goroutines × 200 crops should produce byte-identical
