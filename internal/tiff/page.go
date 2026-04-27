@@ -43,16 +43,30 @@ type Page struct {
 func newPage(i *ifd, br *byteReader) *Page { return &Page{ifd: i, br: br} }
 
 // scalarU32 returns the first value of a tag, or (0, false) if missing.
+//
+// Tries Values() first (uint32 path, handles SHORT / LONG / IFD); falls back
+// to Values64 (handles LONG8 / IFD8) for BigTIFF entries that store small
+// scalars in 8-byte fields. Narrowing to uint32 is safe for the tags this
+// helper is meant to back (ImageWidth / Length / TileWidth / Length /
+// Compression / Photometric / SamplesPerPixel / BitsPerSample /
+// ResolutionUnit) — none of which legitimately exceeds uint32 range on
+// real slides.
 func (p *Page) scalarU32(tag uint16) (uint32, bool) {
 	e, ok := p.ifd.get(tag)
 	if !ok {
 		return 0, false
 	}
-	vals, err := e.Values(p.br)
-	if err != nil || len(vals) == 0 {
+	if vals, err := e.Values(p.br); err == nil && len(vals) > 0 {
+		return vals[0], true
+	}
+	vals64, err := e.Values64(p.br)
+	if err != nil || len(vals64) == 0 {
 		return 0, false
 	}
-	return vals[0], true
+	if vals64[0] > uint64(^uint32(0)) {
+		return 0, false
+	}
+	return uint32(vals64[0]), true
 }
 
 // ScalarU32 returns the first value of an arbitrary tag as uint32, or

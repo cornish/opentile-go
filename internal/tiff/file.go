@@ -97,3 +97,70 @@ func (f *File) ReaderAt() io.ReaderAt { return f.r }
 
 // Size returns the total byte size of the underlying reader as provided to Open.
 func (f *File) Size() int64 { return f.size }
+
+// PageAtOffset reads a single IFD at offset off and returns it as a Page.
+// Used by callers that need to follow SubIFD pointers (TIFF tag 330) — the
+// SubIFD chain is not part of the top-level next-IFD walk.
+//
+// Picks the classic vs BigTIFF IFD layout based on the file's mode (set
+// at Open time). Does not advance any walker; returns one Page per call.
+// Caller validates the resulting Page (ImageWidth/ImageLength etc.).
+func (f *File) PageAtOffset(off uint64) (*Page, error) {
+	var ifd *ifd
+	var err error
+	if f.bigTIFF {
+		ifd, err = readSingleBigIFD(f.reader, int64(off))
+	} else {
+		// Classic TIFF and NDPI both use the 12-byte entry layout.
+		ifd, err = readSingleClassicIFD(f.reader, int64(off))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return newPage(ifd, f.reader), nil
+}
+
+// readSingleClassicIFD reads one classic-TIFF IFD at offset and returns it.
+// Mirrors one loop iteration of walkClassicIFDs but ignores the next-IFD
+// pointer — used for SubIFD traversal where the IFD is reachable only via
+// a tag-330 offset, not the top-level chain.
+func readSingleClassicIFD(b *byteReader, offset int64) (*ifd, error) {
+	count, err := b.uint16(offset)
+	if err != nil {
+		return nil, fmt.Errorf("tiff: SubIFD entry count at %d: %w", offset, err)
+	}
+	body, err := b.bytes(offset+2, int(count)*12+4)
+	if err != nil {
+		return nil, fmt.Errorf("tiff: SubIFD body at %d: %w", offset, err)
+	}
+	out := &ifd{entries: make(map[uint16]Entry, count)}
+	for i := 0; i < int(count); i++ {
+		entry := decodeClassicEntry(body[i*12:i*12+12], b.order)
+		entry.inlineCap = 4
+		out.entries[entry.Tag] = entry
+	}
+	return out, nil
+}
+
+// readSingleBigIFD reads one BigTIFF IFD at offset and returns it. Mirrors
+// one loop iteration of walkBigIFDs without advancing the next-IFD chain.
+func readSingleBigIFD(b *byteReader, offset int64) (*ifd, error) {
+	count64, err := b.uint64(offset)
+	if err != nil {
+		return nil, fmt.Errorf("tiff: BigTIFF SubIFD entry count at %d: %w", offset, err)
+	}
+	if count64 > (1<<31-1)/20 {
+		return nil, fmt.Errorf("tiff: BigTIFF SubIFD entry count %d implausibly large at %d", count64, offset)
+	}
+	count := int(count64)
+	body, err := b.bytes(offset+8, count*20+8)
+	if err != nil {
+		return nil, fmt.Errorf("tiff: BigTIFF SubIFD body at %d: %w", offset, err)
+	}
+	out := &ifd{entries: make(map[uint16]Entry, count)}
+	for i := 0; i < count; i++ {
+		entry := decodeBigEntry(body[i*20:i*20+20], b.order)
+		out.entries[entry.Tag] = entry
+	}
+	return out, nil
+}
