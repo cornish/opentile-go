@@ -4,8 +4,9 @@ package opentile
 type Format string
 
 const (
-	FormatSVS  Format = "svs"
-	FormatNDPI Format = "ndpi" // defined for future use; not implemented in v0.1
+	FormatSVS     Format = "svs"
+	FormatNDPI    Format = "ndpi"
+	FormatPhilips Format = "philips"
 )
 
 // Tiler is the top-level handle returned by Open. All accessors are

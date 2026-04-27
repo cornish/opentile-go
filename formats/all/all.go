@@ -16,6 +16,7 @@ import (
 
 	opentile "github.com/tcornish/opentile-go"
 	"github.com/tcornish/opentile-go/formats/ndpi"
+	"github.com/tcornish/opentile-go/formats/philips"
 	"github.com/tcornish/opentile-go/formats/svs"
 )
 
@@ -27,6 +28,7 @@ func Register() {
 	once.Do(func() {
 		opentile.Register(svs.New())
 		opentile.Register(ndpi.New())
+		opentile.Register(philips.New())
 	})
 }
 
