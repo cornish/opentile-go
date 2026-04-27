@@ -20,6 +20,17 @@ issues:
   to v0.5+; no local SVS slide exhibits the corrupt-edge bug, so the
   work is parked until a real slide motivates it.
 
+## [0.5.1] — 2026-04-26
+
+### Fixed
+
+- **Module path** — `go.mod` and every Go import statement renamed
+  from `github.com/tcornish/opentile-go` to `github.com/cornish/opentile-go`,
+  matching the actual GitHub repo location. v0.5.0's module path was
+  wrong and `go get github.com/cornish/opentile-go@v0.5.0` failed for
+  downstream consumers; pin to v0.5.1 or later. No public API changes;
+  purely a packaging fix.
+
 ## [0.5.0] — 2026-04-26
 
 Philips TIFF support — the third format opentile-go handles, paralleling
@@ -233,7 +244,8 @@ Initial functional milestone. Aperio SVS tiled-level passthrough.
 - Three real-slide fixtures: CMU-1-Small-Region.svs, CMU-1.svs (JPEG),
   JP2K-33003-1.svs (JP2K passthrough).
 
-[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/cornish/opentile-go/releases/tag/v0.5.1
 [0.5.0]: https://github.com/cornish/opentile-go/releases/tag/v0.5.0
 [0.4.0]: https://github.com/cornish/opentile-go/releases/tag/v0.4.0
 [0.3.0]: https://github.com/cornish/opentile-go/releases/tag/v0.3.0
