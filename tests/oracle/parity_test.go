@@ -25,6 +25,10 @@ var slideCandidates = []string{
 	"svs_40x_bigtiff.svs",
 	"CMU-1.ndpi",
 	"OS-2.ndpi",
+	"Philips-1.tiff",
+	"Philips-2.tiff",
+	"Philips-3.tiff",
+	"Philips-4.tiff",
 }
 
 // tileSize is the output tile size both Go and Python use for parity. Keep
@@ -196,7 +200,7 @@ func samplePositions(grid opentile.Size, full bool) []opentile.TilePos {
 }
 
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true

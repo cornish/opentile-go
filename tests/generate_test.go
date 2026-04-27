@@ -22,7 +22,16 @@ var sampledMode = flag.Bool("sampled", false, "generate sampled (not full) tile 
 
 func sampledByDefault(slide string) bool {
 	base := filepath.Base(slide)
-	return base == "Hamamatsu-1.ndpi" || base == "svs_40x_bigtiff.svs"
+	switch base {
+	case "Hamamatsu-1.ndpi", "svs_40x_bigtiff.svs":
+		return true
+	// Philips-3.tiff is 3.1 GB; the others are <1 GB but their full
+	// per-tile fixtures still grow past the 5 MB cap quickly. Sample
+	// them by default to keep generation under the cap.
+	case "Philips-1.tiff", "Philips-2.tiff", "Philips-3.tiff", "Philips-4.tiff":
+		return true
+	}
+	return false
 }
 
 // TestGenerateFixtures is a dev-only helper. Run with:

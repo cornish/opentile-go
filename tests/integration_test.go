@@ -14,9 +14,9 @@ import (
 	"github.com/tcornish/opentile-go/tests"
 )
 
-// slideCandidates lists SVS and NDPI slides this integration suite knows about.
-// Each is tested only if both the on-disk slide and the committed fixture
-// JSON are present; otherwise the slide is skipped.
+// slideCandidates lists SVS, NDPI, and Philips slides this integration
+// suite knows about. Each is tested only if both the on-disk slide and
+// the committed fixture JSON are present; otherwise the slide is skipped.
 var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
 	"CMU-1.svs",
@@ -26,13 +26,19 @@ var slideCandidates = []string{
 	"CMU-1.ndpi",
 	"OS-2.ndpi",
 	"Hamamatsu-1.ndpi",
+	"Philips-1.tiff",
+	"Philips-2.tiff",
+	"Philips-3.tiff",
+	"Philips-4.tiff",
 }
 
-// resolveSlide looks up name in dir, dir/svs, dir/ndpi and returns the first
-// existing absolute path. Used so OPENTILE_TESTDIR can be set to the repo
-// sample_files root and cover both formats in one run.
+// resolveSlide looks up name in dir, dir/svs, dir/ndpi, dir/phillips-tiff
+// and returns the first existing absolute path. Used so
+// OPENTILE_TESTDIR can be set to the repo sample_files root and cover
+// every supported format in one run. The Philips subdir is "phillips-tiff"
+// (typo preserved from the original sample_files layout).
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
@@ -207,15 +213,19 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 }
 
 // fixtureJSONFor returns the fixture filename for a given slide filename.
-// SVS slides keep the historical "<stem>.json" naming. NDPI slides embed the
-// ".ndpi" extension as "<stem>.ndpi.json" so that (for example) CMU-1.svs and
-// CMU-1.ndpi produce distinct fixtures on disk.
+// SVS slides keep the historical "<stem>.json" naming. NDPI and Philips
+// TIFF slides embed their extension as "<stem>.ndpi.json" /
+// "<stem>.tiff.json" so that, for example, CMU-1.svs and CMU-1.ndpi
+// produce distinct fixtures on disk.
 func fixtureJSONFor(slideFilename string) string {
 	base := filepath.Base(slideFilename)
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
-	if ext == ".ndpi" {
+	switch ext {
+	case ".ndpi":
 		return stem + ".ndpi.json"
+	case ".tiff", ".tif":
+		return stem + ".tiff.json"
 	}
 	return stem + ".json"
 }
