@@ -210,6 +210,107 @@ static int go_tj_transform_crop_fill(
     return rc;
 }
 
+// fill_frame_data is passed to go_tj_fill_frame via tjtransform.data.
+// Mirrors PyTurboJPEG's BlankStruct: only the luma DC coefficient is
+// needed (chroma planes are zeroed entirely).
+typedef struct fill_frame_data {
+    int lum;
+} fill_frame_data;
+
+// go_tj_fill_frame is a CUSTOMFILTER callback that overwrites every DCT
+// coefficient in the source image with a luminance-derived constant.
+// Component 0 (luma): zero AC, set DC = `lum` on every 8x8 block.
+// Components 1+ (chroma): zero everything (DC = 0 = level-shift-neutral
+// 128). Together this yields a solid-color decode that preserves the
+// original DQT/DHT/sampling-factor encoding.
+//
+// Direct port of PyTurboJPEG's BlankImage.callback (jpeg_filler.py:102-152).
+// Note that upstream's chroma path computes a non-zero MCU iteration but
+// only writes after zeroing — with dc_component=0 for chroma the writes
+// are no-ops, so we collapse to "zero everything for chroma".
+static int go_tj_fill_frame(
+    short *coeffs,
+    tjregion arrayRegion,
+    tjregion planeRegion,
+    int componentID,
+    int transformID,
+    struct tjtransform *transform
+) {
+    (void)planeRegion;
+    (void)transformID;
+    fill_frame_data *d = (fill_frame_data *)transform->data;
+    if (d == NULL) return 1;
+
+    int blocks_per_row = arrayRegion.w / MCU_SIDE;
+    int blocks_per_col = arrayRegion.h / MCU_SIDE;
+    int total_blocks = blocks_per_row * blocks_per_col;
+
+    // Zero every coefficient first.
+    memset(coeffs, 0, (size_t)total_blocks * MCU_AREA * sizeof(short));
+
+    if (componentID == 0) {
+        for (int i = 0; i < total_blocks; i++) {
+            coeffs[i * MCU_AREA] = (short)d->lum;
+        }
+    }
+    return 1;
+}
+
+// go_tj_transform_fill_frame runs tjTransform with the all-blocks
+// fill-frame callback. The crop region covers the full source image
+// (no actual cropping); the callback overwrites every DCT coefficient
+// to produce a solid-color result while preserving the original
+// encoding tables.
+//
+// `lum` is the post-quantisation DC coefficient written to luma blocks
+// (chroma DC is zero). Caller derives `lum` from the requested
+// luminance via internal/jpeg.LuminanceToDCCoefficient.
+static int go_tj_transform_fill_frame(
+    const unsigned char *src, unsigned long src_size,
+    int img_w, int img_h, int lum,
+    unsigned char **dst, unsigned long *dst_size,
+    char *err_msg, int err_cap
+) {
+    if (err_msg != NULL && err_cap > 0) {
+        err_msg[0] = '\0';
+    }
+    tjhandle h_ = tjInitTransform();
+    if (h_ == NULL) {
+        if (err_msg != NULL && err_cap > 0) {
+            const char *m = tjGetErrorStr();
+            if (m != NULL) {
+                strncpy(err_msg, m, err_cap - 1);
+                err_msg[err_cap - 1] = '\0';
+            }
+        }
+        return -1;
+    }
+
+    fill_frame_data fd;
+    fd.lum = lum;
+
+    tjtransform t = {0};
+    t.r.x = 0;
+    t.r.y = 0;
+    t.r.w = img_w;
+    t.r.h = img_h;
+    t.op = TJXOP_NONE;
+    t.options = TJXOPT_PERFECT;
+    t.data = &fd;
+    t.customFilter = go_tj_fill_frame;
+
+    int rc = tjTransform(h_, src, src_size, 1, dst, dst_size, &t, 0);
+    if (rc != 0 && err_msg != NULL && err_cap > 0) {
+        const char *m = tjGetErrorStr2(h_);
+        if (m != NULL) {
+            strncpy(err_msg, m, err_cap - 1);
+            err_msg[err_cap - 1] = '\0';
+        }
+    }
+    tjDestroy(h_);
+    return rc;
+}
+
 // go_tj_header_dims reads the SOF of src via tjDecompressHeader3 and
 // returns the image width/height. Returns 0 on success, non-zero on
 // failure; error message copied into err_msg when non-NULL.
@@ -407,6 +508,75 @@ func CropWithBackgroundLuminanceOpts(src []byte, r Region, luminance BackgroundL
 			msg = "(no message)"
 		}
 		return nil, fmt.Errorf("jpegturbo: tjTransform (fill) failed (rc=%d): %s", rc, msg)
+	}
+	out := C.GoBytes(unsafe.Pointer(dst), C.int(dstSize))
+	return out, nil
+}
+
+// FillFrame returns a copy of src whose decoded pixels are a solid
+// luminance fill (luminance ∈ [0, 1]; 0 = black, 1 = white). The
+// original encoding tables (DQT, DHT, sampling factors, APPn segments)
+// are preserved bit-for-bit; every DCT coefficient is overwritten with
+// luminance-derived DC + zero AC. Used by the Philips sparse-tile path
+// to derive a "blank" replacement tile from a known-valid frame.
+//
+// Direct port of Python opentile's JpegFiller.fill_image
+// (jpeg_filler.py:228-305). The luminance-to-DC mapping is shared with
+// CropWithBackground via internal/jpeg.LuminanceToDCCoefficient.
+//
+// Concurrency: per-call tjInitTransform / tjDestroy. Safe for parallel
+// use; output is byte-deterministic for fixed inputs (v0.5 T2 gate).
+func FillFrame(src []byte, luminance BackgroundLuminance) ([]byte, error) {
+	if len(src) == 0 {
+		return nil, fmt.Errorf("jpegturbo: empty source")
+	}
+
+	lum, err := jpeg.LuminanceToDCCoefficient(src, float64(luminance))
+	if err != nil {
+		return nil, fmt.Errorf("jpegturbo: derive luma DC from source: %w", err)
+	}
+
+	const errBufLen = 256
+	errBuf := make([]byte, errBufLen)
+	errPtr := (*C.char)(unsafe.Pointer(&errBuf[0]))
+
+	var imgW, imgH C.int
+	rcDim := C.go_tj_header_dims(
+		(*C.uchar)(unsafe.Pointer(&src[0])),
+		C.ulong(len(src)),
+		&imgW, &imgH,
+		errPtr, C.int(errBufLen),
+	)
+	if rcDim != 0 {
+		msg := C.GoString(errPtr)
+		if msg == "" {
+			msg = "(no message)"
+		}
+		return nil, fmt.Errorf("jpegturbo: tjDecompressHeader3 failed (rc=%d): %s", rcDim, msg)
+	}
+
+	for i := range errBuf {
+		errBuf[i] = 0
+	}
+
+	var dst *C.uchar
+	var dstSize C.ulong
+	rc := C.go_tj_transform_fill_frame(
+		(*C.uchar)(unsafe.Pointer(&src[0])),
+		C.ulong(len(src)),
+		imgW, imgH, C.int(lum),
+		&dst, &dstSize,
+		errPtr, C.int(errBufLen),
+	)
+	if dst != nil {
+		defer C.tjFree(dst)
+	}
+	if rc != 0 {
+		msg := C.GoString(errPtr)
+		if msg == "" {
+			msg = "(no message)"
+		}
+		return nil, fmt.Errorf("jpegturbo: tjTransform (fill-frame) failed (rc=%d): %s", rc, msg)
 	}
 	out := C.GoBytes(unsafe.Pointer(dst), C.int(dstSize))
 	return out, nil
