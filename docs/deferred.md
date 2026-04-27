@@ -276,8 +276,27 @@ that locks the change in.
 
 ## 8. Gate outcomes (live)
 
-JIT verification gate outcomes from the v0.4 and v0.5 plans. Each
-gate decides a done-when bar or fix path for subsequent tasks.
+JIT verification gate outcomes from the v0.4, v0.5, and v0.6 plans.
+Each gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.6 gates
+
+#### Task 1 — `is_ome` detection gate
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Tifffile's detection rule
+  (`page index == 0 AND description[-10:].strip().endswith('OME>')`,
+  `tifffile.py:10125-10129`) matches both Leica OME fixtures and
+  produces zero false-positives across the other 15 fixtures (5 SVS,
+  3 NDPI, 4 Philips, 2 Ventana .bif, 1 generic TIFF). Description
+  tails: `'</StructuredAnnotations></OME>'` on both Leica fixtures;
+  every non-OME fixture's tail is unrelated. The rule is simpler
+  than v0.5's spec draft assumed (which proposed a 3-clause check
+  on `<?xml`, `<OME ` substring, and the OME namespace URL).
+- **Consequence:** the v0.6 OME factory's `Supports()` predicate
+  ports the rule verbatim — `strings.HasSuffix(strings.TrimSpace(desc[len-10:]), "OME>")`
+  with bounds checks for short descriptions. No namespace-string
+  matching needed.
 
 ### v0.5 gates
 
