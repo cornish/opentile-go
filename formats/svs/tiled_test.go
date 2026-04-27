@@ -292,6 +292,7 @@ func TestMetadataOfRejectsNonSVSTiler(t *testing.T) {
 type fakeNonSVSTiler struct{}
 
 func (f *fakeNonSVSTiler) Format() opentile.Format                { return opentile.Format("fake") }
+func (f *fakeNonSVSTiler) Images() []opentile.Image               { return []opentile.Image{opentile.NewSingleImage(nil)} }
 func (f *fakeNonSVSTiler) Levels() []opentile.Level               { return nil }
 func (f *fakeNonSVSTiler) Level(i int) (opentile.Level, error)    { return nil, opentile.ErrLevelOutOfRange }
 func (f *fakeNonSVSTiler) Associated() []opentile.AssociatedImage { return nil }

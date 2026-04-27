@@ -175,6 +175,9 @@ type tiler struct {
 }
 
 func (t *tiler) Format() opentile.Format { return opentile.FormatPhilips }
+func (t *tiler) Images() []opentile.Image {
+	return []opentile.Image{opentile.NewSingleImage(t.levels)}
+}
 func (t *tiler) Levels() []opentile.Level {
 	out := make([]opentile.Level, len(t.levels))
 	copy(out, t.levels)
