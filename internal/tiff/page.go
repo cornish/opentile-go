@@ -26,6 +26,7 @@ const (
 	TagTileLength        uint16 = 323
 	TagTileOffsets       uint16 = 324
 	TagTileByteCounts    uint16 = 325
+	TagSubIFDs           uint16 = 330
 	TagJPEGTables        uint16 = 347
 	TagYCbCrSubSampling  uint16 = 530
 	TagInterColorProfile uint16 = 34675
@@ -94,6 +95,22 @@ func (p *Page) ImageDescription() (string, bool) {
 // `software[:10] == 'Philips DP'`.
 func (p *Page) Software() (string, bool) {
 	return p.ASCII(TagSoftware)
+}
+
+// SubIFDOffsets returns the SubIFDs tag (330) value as a slice of
+// uint64 offsets, or (nil, false) if absent. Used by OME TIFF where
+// reduced-resolution pyramid levels live in SubIFDs of the base page
+// rather than as top-level IFDs. Decodes both classic-TIFF LONG/IFD
+// and BigTIFF LONG8/IFD8 type widths via the existing arrayU64 helper.
+func (p *Page) SubIFDOffsets() ([]uint64, bool) {
+	if !p.HasTag(TagSubIFDs) {
+		return nil, false
+	}
+	offs, err := p.arrayU64(TagSubIFDs)
+	if err != nil {
+		return nil, false
+	}
+	return offs, true
 }
 
 // JPEGTables returns the JPEG tables blob used as a prefix for tiles, if present.
