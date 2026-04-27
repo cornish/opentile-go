@@ -281,6 +281,27 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 ### v0.6 gates
 
+#### Task 3 — OneFrame factor-or-copy decision
+
+- **Date:** 2026-04-26
+- **Outcome:** **factor**. Reading `formats/ndpi/oneframe.go` end-to-end:
+  the body is already format-agnostic — single-strip JPEG read via
+  generic `tiff.TagStripOffsets` / `tiff.TagStripByteCounts`, SOF
+  parse and rewrite via `internal/jpeg`, MCU-aligned crop via
+  `internal/jpegturbo`. No NDPI-specific tags (no McuStarts, no NDPI
+  metadata refs). The only NDPI-shaped bits are the package name and
+  one comment string.
+- **Cross-check:** OME OneFrame levels also use single-strip
+  JPEG-compressed pages whose strip bytes start with SOI+JFIF
+  (self-contained — `jpegtables=None` on every OME fixture page).
+  No JPEGTables splice required. Behaviour matches what
+  `formats/ndpi/oneframe.go` already does.
+- **Consequence:** Task 10 factors the body into `internal/oneframe/`.
+  NDPI and OME both import it. Format-specific bits (MPP, pyramid
+  index, level index) are set by the format package after
+  construction. The factored package is a direct enabler for v0.7
+  (BIF) which likely needs the same machinery.
+
 #### Task 2 — SubIFD parsing audit
 
 - **Date:** 2026-04-26
