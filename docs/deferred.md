@@ -281,6 +281,34 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 ### v0.6 gates
 
+#### Task 4 — OME-XML schema audit
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Both fixtures use the OME 2016-06 schema
+  (namespace `http://www.openmicroscopy.org/Schemas/OME/2016-06`).
+  Per-fixture Image inventory:
+
+  | Fixture | Images | Names observed | PhysicalSize unit | Type |
+  |---|---|---|---|---|
+  | Leica-1.ome.tiff | 2 | `'macro'`, `''` (1) | µm on every Pixels | uint8 |
+  | Leica-2.ome.tiff | 5 | `'macro'`, `''` × 4 | µm on every Pixels | uint8 |
+
+  All Pixels elements carry PhysicalSizeX / PhysicalSizeY +
+  PhysicalSizeXUnit / PhysicalSizeYUnit + SizeX / SizeY + Type
+  attributes. No fixture is missing any. Empty Name attributes mean
+  "main pyramid" per upstream's `_is_*_series` predicates (none of
+  label / macro / thumbnail).
+
+- **Consequence:** Task 12 (metadata parser) handles a single
+  namespace URI (2016-06) for our fixtures. The parser should still
+  use namespace wildcards (`xml:",any"` semantics) to be robust
+  across OME schema versions — slides converted by older tooling
+  may use earlier namespaces. All extracted fields (PhysicalSize,
+  Size) can rely on µm units; reject other units as
+  `ErrUnsupportedFormat` rather than half-implementing
+  unit conversions. Type=uint8 is the only supported value (matches
+  spec §8 out-of-scope).
+
 #### Task 3 — OneFrame factor-or-copy decision
 
 - **Date:** 2026-04-26
