@@ -1,8 +1,6 @@
 package philips
 
 import (
-	"encoding/xml"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -51,13 +49,13 @@ type Metadata struct {
 func parseMetadata(xmlStr string) (Metadata, error) {
 	var md Metadata
 
-	var d dicomXML
-	if err := xml.Unmarshal([]byte(xmlStr), &d); err != nil {
-		return md, fmt.Errorf("philips: parse metadata XML: %w", err)
+	attrs, err := walkAttributes(xmlStr)
+	if err != nil {
+		return md, err
 	}
 
 	tags := map[string]string{}
-	for _, a := range d.Attributes {
+	for _, a := range attrs {
 		if a.Text == "" {
 			continue
 		}

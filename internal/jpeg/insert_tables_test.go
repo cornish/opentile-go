@@ -104,6 +104,48 @@ func TestInsertTablesAndAPP14RejectsShortTables(t *testing.T) {
 	}
 }
 
+func TestInsertTablesNoAPP14(t *testing.T) {
+	// Philips needs a tables-only splice (no APP14). Confirm the output
+	// equals frame[:sos] + tables[2:-2] + frame[sos:] with no APP14.
+	frame := []byte{
+		0xFF, 0xD8,
+		0xFF, 0xC0, 0x00, 0x08, 0x08, 0x00, 0x10, 0x00, 0x10, 0x03,
+		0xFF, 0xDA, 0x00, 0x08, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11,
+		0xDE, 0xAD,
+		0xFF, 0xD9,
+	}
+	tables := []byte{
+		0xFF, 0xD8,
+		0xFF, 0xDB, 0x00, 0x03, 0x00,
+		0xFF, 0xC4, 0x00, 0x03, 0x10,
+		0xFF, 0xD9,
+	}
+	out, err := InsertTables(frame, tables)
+	if err != nil {
+		t.Fatalf("InsertTables: %v", err)
+	}
+	sosIdx := bytes.Index(frame, []byte{0xFF, 0xDA})
+	var want []byte
+	want = append(want, frame[:sosIdx]...)
+	want = append(want, tables[2:len(tables)-2]...)
+	want = append(want, frame[sosIdx:]...)
+	if !bytes.Equal(out, want) {
+		t.Errorf("output mismatch:\n got %x\nwant %x", out, want)
+	}
+	// And confirm there is NO APP14 anywhere in the output.
+	if bytes.Contains(out, pythonAPP14) {
+		t.Error("InsertTables must not splice APP14")
+	}
+}
+
+func TestInsertTablesRejectsNoSOS(t *testing.T) {
+	frame := []byte{0xFF, 0xD8, 0xFF, 0xD9}
+	tables := []byte{0xFF, 0xD8, 0xFF, 0xD9}
+	if _, err := InsertTables(frame, tables); err == nil {
+		t.Fatal("expected error when frame has no SOS")
+	}
+}
+
 func TestInsertTablesAndAPP14DoesNotMutateInputs(t *testing.T) {
 	frame := []byte{
 		0xFF, 0xD8,

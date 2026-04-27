@@ -6,23 +6,83 @@ package philips
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
 )
 
-// dicomXML is the minimal shape we need to extract DICOM_PIXEL_SPACING
-// (and later other DICOM_* attributes) from Philips's ImageDescription
-// XML. The schema is a flat list of <Attribute Name="..."> elements
-// inside a single <DataObject> root; we don't need a typed model of
-// every possible Philips attribute.
-type dicomXML struct {
-	Attributes []dicomAttr `xml:"Attribute"`
+// philipsAttribute is a single (Name, Text) pair extracted from the
+// Philips DICOM-XML document at any depth. Captured by walkAttributes.
+type philipsAttribute struct {
+	Name string
+	Text string
 }
 
-type dicomAttr struct {
-	Name string `xml:"Name,attr"`
-	Text string `xml:",chardata"`
+// walkAttributes returns every <Attribute Name="..."> element's
+// (Name, immediate text) in document order, descending into nested
+// elements (Philips wraps level-specific Attributes inside
+// <PIM_DP_SCANNED_IMAGES><Array><DataObject>...). Mirrors upstream's
+// `ElementTree.iter('Attribute')` traversal.
+//
+// "Immediate text" is the CharData appearing as a direct child of the
+// Attribute element BEFORE any nested child element starts — matching
+// ElementTree's `element.text` semantics. For Attributes that contain
+// nested Attributes (the wrapper case), the immediate text is just the
+// inter-tag whitespace and is effectively empty after trimming; the
+// nested Attributes are emitted as separate entries.
+func walkAttributes(xmlStr string) ([]philipsAttribute, error) {
+	dec := xml.NewDecoder(strings.NewReader(xmlStr))
+
+	type pending struct {
+		name     string
+		text     strings.Builder
+		sawChild bool
+	}
+	var stack []*pending
+	var out []philipsAttribute
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("philips: parse metadata XML: %w", err)
+		}
+		switch v := tok.(type) {
+		case xml.StartElement:
+			// Any child start marks the current top-of-stack Attribute
+			// as past its .text phase (matches ElementTree semantics).
+			if len(stack) > 0 {
+				stack[len(stack)-1].sawChild = true
+			}
+			if v.Name.Local == "Attribute" {
+				name := ""
+				for _, a := range v.Attr {
+					if a.Name.Local == "Name" {
+						name = a.Value
+						break
+					}
+				}
+				stack = append(stack, &pending{name: name})
+			}
+		case xml.CharData:
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				if !top.sawChild {
+					top.text.Write(v)
+				}
+			}
+		case xml.EndElement:
+			if v.Name.Local == "Attribute" && len(stack) > 0 {
+				top := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				out = append(out, philipsAttribute{Name: top.name, Text: top.text.String()})
+			}
+		}
+	}
+	return out, nil
 }
 
 // parsePixelSpacingPairs walks the XML and returns every
@@ -30,12 +90,12 @@ type dicomAttr struct {
 // entry's text is a whitespace-separated pair of quoted floats — e.g.
 // `"0.000247746" "0.000247746"`. Quotes are stripped before parsing.
 func parsePixelSpacingPairs(xmlStr string) ([][2]float64, error) {
-	var d dicomXML
-	if err := xml.Unmarshal([]byte(xmlStr), &d); err != nil {
-		return nil, fmt.Errorf("philips: parse metadata XML: %w", err)
+	attrs, err := walkAttributes(xmlStr)
+	if err != nil {
+		return nil, err
 	}
 	var out [][2]float64
-	for _, a := range d.Attributes {
+	for _, a := range attrs {
 		if a.Name != "DICOM_PIXEL_SPACING" {
 			continue
 		}
