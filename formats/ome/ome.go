@@ -151,10 +151,41 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 
 	icc, _ := pages[0].ICCProfile()
 	return &tiler{
+		md:         md,
 		images:     images,
 		associated: associated,
 		icc:        icc,
 	}, nil
+}
+
+// tilerUnwrapper is the same coordination interface SVS / NDPI / Philips
+// use to peel off opentile's *fileCloser wrapper before MetadataOf can
+// type-assert on the concrete *tiler.
+type tilerUnwrapper interface {
+	UnwrapTiler() opentile.Tiler
+}
+
+const maxTilerUnwrapHops = 16
+
+// MetadataOf returns the OME-specific metadata if t is an OME Tiler,
+// otherwise (nil, false). Walks any number of wrappers before
+// asserting on the concrete type.
+//
+//	if md, ok := ome.MetadataOf(tiler); ok {
+//	    fmt.Println("OME images:", len(md.Images))
+//	}
+func MetadataOf(t opentile.Tiler) (*OMEMetadata, bool) {
+	for i := 0; t != nil && i <= maxTilerUnwrapHops; i++ {
+		if ot, ok := t.(*tiler); ok {
+			return &ot.md, true
+		}
+		u, ok := t.(tilerUnwrapper)
+		if !ok {
+			return nil, false
+		}
+		t = u.UnwrapTiler()
+	}
+	return nil, false
 }
 
 // defaultOneFrameTileSize picks the tile size used for non-tiled
@@ -262,6 +293,7 @@ func (i *pyramidImage) Level(k int) (opentile.Level, error) {
 
 // tiler is the OME implementation of opentile.Tiler.
 type tiler struct {
+	md         OMEMetadata
 	images     []opentile.Image
 	associated []opentile.AssociatedImage
 	icc        []byte

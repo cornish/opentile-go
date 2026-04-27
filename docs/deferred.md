@@ -46,7 +46,7 @@ real slide motivates the work.
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
 | R5 | Philips TIFF (sparse-tile filler) | v0.5 | ✅ landed (commits `1ad463c..7e7bde0`, parity verified across 4 fixtures) |
 | R6 | 3DHistech TIFF | parked | parked behind GH issue (TBD). MRXS conversion target produced by 3DHistech software; rare in practice. Trigger to take it on is a real slide. Upstream opentile has a ~200 LOC reader; cheap to revive if motivated. |
-| R7 | OME TIFF | v0.6 | next milestone. Closes the upstream-opentile format set. Uses sub-IFDs for pyramid levels rather than top-level IFDs (pattern hint surfaced from the v0.5 spec's "wrapper-page pattern" forward-looking note). |
+| R7 | OME TIFF | v0.6 | ✅ landed. Closes the upstream-opentile format set; SubIFD-based pyramid + multi-image deviation + dual-reference parity (opentile-py + tifffile). |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
 | R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
@@ -353,7 +353,87 @@ that locks the change in.
 
 ---
 
-## 8. Gate outcomes (live)
+## 8. Retired in v0.6
+
+Items closed during the v0.6 OME TIFF milestone. One line per ID;
+named commits' messages have the full rationale and the parity check
+that locks the change in.
+
+**Roadmap items (R-prefix):**
+
+- **R7** — OME TIFF support landed end-to-end. New `formats/ome/`
+  package, new `internal/tiff` SubIFD support (`Page.SubIFDOffsets`
+  + `File.PageAtOffset`), new public API (`Image` interface +
+  `Tiler.Images()`), shared `internal/oneframe` package factored
+  from NDPI. Both Leica fixtures (Leica-1, Leica-2) open cleanly:
+  byte-identical to Python opentile 0.20.0 + tifffile across every
+  Image / level / sampled position we expose. Multi-image deviation
+  exposes Leica-2's 4 main pyramids; the 3 dropped by upstream are
+  byte-validated via the new tifffile oracle.
+
+**Public API additions:**
+
+- `Image` interface (Index / Name / Levels / Level / MPP).
+- `Tiler.Images() []Image` — always ≥ 1 entry; multi-image OME
+  exposes multiple. Existing `Tiler.Levels()` / `Level(i)` continue
+  to work as documented shortcuts to `Images()[0]`.
+- `opentile.SingleImage` helper used by SVS / NDPI / Philips for the
+  one-element wrapper.
+- `opentile.FormatOME` constant.
+
+**Internal additions:**
+
+- `internal/tiff.TagSubIFDs` constant (TIFF tag 330) +
+  `Page.SubIFDOffsets()` accessor.
+- `internal/tiff.File.PageAtOffset(off)` for SubIFD traversal.
+  `scalarU32` falls through to `Values64` for BigTIFF LONG8/IFD8
+  scalar values (caught while wiring SubIFD reads on Leica
+  fixtures — `ImageWidth` / `ImageLength` were silently failing).
+- `internal/oneframe/` package — factored from
+  `formats/ndpi/oneframe.go`; serves NDPI + OME (and likely v0.7
+  BIF). New `Options.FirstStripOnly` flag for OME multi-strip
+  planar pages.
+- `internal/jpegturbo` cgo wrapper now distinguishes `TJERR_WARNING`
+  from fatal via `tjGetErrorCode`; treats warnings as success when
+  the output is populated. Required for OME OneFrame's truncated
+  scan data; NDPI parity preserved.
+
+**JIT verification gates (Tasks 1-5 of the v0.6 plan):**
+
+- **T1** — `is_ome` detection gate (commit `b2950e6`): both Leica
+  fixtures match `description[-10:].strip().endswith('OME>')`; zero
+  false positives across 15 non-OME fixtures.
+- **T2** — SubIFD parsing audit (commit `2b0a6cc`): SubIFDs reachable
+  via tifffile's `series.levels`. Discovery: OneFrame levels are
+  dominant (3 of 5 in Leica-1, 4 of 6 per Leica-2 main pyramid).
+- **T3** — OneFrame factor decision (commit `72ba57f`): factor.
+  NDPI's `oneframe.go` body is already format-agnostic.
+- **T4** — OME-XML schema audit (commit `c807f8e`): both fixtures
+  use namespace 2016-06; uniform µm units; uint8 type.
+- **T5** — tifffile splice-replication harness (commit `e170766`):
+  OME files have no shared JPEGTables on tested fixtures; opentile-py
+  output is byte-identical to tifffile raw bytes for tiled levels.
+  Refined parity strategy.
+
+**Mid-task discoveries (where reading upstream changed the design):**
+
+- **PlanarConfiguration=2 plane-0-only indexing**: discovered when our
+  initial OME tile reader rejected Leica-1 L0 with "tile table
+  mismatch: offsets=16416 ... grid=72x76". Python opentile silently
+  uses plane 0 only via flat indexing; we matched for byte parity
+  and added a deviation note.
+- **Multi-strip OneFrame**: Leica-1 L2 has 7206 strips (3 planes × 2402
+  rows); Python's `_read_frame(0)` consumes only strip 0. Forced the
+  shared `oneframe.Options.FirstStripOnly` flag.
+- **`tjTransform` warning vs fatal**: libjpeg-turbo raises
+  TJERR_WARNING ("premature end of data segment") on OME OneFrame
+  inputs whose SOF claims full-page dimensions but only strip 0 of
+  scan data is present. Python tolerates the warning silently; we
+  added warning-vs-fatal discrimination via `tjGetErrorCode`.
+
+---
+
+## 9. Gate outcomes (live)
 
 JIT verification gate outcomes from the v0.4, v0.5, and v0.6 plans.
 Each gate decides a done-when bar or fix path for subsequent tasks.
@@ -611,6 +691,6 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 ---
 
-## 9. Triage process
+## 10. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

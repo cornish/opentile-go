@@ -1,15 +1,17 @@
 # opentile-go
 
-Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
+Direct Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB) with one cgo dependency (libjpeg-turbo, narrowly scoped to `internal/jpegturbo/`). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.5
+## Current milestone — v0.6
 
-- **Scope:** Philips TIFF support — the third format opentile-go handles, paralleling the v0.2 NDPI add. New `formats/philips/` package, new `internal/jpegturbo.FillFrame` cgo entry point (sparse-tile blank-tile mechanism), new `internal/jpeg.InsertTables` (no-APP14 sibling to `InsertTablesAndAPP14`). Output is byte-identical to Python opentile 0.20.0 across every sampled tile and every associated image we expose, on all 4 sample fixtures.
-- **Active limitations:** Three Permanent design choices only — L4 (missing-MPP, slide-data dependent), L5 (NDPI sniff in `internal/tiff` is necessary), L14 (Go-side NDPI label synthesis with `WithNDPISynthesizedLabel(false)` opt-out). No open work-items for SVS, NDPI, or Philips on existing fixtures.
-- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R7 (OME TIFF) is the next milestone (v0.6); after that we venture beyond upstream into Ventana BIF (v0.7), with Leica SCN and Generic Tiled TIFF as tentative follow-ons. R6 (3DHistech TIFF) and Sakura SVSlide are parked behind GH issues — see `docs/deferred.md §1`.
-- **Design:** `docs/superpowers/specs/2026-04-26-opentile-go-v05-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-26-opentile-go-v05.md`
-- **Work branch:** `feat/v0.5`
+- **Scope:** OME-TIFF support — the fourth format opentile-go handles, closing the upstream Python opentile 0.20.0 format set. New `formats/ome/` package; new `internal/tiff` SubIFD support (`Page.SubIFDOffsets` + `File.PageAtOffset`); new public `Image` interface + `Tiler.Images() []Image` for first-class multi-image exposure; shared `internal/oneframe/` package factored from NDPI. Output is byte-identical to Python opentile 0.20.0 + tifffile across every sampled tile and every associated image we expose, on both Leica fixtures.
+- **API extension:** `Tiler.Images()` is additive — single-image formats (SVS, NDPI, Philips) return a one-element slice; multi-image OME files (`Leica-2.ome.tiff` carries 4 main pyramids) expose them all. Legacy `Tiler.Levels()` and `Tiler.Level(i)` continue to work as documented shortcuts to `Images()[0]`.
+- **Active limitations:** Three Permanent design choices only — L4 (missing-MPP, slide-data dependent), L5 (NDPI sniff in `internal/tiff` is necessary), L14 (Go-side NDPI label synthesis with `WithNDPISynthesizedLabel(false)` opt-out). No open work-items for SVS, NDPI, Philips, or OME on existing fixtures.
+- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): NDPI synthesised label (v0.2), NDPI Map page surfacing (v0.4), multi-image OME pyramid exposure (v0.6), OME PlanarConfiguration=2 plane-0-only indexing (v0.6), OME first-strip-only on multi-strip OneFrame (v0.6).
+- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R6 (3DHistech TIFF) parked at [#2](https://github.com/cornish/opentile-go/issues/2); R15 (Sakura SVSlide) parked at [#3](https://github.com/cornish/opentile-go/issues/3). Ventana BIF (R14) is the next milestone (v0.7) — first format beyond upstream's coverage; methodology shifts from byte-parity-with-Python to pixel-equivalence-with-openslide on decoded tiles.
+- **Design:** `docs/superpowers/specs/2026-04-26-opentile-go-v06-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-26-opentile-go-v06.md`
+- **Work branch:** `feat/v0.6`
 
 ## Invariants
 
@@ -33,7 +35,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 ## Sample slides
 
-Local slides live in `/sample_files/` (gitignored). v0.5 fixture set:
+Local slides live in `/sample_files/` (gitignored). v0.6 fixture set:
 - `sample_files/svs/CMU-1-Small-Region.svs` (1.9 MB, JPEG) — primary fixture
 - `sample_files/svs/CMU-1.svs` (177 MB, JPEG) — full-slide fixture
 - `sample_files/svs/JP2K-33003-1.svs` (63 MB, JPEG 2000 passthrough) — proves JP2K path works without a codec
@@ -46,6 +48,8 @@ Local slides live in `/sample_files/` (gitignored). v0.5 fixture set:
 - `sample_files/phillips-tiff/Philips-2.tiff` (872 MB, 10 levels) — 3D Histech-scanned, Macro-only
 - `sample_files/phillips-tiff/Philips-3.tiff` (3.1 GB, 9 levels, BigTIFF) — Hamamatsu-scanned, Macro + Label
 - `sample_files/phillips-tiff/Philips-4.tiff` (277 MB, 9 levels) — Philips-scanned, exercises sparse-tile blank-tile path heavily
+- `sample_files/ome-tiff/Leica-1.ome.tiff` (689 MB, 5 levels, BigTIFF) — single main pyramid + macro
+- `sample_files/ome-tiff/Leica-2.ome.tiff` (1.2 GB, 6 levels × 4 main pyramids, BigTIFF) — multi-image OME; exercises the v0.6 multi-image deviation
 
 ## Commands
 
