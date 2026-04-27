@@ -281,6 +281,34 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 ### v0.6 gates
 
+#### Task 2 — SubIFD parsing audit
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. SubIFDs (TIFF tag 330) are present on every
+  OME pyramid base page and reachable via tifffile's `series.levels`
+  API. Per-fixture inventory:
+
+  | Fixture | Main series | SubIFDs / page | Total levels (top + sub) | Tiled / OneFrame split |
+  |---|---|---|---|---|
+  | Leica-1.ome.tiff | 1 (page 1 base) | 4 | 5 | L0/L1 tiled, L2/L3/L4 OneFrame |
+  | Leica-2.ome.tiff | 4 (pages 1-4 bases) | 5 each | 6 each = 24 main pyramid levels | L0/L1 tiled, L2-L5 OneFrame |
+  | (both) macro page | macro = page 0 | 2 | 3 (L0 used as AssociatedImage; L1/L2 ignored) | All OneFrame |
+
+  Python opentile reports `5 levels` for Leica-1 main and `6 levels`
+  for Leica-2's exposed main series — matching tifffile's `series.levels`
+  one-for-one. Compression on every page is JPEG (7) on both fixtures.
+
+- **Consequences:**
+  1. `internal/tiff.Page.SubIFDOffsets()` (Task 6) and
+     `tiff.File.PageAtOffset()` (Task 7) are required.
+  2. **OneFrame levels are dominant** (3-4 of 5-6 levels per main
+     pyramid). Skipping them in v0.6 would parity-skip the majority
+     of pyramid output — Task 15 (OneFrame support) is mandatory,
+     not optional.
+  3. The macro's own pyramid (its 2 SubIFDs) is NOT exposed in our
+     port; we use only macro L0 as the AssociatedImage, matching
+     upstream.
+
 #### Task 1 — `is_ome` detection gate
 
 - **Date:** 2026-04-26
