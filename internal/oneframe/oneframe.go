@@ -43,6 +43,13 @@ type Options struct {
 	Size opentile.Size
 	// TileSize is the virtualised tile dims for output. Required.
 	TileSize opentile.Size
+	// FirstStripOnly: when true, a multi-strip page takes strip 0 and
+	// ignores the rest. Used by OME-TIFF where multi-plane pages
+	// (PlanarConfiguration=2) carry rowsperstrip*samplesperpixel
+	// strips per page; Python opentile silently consumes only strip 0
+	// (which is plane 0 row 0), and we mirror that for byte parity.
+	// NDPI leaves this false and errors on multi-strip pages.
+	FirstStripOnly bool
 }
 
 // Image is an opentile.Level implementation backed by a single-strip
@@ -56,6 +63,8 @@ type Image struct {
 	compression opentile.Compression
 	mpp         opentile.SizeMm
 	pyrIndex    int
+
+	firstStripOnly bool
 
 	// paddedJPEG: full-level JPEG with SOF rewritten to MCU boundaries.
 	paddedJPEGOnce sync.Once
@@ -102,15 +111,16 @@ func New(p *tiff.Page, r io.ReaderAt, opts Options) (*Image, error) {
 	gridW := (size.W + opts.TileSize.W - 1) / opts.TileSize.W
 	gridH := (size.H + opts.TileSize.H - 1) / opts.TileSize.H
 	return &Image{
-		index:       opts.Index,
-		size:        size,
-		tileSize:    opts.TileSize,
-		grid:        opentile.Size{W: gridW, H: gridH},
-		compression: opentile.CompressionJPEG,
-		mpp:         opts.MPP,
-		pyrIndex:    opts.PyramidIdx,
-		reader:      r,
-		page:        p,
+		index:          opts.Index,
+		size:           size,
+		tileSize:       opts.TileSize,
+		grid:           opentile.Size{W: gridW, H: gridH},
+		compression:    opentile.CompressionJPEG,
+		mpp:            opts.MPP,
+		pyrIndex:       opts.PyramidIdx,
+		firstStripOnly: opts.FirstStripOnly,
+		reader:         r,
+		page:           p,
 	}, nil
 }
 
@@ -193,8 +203,11 @@ func (l *Image) buildPaddedJPEG() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oneframe: page missing StripByteCounts: %w", err)
 	}
-	if len(offsets) != 1 || len(counts) != 1 {
+	if !l.firstStripOnly && (len(offsets) != 1 || len(counts) != 1) {
 		return nil, fmt.Errorf("oneframe: page expected 1 strip, got %d offsets / %d counts", len(offsets), len(counts))
+	}
+	if len(offsets) == 0 || len(counts) == 0 {
+		return nil, fmt.Errorf("oneframe: page has no strips")
 	}
 	buf := make([]byte, counts[0])
 	if err := tiff.ReadAtFull(l.reader, buf, int64(offsets[0])); err != nil {
