@@ -16,12 +16,27 @@ Not bugs; intentional deferral in the design phase. ✅ = retired (landed in a p
 
 **v0.4 scope (final):** close every real bug and parity gap on SVS and NDPI that we have a fixture to drive. Landed: L12 (NDPI edge-tile OOB fill), L17 (NDPI label cropH), L6 / R13 (NDPI Map pages). Permanent items (L4, L5, L14) stay documented as design choices.
 
-**v0.5+ scope:** new format support (Philips, 3DHistech, OME), plus
-SVS corrupt-edge reconstruct (R4) + JP2K decode/encode (R9) parked at
-[#1](https://github.com/cornish/opentile-go/issues/1) until a real
-slide motivates the work — none of our local SVS fixtures exhibits
-the corrupt-edge bug, so v0.4 deferred R4/R9 rather than ship 12
-tasks of speculative cgo work.
+**v0.6+ scope (revised on 2026-04-26 after the v0.5 ship):** OME TIFF
+in v0.6 closes the last upstream-opentile format. After that we venture
+beyond upstream's coverage starting with **Ventana BIF** in v0.7 — a
+clinically-common Roche / Ventana iScan format that openslide reads but
+upstream opentile doesn't. **Leica SCN** and **Generic Tiled TIFF** are
+tentative v0.8+ candidates, gated on real-slide demand. **3DHistech
+TIFF** (R6) and **Sakura SVSlide** (R15) are parked behind GH issues —
+3DHistech is a niche MRXS conversion target we've never encountered in
+the wild; Sakura is rare enough to follow the same trigger-driven
+deferral as R4/R9.
+
+The methodology shift starting in v0.7: opentile-go leaves the
+"port-from-upstream-opentile-byte-for-byte" pattern. Openslide is the
+practical reference for BIF / SCN / Generic TIFF, but it's LGPL 2.1, so
+we read it for understanding rather than direct port; correctness bar
+shifts from byte-parity to pixel-equivalence with openslide on decoded
+tiles.
+
+R4 / R9 (SVS corrupt-edge reconstruct + JP2K decode/encode) remain
+parked at [#1](https://github.com/cornish/opentile-go/issues/1) until a
+real slide motivates the work.
 
 | ID | Feature | Target | Status |
 |----|---------|--------|--------|
@@ -30,14 +45,18 @@ tasks of speculative cgo work.
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
 | R5 | Philips TIFF (sparse-tile filler) | v0.5 | ✅ landed (commits `1ad463c..7e7bde0`, parity verified across 4 fixtures) |
-| R6 | 3DHistech TIFF | v0.5 | deferred |
-| R7 | OME TIFF | v0.5 | deferred |
+| R6 | 3DHistech TIFF | parked | parked behind GH issue (TBD). MRXS conversion target produced by 3DHistech software; rare in practice. Trigger to take it on is a real slide. Upstream opentile has a ~200 LOC reader; cheap to revive if motivated. |
+| R7 | OME TIFF | v0.6 | next milestone. Closes the upstream-opentile format set. Uses sub-IFDs for pyramid levels rather than top-level IFDs (pattern hint surfaced from the v0.5 spec's "wrapper-page pattern" forward-looking note). |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
 | R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
 | R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
+| R14 | Ventana BIF (Roche / iScan) | v0.7 | first format beyond upstream opentile's coverage. BigTIFF-based; openslide has a reader (LGPL 2.1, read-for-understanding only). Local fixtures already present in `sample_files/ventana-bif/`. Correctness bar: pixel-equivalence with openslide on decoded tiles (no byte-stable Python reference). |
+| R15 | Sakura SVSlide | parked | parked behind GH issue (TBD). Rare format; openslide reads it. Trigger-driven deferral. |
+| R16 | Leica SCN | v0.8 (tentative) | BigTIFF-based; common in research microscopy. Openslide reader as reference. Decide based on real-slide demand. |
+| R17 | Generic Tiled TIFF | v0.8+ (tentative) | catch-all fallback for unknown vendors with standard TIFF tile layout. Decide based on real-slide demand and whether end users are hitting `ErrUnsupportedFormat` on standards-compliant slides. |
 
 ---
 

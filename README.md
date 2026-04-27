@@ -28,7 +28,9 @@ corrupt-edge reconstruct (R4) and JPEG 2000 decode/encode (R9) are
 parked at [#1](https://github.com/cornish/opentile-go/issues/1) until
 a real slide motivates them.
 
-3DHistech TIFF (R6) and OME TIFF (R7) are next; see
+OME TIFF is next (v0.6); after that opentile-go ventures beyond
+upstream's coverage starting with Ventana BIF (v0.7). 3DHistech TIFF
+and Sakura SVSlide are parked. See
 [`docs/deferred.md`](./docs/deferred.md) for the full roadmap.
 
 ## Prerequisites

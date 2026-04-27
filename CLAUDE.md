@@ -6,7 +6,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 - **Scope:** Philips TIFF support — the third format opentile-go handles, paralleling the v0.2 NDPI add. New `formats/philips/` package, new `internal/jpegturbo.FillFrame` cgo entry point (sparse-tile blank-tile mechanism), new `internal/jpeg.InsertTables` (no-APP14 sibling to `InsertTablesAndAPP14`). Output is byte-identical to Python opentile 0.20.0 across every sampled tile and every associated image we expose, on all 4 sample fixtures.
 - **Active limitations:** Three Permanent design choices only — L4 (missing-MPP, slide-data dependent), L5 (NDPI sniff in `internal/tiff` is necessary), L14 (Go-side NDPI label synthesis with `WithNDPISynthesizedLabel(false)` opt-out). No open work-items for SVS, NDPI, or Philips on existing fixtures.
-- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R6 (3DHistech TIFF) and R7 (OME TIFF) are next — see `docs/deferred.md §1`.
+- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R7 (OME TIFF) is the next milestone (v0.6); after that we venture beyond upstream into Ventana BIF (v0.7), with Leica SCN and Generic Tiled TIFF as tentative follow-ons. R6 (3DHistech TIFF) and Sakura SVSlide are parked behind GH issues — see `docs/deferred.md §1`.
 - **Design:** `docs/superpowers/specs/2026-04-26-opentile-go-v05-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-26-opentile-go-v05.md`
 - **Work branch:** `feat/v0.5`
