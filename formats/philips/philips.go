@@ -131,8 +131,27 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		levels = append(levels, lvl)
 	}
 
-	// Associated images placeholder; populated in Task 11.
+	// Associated images: emit in upstream's accessor order — thumbnail,
+	// label, overview (Philips's "Macro"). Any of the three may be
+	// absent; absent kinds are simply not emitted.
 	var associated []opentile.AssociatedImage
+	for _, spec := range []struct {
+		kind    string
+		pageIdx int
+	}{
+		{"thumbnail", class.Thumbnail},
+		{"label", class.Label},
+		{"overview", class.Macro},
+	} {
+		if spec.pageIdx < 0 {
+			continue
+		}
+		a, err := newAssociatedImage(spec.kind, pages[spec.pageIdx], file.ReaderAt())
+		if err != nil {
+			return nil, fmt.Errorf("philips: associated %s (page %d): %w", spec.kind, spec.pageIdx, err)
+		}
+		associated = append(associated, a)
+	}
 
 	icc, _ := pages[0].ICCProfile()
 	return &tiler{
