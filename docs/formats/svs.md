@@ -1,0 +1,55 @@
+# Aperio SVS
+
+Aperio's scanned-slide format, produced by Leica Aperio scanners (most common digital pathology format in the United States as of 2026). File extension `.svs`.
+
+## Format basics
+
+- **TIFF dialect**: classic TIFF or BigTIFF; either is detected automatically.
+- **Detection**: page 0 `ImageDescription` (tag 270) starts with `Aperio`.
+- **Pyramid layout**: top-level IFDs. Page 0 is the base level; subsequent tiled pages are reduced levels until a non-tiled or `NewSubfileType`-flagged page begins the associated-image trailer.
+- **Compression**: tiles can be JPEG (`Compression=7`) or JPEG 2000 (`Compression=33003` / `33005`, Aperio-specific values).
+- **Metadata**: `ImageDescription` carries an Aperio software banner on line 1 followed by `|`-separated `key = value` pairs (`MPP`, `AppMag`, `Filename`, etc.).
+
+## What's supported
+
+| Capability | Status | Notes |
+|---|---|---|
+| Tiled levels (JPEG) | ✅ | JPEGTables spliced + Adobe APP14 prepended for Aperio's RGB-not-YCbCr colourspace; matches Python opentile byte-for-byte |
+| Tiled levels (JPEG 2000) | ✅ passthrough | We emit raw JP2K codestream bytes; downstream caller decodes. Decode/encode is parked at [#1](https://github.com/cornish/opentile-go/issues/1) |
+| Associated label | ✅ | LZW-compressed strip page; multi-strip decode → raster restitch → re-encode as single LZW stream (L10 fix in v0.3) |
+| Associated overview | ✅ | JPEG strip page; assembled via `internal/jpeg.ConcatenateScans` with restart-interval byte-equality vs Python |
+| Associated thumbnail | ✅ | Same shape as overview |
+| BigTIFF | ✅ since v0.2 (`scan_620_.svs`, `svs_40x_bigtiff.svs` exercise this) |
+| Format-specific metadata | ✅ via `svs.MetadataOf(t)` — exposes MPP, SoftwareLine, Filename |
+
+## What's not supported
+
+| Capability | Status | Why |
+|---|---|---|
+| Corrupt-edge tile reconstruct | ❌ deferred → [#1](https://github.com/cornish/opentile-go/issues/1) | None of our local SVS fixtures exhibits the bug. Upstream's reconstruct chain is ~12 tasks of new cgo + a Pillow BILINEAR port; speculation without a real triggering slide. Tile() returns `ErrCorruptTile` for `TileByteCounts[idx] == 0`. |
+| JPEG 2000 decode/encode | ❌ deferred → [#1](https://github.com/cornish/opentile-go/issues/1) | Only consumer is the corrupt-edge reconstruct chain. Native JP2K passthrough (the v0.1+ behaviour) is unaffected. |
+
+## Parity
+
+**Byte-identical to Python opentile 0.20.0** on every sampled tile and every associated image, across our 5 fixtures (`CMU-1-Small-Region.svs`, `CMU-1.svs`, `JP2K-33003-1.svs`, `scan_620_.svs`, `svs_40x_bigtiff.svs`). Verified by `tests/oracle/parity_test.go`.
+
+## Deviations from upstream
+
+None. Behaviour matches Python opentile 0.20.0 exactly.
+
+## Implementation references
+
+- Our package: `formats/svs/`
+- Our metadata accessor: `svs.MetadataOf(opentile.Tiler) (*Metadata, bool)` exposing the embedded `opentile.Metadata` plus `MPP`, `SoftwareLine`, `Filename`.
+- Upstream Python: [`opentile/formats/svs/`](https://github.com/imi-bigpicture/opentile/tree/main/opentile/formats/svs).
+- Upstream tifffile detection: `tifffile.TiffPage.is_svs` (the `Aperio` prefix check).
+- Aperio APP14 byte sequence ported verbatim from `opentile/jpeg/jpeg.py` (preserved as `internal/jpeg.adobeAPP14`).
+
+## Known issues + history
+
+- **L10** (closed v0.3): SVS LZW labels in multi-strip layout previously returned strip 0 only. Now decoded/restitched/re-encoded as a single LZW stream.
+- **L18** (closed v0.3): `ConcatenateScans` rejected `ColorspaceFix=true` without JPEGTables; matches Python's gate now (skip splice + APP14 when tables absent — required for Grundium SVS).
+- **L7 + L11** (closed v0.3): MCU size derived from SOF rather than hard-coded 16×16. Affected NDPI overview crop and SVS associated-image DRI; CMU-1-Small-Region.svs uses 4:4:4 (MCU 8×8) and tripped the hardcode.
+- **L1** (closed v0.3): `SoftwareLine` had a trailing `\r` (CRLF parsing fix in `formats/svs/metadata.go`).
+
+See [`docs/deferred.md`](../deferred.md) for the full reasoning + commit references.

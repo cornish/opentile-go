@@ -60,6 +60,85 @@ real slide motivates the work.
 
 ---
 
+## 1a. Deviations from upstream Python opentile
+
+Behaviours where opentile-go intentionally differs from upstream
+Python opentile 0.20.0. Each entry names the upstream behaviour, our
+deviation, and why. This section is the canonical source of truth;
+README.md and per-format docs link here.
+
+### NDPI synthesised label (since v0.2)
+
+- **Upstream:** `NdpiTiler.labels` returns empty — Python opentile does
+  not surface NDPI labels at all.
+- **opentile-go:** synthesises a label by cropping the left 30% of the
+  overview page (`formats/ndpi/associated.go::newLabelImage`).
+  Disable via `opentile.WithNDPISynthesizedLabel(false)`.
+- **Reason:** Aperio-style label affordance is more useful for
+  downstream consumers than nothing; opt-out preserves the upstream
+  no-label behaviour for callers that need it.
+- **Tracking:** L14 in §2 below.
+
+### NDPI Map page surfacing (since v0.4)
+
+- **Upstream:** filters out tifffile's `series.name == 'Map'` pages
+  even though tifffile classifies them.
+- **opentile-go:** exposes them as `Tiler.Associated()` entries with
+  `Kind() == "map"` (single-channel grayscale uncompressed strip
+  passthrough).
+- **Reason:** the data is in the file and tifffile already classifies
+  it; surfacing matches what the underlying TIFF carries. Not opt-out-
+  able; slides without a Map page silently produce no map entry.
+- **Tracking:** R13 in §1, retired in v0.4 (commit `7ac3f88`).
+
+### Multi-image OME pyramid exposure (since v0.6)
+
+- **Upstream:** in multi-image OME-TIFF files (e.g.
+  `Leica-2.ome.tiff` with 4 main pyramids), the base
+  `Tiler.__init__` loop silently overwrites `_level_series_index` on
+  each match — only the last main pyramid is exposed via the
+  legacy single-pyramid API.
+- **opentile-go:** exposes all main pyramids via the new
+  `Tiler.Images()` API; legacy `Tiler.Levels()` remains as a
+  shortcut for `Images()[0].Levels()`. Single-image formats
+  (SVS / NDPI / Philips) return a one-element slice.
+- **Reason:** encoding upstream's accidental drop in our port would
+  bake in an upstream oversight. Not intentional design.
+- **Verification:** parity for the dropped Leica-2 main pyramids
+  comes via the v0.6 tifffile-based oracle
+  (`tests/oracle/tifffile_test.go`); opentile-py oracle covers the
+  last-wins-exposed pyramid only.
+- **Tracking:** R7 in §1, retired in v0.6.
+
+### OME PlanarConfiguration=2 plane-0-only indexing (since v0.6)
+
+- **Upstream:** silently uses plane 0 only when `PlanarConfiguration=2`
+  via flat `y*W + x` indexing into the per-channel-tripled
+  TileOffsets / StripOffsets arrays.
+- **opentile-go:** mirrors that for byte parity. Other planes are
+  inaccessible through our public API.
+- **Reason:** matching upstream's plane-0 selection preserves
+  byte-parity; exposing the other planes would require either
+  decoding + merging (changes our tile-passthrough contract) or
+  per-plane bytes (no obvious API). Both Leica fixtures hit this on
+  tiled levels.
+- **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
+
+### OME first-strip-only on multi-strip OneFrame (since v0.6)
+
+- **Upstream:** Python opentile's `_read_frame(0)` consumes only
+  strip 0 (plane 0 row 0 on `PlanarConfiguration=2`) and lets
+  libjpeg-turbo's `TJERR_WARNING` recover from the truncated scan.
+- **opentile-go:** sets `oneframe.Options.FirstStripOnly` on OME
+  pages. Our cgo `tjTransform` wrapper distinguishes warning from
+  fatal via `tjGetErrorCode` and treats warnings as success when the
+  output is populated.
+- **Reason:** byte parity for OneFrame levels of OME files (Leica-1
+  L2-L4, Leica-2 L2-L5).
+- **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
+
+---
+
 ## 2. Active limitations (open after v0.3)
 
 Real behaviour gaps that have not been closed. Each entry's **Severity**
