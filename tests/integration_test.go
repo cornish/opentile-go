@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
-	_ "github.com/tcornish/opentile-go/formats/all"
-	"github.com/tcornish/opentile-go/tests"
+	opentile "github.com/cornish/opentile-go"
+	_ "github.com/cornish/opentile-go/formats/all"
+	"github.com/cornish/opentile-go/tests"
 )
 
 // slideCandidates lists SVS, NDPI, and Philips slides this integration

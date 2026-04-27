@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
-	_ "github.com/tcornish/opentile-go/formats/all"
+	opentile "github.com/cornish/opentile-go"
+	_ "github.com/cornish/opentile-go/formats/all"
 )
 
 // TestSVSTileReaderMatchesTile locks in that Level.TileReader returns the

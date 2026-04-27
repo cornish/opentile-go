@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/internal/jpegturbo"
-	"github.com/tcornish/opentile-go/internal/tiff"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/jpegturbo"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // overviewImage is an NDPI "Macro" page exposed as an AssociatedImage with

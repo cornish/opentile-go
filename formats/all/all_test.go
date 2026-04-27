@@ -3,7 +3,7 @@ package all
 import (
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // TestRegisterIsIdempotent confirms calling Register() multiple times does not

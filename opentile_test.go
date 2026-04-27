@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // testFactory is a minimal FormatFactory used to inject identifiers into the

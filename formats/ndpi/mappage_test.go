@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
-	_ "github.com/tcornish/opentile-go/formats/all"
+	opentile "github.com/cornish/opentile-go"
+	_ "github.com/cornish/opentile-go/formats/all"
 )
 
 // TestNDPIMapPagePresentOnOS2 locks in L6/R13 — NDPI Map pages

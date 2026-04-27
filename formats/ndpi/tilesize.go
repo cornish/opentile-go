@@ -3,7 +3,7 @@ package ndpi
 import (
 	"math"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // AdjustTileSize returns the output tile size to use for an NDPI tiler given

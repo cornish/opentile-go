@@ -1,7 +1,7 @@
 package ndpi
 
 import (
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // tiler is the NDPI implementation of opentile.Tiler.

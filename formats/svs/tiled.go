@@ -8,9 +8,9 @@ import (
 	"iter"
 	"math"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/internal/jpeg"
-	"github.com/tcornish/opentile-go/internal/tiff"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/jpeg"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // tiledImage is the SVS Level implementation for tiled pages.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 var (

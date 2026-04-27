@@ -24,8 +24,8 @@ echo "=== Per-package coverage (threshold: $THRESHOLD%) ==="
 
 go tool cover -func="$PROFILE" | awk -v thresh="$THRESHOLD" '
 # Skip tests/download (CLI helper, package main; not library code).
-/^github.com\/tcornish\/opentile-go\/tests\/download/ { next }
-/^github.com\/tcornish\/opentile-go/ {
+/^github.com\/cornish\/opentile-go\/tests\/download/ { next }
+/^github.com\/cornish\/opentile-go/ {
     pkg = $1; sub(/:.*/, "", pkg);
     n = split(pkg, parts, "/");
     pct = $NF; sub(/%/, "", pct);

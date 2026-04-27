@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/tcornish/opentile-go/internal/tifflzw"
+	"github.com/cornish/opentile-go/internal/tifflzw"
 )
 
 // reconstructLZWLabel decodes each TIFF strip of an LZW-compressed label,

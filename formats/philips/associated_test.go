@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // TestAssociatedImageInterface confirms associatedImage satisfies

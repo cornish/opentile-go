@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // philipsTimeLayout matches Philips's DICOM_ACQUISITION_DATETIME format.

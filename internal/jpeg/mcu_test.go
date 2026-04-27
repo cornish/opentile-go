@@ -3,7 +3,7 @@ package jpeg_test
 import (
 	"testing"
 
-	"github.com/tcornish/opentile-go/internal/jpeg"
+	"github.com/cornish/opentile-go/internal/jpeg"
 )
 
 // makeMinimalJPEG returns a minimal JPEG header with one component using

@@ -49,7 +49,7 @@ one-frame pyramid levels and NDPI edge-tile fill return `ErrCGORequired`.
 ## Install
 
 ```
-go get github.com/tcornish/opentile-go
+go get github.com/cornish/opentile-go
 ```
 
 ## Usage
@@ -61,8 +61,8 @@ import (
     "fmt"
     "log"
 
-    opentile "github.com/tcornish/opentile-go"
-    _ "github.com/tcornish/opentile-go/formats/all"
+    opentile "github.com/cornish/opentile-go"
+    _ "github.com/cornish/opentile-go/formats/all"
 )
 
 func main() {
@@ -116,7 +116,7 @@ for pos, res := range base.Tiles(ctx) {
 `Tiler.Metadata()` returns the cross-format fields — magnification, scanner, acquisition datetime. Aperio-specific fields (MPP, software line, filename) are accessible via `svs.MetadataOf`:
 
 ```go
-import svs "github.com/tcornish/opentile-go/formats/svs"
+import svs "github.com/cornish/opentile-go/formats/svs"
 
 md := tiler.Metadata()
 fmt.Println("magnification:", md.Magnification)
@@ -129,7 +129,7 @@ if sm, ok := svs.MetadataOf(tiler); ok {
 NDPI-specific fields (source-lens magnification, focal offset, scanner serial) are accessible via `ndpi.MetadataOf`:
 
 ```go
-import ndpi "github.com/tcornish/opentile-go/formats/ndpi"
+import ndpi "github.com/cornish/opentile-go/formats/ndpi"
 
 if nm, ok := ndpi.MetadataOf(tiler); ok {
     fmt.Println("source lens:", nm.SourceLens, "x")
@@ -214,7 +214,7 @@ Test helpers (config builders, fixture types) live in the
 idiom (`httptest`, `iotest`):
 
 ```go
-import "github.com/tcornish/opentile-go/opentile/opentiletest"
+import "github.com/cornish/opentile-go/opentile/opentiletest"
 
 cfg := opentiletest.NewConfig(opentile.Size{W: 512, H: 512}, opentile.CorruptTileError)
 ```

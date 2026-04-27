@@ -2,11 +2,11 @@
 // package for its side effect (via a blank import) or call Register() once
 // from main for equivalent behavior without relying on import ordering.
 //
-//	import _ "github.com/tcornish/opentile-go/formats/all"
+//	import _ "github.com/cornish/opentile-go/formats/all"
 //
 // Or:
 //
-//	import formats_all "github.com/tcornish/opentile-go/formats/all"
+//	import formats_all "github.com/cornish/opentile-go/formats/all"
 //	...
 //	formats_all.Register()
 package all
@@ -14,10 +14,10 @@ package all
 import (
 	"sync"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/formats/ndpi"
-	"github.com/tcornish/opentile-go/formats/philips"
-	"github.com/tcornish/opentile-go/formats/svs"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/formats/ndpi"
+	"github.com/cornish/opentile-go/formats/philips"
+	"github.com/cornish/opentile-go/formats/svs"
 )
 
 var once sync.Once

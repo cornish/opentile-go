@@ -8,10 +8,10 @@ import (
 	"iter"
 	"sync"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/internal/jpeg"
-	"github.com/tcornish/opentile-go/internal/jpegturbo"
-	"github.com/tcornish/opentile-go/internal/tiff"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/jpeg"
+	"github.com/cornish/opentile-go/internal/jpegturbo"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // oneFrameImage is an NDPI Level backed by a single JPEG per page (typical

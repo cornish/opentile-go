@@ -24,7 +24,7 @@ Pure-Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/open
 
 ## Conventions
 
-- Module path: `github.com/tcornish/opentile-go`
+- Module path: `github.com/cornish/opentile-go`
 - Go 1.23+ (for `iter.Seq2`)
 - `internal/tiff` and `internal/jpeg` are internal — both shaped for opentile's needs, not general-purpose libraries. `internal/jpegturbo` is the only cgo package in the module.
 - Format subpackages (`formats/svs/`, `formats/ndpi/`, …) are public; `formats/all` is the umbrella registration package

@@ -3,7 +3,7 @@ package tests
 import (
 	"fmt"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 // SamplePosition is one tile position chosen for a sampled fixture, paired

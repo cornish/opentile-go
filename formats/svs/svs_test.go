@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/tcornish/opentile-go/internal/tiff"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 func TestSupportsAperio(t *testing.T) {

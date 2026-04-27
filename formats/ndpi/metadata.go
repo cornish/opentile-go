@@ -3,8 +3,8 @@ package ndpi
 import (
 	"time"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/internal/tiff"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // Metadata is NDPI-specific slide metadata. Embeds opentile.Metadata for the

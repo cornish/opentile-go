@@ -5,8 +5,8 @@ import (
 	"io"
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
-	"github.com/tcornish/opentile-go/internal/tifflzw"
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/tifflzw"
 )
 
 // TestLabelMultiStripDecodesRestitchesEncodes locks in the v0.3 L10 fix:

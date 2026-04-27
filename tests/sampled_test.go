@@ -3,7 +3,7 @@ package tests
 import (
 	"testing"
 
-	opentile "github.com/tcornish/opentile-go"
+	opentile "github.com/cornish/opentile-go"
 )
 
 func TestSamplePositionsDeduplicates(t *testing.T) {

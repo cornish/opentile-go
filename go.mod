@@ -1,3 +1,3 @@
-module github.com/tcornish/opentile-go
+module github.com/cornish/opentile-go
 
 go 1.23

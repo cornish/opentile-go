@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	opentile "github.com/tcornish/opentile-go"
-	_ "github.com/tcornish/opentile-go/formats/all"
+	opentile "github.com/cornish/opentile-go"
+	_ "github.com/cornish/opentile-go/formats/all"
 )
 
 // TestNDPISmokeAllLevels opens the NDPI slide named by env NDPI_BENCH_SLIDE,
