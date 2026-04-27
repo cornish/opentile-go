@@ -29,6 +29,8 @@ var slideCandidates = []string{
 	"Philips-2.tiff",
 	"Philips-3.tiff",
 	"Philips-4.tiff",
+	"Leica-1.ome.tiff",
+	"Leica-2.ome.tiff",
 }
 
 // tileSize is the output tile size both Go and Python use for parity. Keep
@@ -73,7 +75,17 @@ func runParityOnSlide(t *testing.T, slide string) {
 		}
 	}()
 
-	for li, lvl := range tiler.Levels() {
+	// Choose which Image to compare against Python opentile. For
+	// single-image formats (SVS, NDPI, Philips, Leica-1) Images() has
+	// one entry; for multi-image OME (Leica-2) Python's last-wins
+	// loop exposes the LAST main pyramid (Images()[N-1]). Mirror that
+	// selection so byte parity is comparing the same pyramid.
+	images := tiler.Images()
+	if len(images) == 0 {
+		t.Fatalf("slide %s exposes zero Images", filepath.Base(slide))
+	}
+	pyImage := images[len(images)-1]
+	for li, lvl := range pyImage.Levels() {
 		positions := samplePositions(lvl.Grid(), *fullParity)
 		for _, pos := range positions {
 			our, err := lvl.Tile(pos.X, pos.Y)
@@ -200,7 +212,7 @@ func samplePositions(grid opentile.Size, full bool) []opentile.TilePos {
 }
 
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
