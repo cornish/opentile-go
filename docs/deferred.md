@@ -281,6 +281,43 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 ### v0.6 gates
 
+#### Task 5 — tifffile splice-replication harness
+
+- **Date:** 2026-04-26
+- **Outcome:** simpler than spec assumed. **OME files don't carry
+  shared JPEGTables** — every page in our fixtures has
+  `jpegtables=None`, every tile / strip's raw bytes start with
+  SOI+JFIF (self-contained). For tiled levels, opentile-py's
+  `get_tile()` output is **byte-identical to tifffile's raw bytes**
+  with no splicing involved (verified on Leica-1 L0 (0,0):
+  sha `668b391411f5ec95`, 17359 bytes, both paths).
+
+- **Refined parity strategy** (revises spec §5):
+
+  1. **Tiled levels of every Image**: tifffile reads raw tile bytes
+     via `dataoffsets[idx]` / `databytecounts[idx]`; compare directly
+     to our `Tile(x, y)` output. No Python-side splice needed. Works
+     for all images including those opentile-py drops.
+
+  2. **OneFrame levels of opentile-py-exposed images**
+     (Leica-1 main; Leica-2 series 4): opentile-py's `get_tile()`
+     gives the cropped output bytes. Compare directly to our output.
+
+  3. **OneFrame levels of dropped images** (Leica-2 series 1-3): no
+     byte-stable Python reference (opentile-py never sees them, and
+     tifffile only gives raw single-strip bytes, not the cropped
+     output). Coverage strategy:
+     - Transitive correctness: our OneFrame implementation is the
+       shared `internal/oneframe/` package validated by NDPI parity
+       on every NDPI fixture.
+     - Integration fixture SHAs: each OneFrame tile in those images
+       gets a committed SHA snapshot; regressions are caught by
+       `TestSlideParity`.
+
+- **Consequence:** the new tifffile oracle (Task 19) is simpler than
+  the spec's draft — no Python-side splice logic, just raw-byte read.
+  ~30 LOC of Python rather than ~80.
+
 #### Task 4 — OME-XML schema audit
 
 - **Date:** 2026-04-26
