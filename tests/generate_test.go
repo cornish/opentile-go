@@ -25,10 +25,12 @@ func sampledByDefault(slide string) bool {
 	switch base {
 	case "Hamamatsu-1.ndpi", "svs_40x_bigtiff.svs":
 		return true
-	// Philips-3.tiff is 3.1 GB; the others are <1 GB but their full
-	// per-tile fixtures still grow past the 5 MB cap quickly. Sample
-	// them by default to keep generation under the cap.
+	// Philips fixtures are sampled to keep generation under the 5 MB
+	// per-fixture cap. Same for OME — Leica-1 is 689 MB and Leica-2
+	// is 1.2 GB.
 	case "Philips-1.tiff", "Philips-2.tiff", "Philips-3.tiff", "Philips-4.tiff":
+		return true
+	case "Leica-1.ome.tiff", "Leica-2.ome.tiff":
 		return true
 	}
 	return false
@@ -74,47 +76,42 @@ func generateFixture(slide string) error {
 		Slide:  name,
 		Format: string(tiler.Format()),
 	}
-	if !useSampled {
-		f.TileSHA256 = make(map[string]string)
-	}
-	for i, lvl := range tiler.Levels() {
-		f.Levels = append(f.Levels, tests.LevelFixture{
-			Index:       i,
-			Size:        [2]int{lvl.Size().W, lvl.Size().H},
-			TileSize:    [2]int{lvl.TileSize().W, lvl.TileSize().H},
-			Grid:        [2]int{lvl.Grid().W, lvl.Grid().H},
-			Compression: lvl.Compression().String(),
-			MPPUm:       lvl.MPP().W * 1000,
-			PyramidIdx:  lvl.PyramidIndex(),
-		})
-		if useSampled {
-			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
-			if f.SampledTileSHA256 == nil {
-				f.SampledTileSHA256 = make(map[string]tests.SampledTile)
+
+	images := tiler.Images()
+	if len(images) > 1 {
+		// Multi-image (OME) → populate fix.Images. Each Image's
+		// Levels / TileSHA256 / SampledTileSHA256 are namespaced under
+		// the per-image record.
+		for ii, img := range images {
+			imgFix := tests.ImageFixture{
+				Index: img.Index(),
+				Name:  img.Name(),
 			}
-			for _, p := range positions {
-				b, err := lvl.Tile(p.X, p.Y)
-				if err != nil {
-					return fmt.Errorf("Tile(%d,%d) level %d: %w", p.X, p.Y, i, err)
-				}
-				sum := sha256.Sum256(b)
-				f.SampledTileSHA256[tests.SampleKey(i, p)] = tests.SampledTile{
-					SHA256: hex.EncodeToString(sum[:]),
-					Reason: p.Reason,
-				}
+			if !useSampled {
+				imgFix.TileSHA256 = make(map[string]string)
 			}
-		} else {
-			for y := 0; y < lvl.Grid().H; y++ {
-				for x := 0; x < lvl.Grid().W; x++ {
-					b, err := lvl.Tile(x, y)
-					if err != nil {
-						return fmt.Errorf("Tile(%d,%d) level %d: %w", x, y, i, err)
-					}
-					sum := sha256.Sum256(b)
-					f.TileSHA256[tests.TileKey(i, x, y)] = hex.EncodeToString(sum[:])
-				}
+			if err := generateImageFixture(&imgFix, img.Levels(), useSampled, ii); err != nil {
+				return err
 			}
+			f.Images = append(f.Images, imgFix)
 		}
+	} else {
+		// Single-image: populate the legacy top-level Levels view.
+		if !useSampled {
+			f.TileSHA256 = make(map[string]string)
+		}
+		var imgFix tests.ImageFixture
+		// Use a temporary to share the helper's logic, then copy the
+		// per-image fields into the top-level fixture slots.
+		if !useSampled {
+			imgFix.TileSHA256 = make(map[string]string)
+		}
+		if err := generateImageFixture(&imgFix, tiler.Levels(), useSampled, 0); err != nil {
+			return err
+		}
+		f.Levels = imgFix.Levels
+		f.TileSHA256 = imgFix.TileSHA256
+		f.SampledTileSHA256 = imgFix.SampledTileSHA256
 	}
 	for _, a := range tiler.Associated() {
 		b, err := a.Bytes()
@@ -148,5 +145,52 @@ func generateFixture(slide string) error {
 		return fmt.Errorf("SaveFixture: %w", err)
 	}
 	fmt.Printf("wrote %s\n", outPath)
+	return nil
+}
+
+// generateImageFixture populates an ImageFixture from a single Image's
+// level chain. Shared between the multi-image (Image[ii]) and
+// single-image (top-level) generator paths. imageIdx is for error
+// messages only.
+func generateImageFixture(out *tests.ImageFixture, levels []opentile.Level, useSampled bool, imageIdx int) error {
+	for i, lvl := range levels {
+		out.Levels = append(out.Levels, tests.LevelFixture{
+			Index:       i,
+			Size:        [2]int{lvl.Size().W, lvl.Size().H},
+			TileSize:    [2]int{lvl.TileSize().W, lvl.TileSize().H},
+			Grid:        [2]int{lvl.Grid().W, lvl.Grid().H},
+			Compression: lvl.Compression().String(),
+			MPPUm:       lvl.MPP().W * 1000,
+			PyramidIdx:  lvl.PyramidIndex(),
+		})
+		if useSampled {
+			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
+			if out.SampledTileSHA256 == nil {
+				out.SampledTileSHA256 = make(map[string]tests.SampledTile)
+			}
+			for _, p := range positions {
+				b, err := lvl.Tile(p.X, p.Y)
+				if err != nil {
+					return fmt.Errorf("Tile(%d,%d) image %d level %d: %w", p.X, p.Y, imageIdx, i, err)
+				}
+				sum := sha256.Sum256(b)
+				out.SampledTileSHA256[tests.SampleKey(i, p)] = tests.SampledTile{
+					SHA256: hex.EncodeToString(sum[:]),
+					Reason: p.Reason,
+				}
+			}
+		} else {
+			for y := 0; y < lvl.Grid().H; y++ {
+				for x := 0; x < lvl.Grid().W; x++ {
+					b, err := lvl.Tile(x, y)
+					if err != nil {
+						return fmt.Errorf("Tile(%d,%d) image %d level %d: %w", x, y, imageIdx, i, err)
+					}
+					sum := sha256.Sum256(b)
+					out.TileSHA256[tests.TileKey(i, x, y)] = hex.EncodeToString(sum[:])
+				}
+			}
+		}
+	}
 	return nil
 }
