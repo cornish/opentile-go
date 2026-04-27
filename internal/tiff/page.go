@@ -21,6 +21,7 @@ const (
 	TagXResolution       uint16 = 282
 	TagYResolution       uint16 = 283
 	TagResolutionUnit    uint16 = 296
+	TagSoftware          uint16 = 305
 	TagTileWidth         uint16 = 322
 	TagTileLength        uint16 = 323
 	TagTileOffsets       uint16 = 324
@@ -86,6 +87,13 @@ func (p *Page) ASCII(tag uint16) (string, bool) {
 // ImageDescription returns the ASCII ImageDescription tag if present.
 func (p *Page) ImageDescription() (string, bool) {
 	return p.ASCII(TagImageDescription)
+}
+
+// Software returns the ASCII Software tag (305) if present. Used by
+// Philips TIFF detection: tifffile's `is_philips` checks
+// `software[:10] == 'Philips DP'`.
+func (p *Page) Software() (string, bool) {
+	return p.ASCII(TagSoftware)
 }
 
 // JPEGTables returns the JPEG tables blob used as a prefix for tiles, if present.
