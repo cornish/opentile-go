@@ -5,30 +5,30 @@
 Pure-Go port of [opentile](https://github.com/imi-bigpicture/opentile), a library for reading
 tiles from whole-slide imaging (WSI) TIFF files used in digital pathology.
 
-**Status — v0.4**: NDPI completeness milestone over v0.3. Aperio SVS (JPEG
-and JPEG 2000) and Hamamatsu NDPI fully supported, with associated images
-(label, overview, thumbnail, **NDPI Map pages new in v0.4**), BigTIFF, and
-Hamamatsu's 64-bit offset extension. Public API frozen since v0.3.
+**Status — v0.5**: Philips TIFF added — third format opentile-go handles,
+paralleling the v0.2 NDPI add. Aperio SVS (JPEG and JPEG 2000), Hamamatsu
+NDPI, and Philips TIFF fully supported, with associated images
+(label, overview, thumbnail, NDPI Map pages), BigTIFF, Hamamatsu's
+64-bit offset extension, and the Philips sparse-tile blank-tile
+mechanism. Public API frozen since v0.3.
 
 Output is **byte-identical to Python
 [opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 on every
-sampled tile and associated image we expose**, across all 7 fixtures
-in the parity oracle. The v0.3 NDPI edge-tile divergence (was tracked
-as L12) was diagnosed as a control-flow bug in our Go-side dispatch and
-fixed in v0.4 — geometry-first dispatch matches Python's
-`__need_fill_background` gate exactly. Same milestone fixed L17 (NDPI
-label cropH passes full image height) and added L6 / R13 (NDPI Map
-page surfacing as `Kind() == "map"`).
+sampled tile and associated image we expose**, across all 11 oracle
+slides (5 SVS + 2 NDPI + 4 Philips); 12 fixtures total in the
+integration suite (the 11 above plus Hamamatsu-1.ndpi sampled). The
+v0.4 NDPI edge-tile divergence (was tracked as L12) was diagnosed as a
+control-flow bug in our Go-side dispatch and fixed in v0.4 —
+geometry-first dispatch matches Python's `__need_fill_background` gate
+exactly.
 
 Three permanent design choices remain documented (L4 missing-MPP, L5
 NDPI sniff, L14 Go-side label synthesis on NDPI). Aperio SVS
 corrupt-edge reconstruct (R4) and JPEG 2000 decode/encode (R9) are
 parked at [#1](https://github.com/cornish/opentile-go/issues/1) until
-a real slide motivates them — none of our local SVS fixtures exhibits
-the corrupt-edge bug, so v0.4 deferred R4/R9 rather than write 12
-tasks of speculative cgo work for a synthetic-fixture-only feature.
+a real slide motivates them.
 
-New format support (Philips, 3DHistech, OME TIFF) is v0.5+. See
+3DHistech TIFF (R6) and OME TIFF (R7) are next; see
 [`docs/deferred.md`](./docs/deferred.md) for the full roadmap.
 
 ## Prerequisites

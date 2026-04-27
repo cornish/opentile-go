@@ -29,7 +29,7 @@ tasks of speculative cgo work.
 | R2 | `internal/jpeg` marker package | v0.2 | ✅ landed (Batch 2) |
 | R3 | SVS associated images — label, overview, thumbnail | v0.2 (promoted from v0.3) | ✅ landed (Task 21, `9cd27cb`) |
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
-| R5 | Philips TIFF (sparse-tile filler) | v0.5 | deferred (was v0.4; demoted in favour of v0.4 SVS/NDPI completeness) |
+| R5 | Philips TIFF (sparse-tile filler) | v0.5 | ✅ landed (commits `1ad463c..7e7bde0`, parity verified across 4 fixtures) |
 | R6 | 3DHistech TIFF | v0.5 | deferred |
 | R7 | OME TIFF | v0.5 | deferred |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
@@ -193,7 +193,69 @@ the test that locks the change in.
 
 ---
 
-## 7. Gate outcomes (live)
+## 7. Retired in v0.5
+
+Items closed during the v0.5 Philips TIFF milestone. One line per ID;
+named commits' messages have the full rationale and the parity check
+that locks the change in.
+
+**Roadmap items (R-prefix):**
+
+- **R5** — Philips TIFF support landed end-to-end (`1ad463c..7e7bde0`).
+  New `formats/philips/` package, new `internal/jpegturbo.FillFrame`
+  cgo entry point, new `internal/jpeg.InsertTables` (no-APP14 sibling
+  to `InsertTablesAndAPP14`). All 4 sample fixtures
+  (`Philips-{1,2,3,4}.tiff`) open cleanly: byte-identical to Python
+  opentile 0.20.0 across every sampled tile and every associated
+  image we expose. Parity oracle slate extended (11 slides total);
+  integration suite covers all 12 fixtures (5 SVS + 3 NDPI + 4
+  Philips) green on every commit.
+
+**JIT verification gates (Tasks 1-3 of the v0.5 plan):**
+
+- **T1** — `is_philips` detection gate (`f3ac48c`): all 4 Philips
+  fixtures match upstream's `software[:10] == 'Philips DP'` AND
+  `description[-16:].strip().endswith('</DataObject>')` rule; zero
+  false positives across 13 non-Philips fixtures. No detection-rule
+  refinement needed.
+- **T2** — `FillFrame` determinism gate (`aa49f96`): Python's
+  `Jpeg.fill_frame(src, 1.0)` is byte-deterministic across 5 passes
+  (sha256 `05c3789cc691d9a207659e250b3fc9c799eca7c5019c4b084a441c4dca9da243`,
+  2,364 bytes). Set the v0.5 sparse-tile blank-tile bar to byte
+  equality. Cross-check during the FillFrame implementation (commit
+  `e5ae3ac`) confirmed our Go `FillFrame` produces the SAME sha on
+  the same input.
+- **T3** — DICOM XML schema audit (`17cce32`): 11 DICOM_* tags
+  inventoried across 4 fixtures. `DICOM_ACQUISITION_DATETIME` and
+  `DICOM_DEVICE_SERIAL_NUMBER` absent on 3/4 fixtures (Philips-4
+  only); multi-value strings (DICOM_SOFTWARE_VERSIONS,
+  DICOM_LOSSY_IMAGE_COMPRESSION_*) are space-separated quoted. Drove
+  the metadata parser's per-tag tolerant-of-absence design.
+
+**Mid-task discoveries (where reading upstream changed the design):**
+
+- The v0.5 plan's `computeCorrectedSizes` test expectation was based
+  on a misread of `tifffile._philips_load_pages` (assumed N PS
+  entries → N corrected sizes including baseline). Reading upstream
+  byte-by-byte (the easily-missed `i += 1` at line 6540) corrected
+  this: N PS entries → N-1 corrected sizes, with the first PS entry
+  calibrating only.
+- The synthesised-XML metadata tests passed under a flat
+  `encoding/xml` schema, but the real Philips fixtures wrap
+  level-specific Attributes inside `PIM_DP_SCANNED_IMAGES > Array >
+  DataObject`. Smoke test against real fixtures forced a rewrite to
+  a stack-based token decoder mirroring
+  `ElementTree.iter('Attribute')`.
+- `NativeTiledTiffImage.get_tile` always splices JPEGTables onto
+  whatever `_read_frame` returns, including the cached blank tile
+  (which already has tables inside `FillFrame`'s input). Result is
+  duplicate DQT/DHT segments in the sparse-tile output — JPEG
+  decoders accept this. Cross-check against Python at Philips-4 L0
+  (0,0) caught our initial single-splice version.
+
+---
+
+## 8. Gate outcomes (live)
 
 JIT verification gate outcomes from the v0.4 and v0.5 plans. Each
 gate decides a done-when bar or fix path for subsequent tasks.
@@ -318,6 +380,6 @@ gate decides a done-when bar or fix path for subsequent tasks.
 
 ---
 
-## 8. Triage process
+## 9. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

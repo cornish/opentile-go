@@ -11,7 +11,7 @@ upstream references, and retirement audit per milestone.
 
 ## [Unreleased]
 
-Active limitations after v0.4 are exclusively Permanent design choices
+Active limitations after v0.5 are exclusively Permanent design choices
 (L4, L5, L14 in `docs/deferred.md` §2). Open work parked in tracked
 issues:
 
@@ -19,6 +19,63 @@ issues:
   SVS corrupt-edge reconstruct + JP2K decode/encode. Deferred from v0.4
   to v0.5+; no local SVS slide exhibits the corrupt-edge bug, so the
   work is parked until a real slide motivates it.
+
+## [0.5.0] — 2026-04-26
+
+Philips TIFF support — the third format opentile-go handles, paralleling
+the v0.2 NDPI add. Output is **byte-identical to Python opentile
+0.20.0** on every sampled tile and every associated image we expose,
+across all 11 oracle slides (5 SVS + 2 NDPI + 4 Philips).
+
+### Added
+
+- **Philips TIFF format** — pyramid levels with sparse-tile
+  blank-tile filling, label / macro / thumbnail associated images,
+  DICOM-XML metadata extraction. Surface area: `formats/philips.New()`
+  factory (registered by `formats/all`), `philips.MetadataOf(tiler)`
+  for format-specific fields (PixelSpacing, BitsAllocated, etc.).
+  4 sample fixtures (`Philips-{1,2,3,4}.tiff`, 277 MB to 3.1 GB; one
+  is BigTIFF) in the integration + parity slates.
+- `opentile.FormatPhilips` constant.
+- `internal/jpegturbo.FillFrame` — new cgo entry point. tjTransform
+  with an all-blocks CUSTOMFILTER overwriting every DCT coefficient
+  to a luminance fill (DC = `LuminanceToDCCoefficient(luminance)`,
+  AC = 0 on luma; chroma fully zeroed). Mirrors Python opentile's
+  `JpegFiller.fill_image`. Used by Philips's sparse-tile blank-tile
+  derivation.
+- `internal/jpeg.InsertTables` — JPEGTables splice without APP14,
+  sibling to `InsertTablesAndAPP14` used by SVS. Philips encodes
+  standard YCbCr so no Adobe APP14 marker is needed.
+- `internal/tiff.TagSoftware` constant + `Page.Software()` accessor
+  (TIFF tag 305) used by Philips detection.
+
+### Architecture
+
+- DICOM-XML parsing via stdlib `encoding/xml` — first new use of
+  the package in the codebase. Stack-based token decoder mirrors
+  `ElementTree.iter('Attribute')`, descending into nested
+  `<PIM_DP_SCANNED_IMAGES><Array><DataObject>...` wrappers that
+  carry per-level Attributes in real fixtures.
+- Per-level dimension correction via `formats/philips/dimensions.go`
+  — direct port of `tifffile._philips_load_pages`. The first
+  `DICOM_PIXEL_SPACING` entry calibrates the baseline mm scale; each
+  subsequent entry produces a corrected size for the next tiled
+  page, replacing the on-disk placeholder dimensions.
+- Tile grid uses CORRECTED dims, not on-disk dims, matching Python's
+  `image_size.ceil_div(tile_size)`. On-disk pages may carry more
+  tile entries than `gx*gy`; trailing entries are unused but
+  preserved for index parity with Python's
+  `_tile_point_to_frame_index`.
+- Sparse-tile blank tile is computed lazily on first sparse access
+  (`sync.Once`); seed = first non-zero `TileByteCounts` entry, run
+  through `InsertTables` → `FillFrame(luminance=1.0)`. Output
+  byte-identical to Python's `Jpeg.fill_frame` on the same input.
+
+### Retired
+
+- **R5** (Philips TIFF) — landed end-to-end. `docs/deferred.md §7`
+  has the v0.5 retirement audit + the three JIT-gate outcomes
+  (T1 detection, T2 FillFrame determinism, T3 DICOM XML schema).
 
 ## [0.4.0] — 2026-04-26
 
@@ -176,7 +233,8 @@ Initial functional milestone. Aperio SVS tiled-level passthrough.
 - Three real-slide fixtures: CMU-1-Small-Region.svs, CMU-1.svs (JPEG),
   JP2K-33003-1.svs (JP2K passthrough).
 
-[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/cornish/opentile-go/releases/tag/v0.5.0
 [0.4.0]: https://github.com/cornish/opentile-go/releases/tag/v0.4.0
 [0.3.0]: https://github.com/cornish/opentile-go/releases/tag/v0.3.0
 [0.2.0]: https://github.com/cornish/opentile-go/releases/tag/v0.2.0
