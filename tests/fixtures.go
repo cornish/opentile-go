@@ -18,6 +18,11 @@ type AssociatedFixture struct {
 }
 
 // Fixture is the on-disk schema for a single-slide parity fixture.
+//
+// The Levels / TileSHA256 / SampledTileSHA256 fields hold the
+// single-image (or Images[0]) view; for multi-image formats (OME-TIFF)
+// the Images field is populated with one entry per main pyramid and
+// integration tests prefer it over the top-level Levels.
 type Fixture struct {
 	Slide             string                 `json:"slide"`
 	Format            string                 `json:"format"`
@@ -27,6 +32,24 @@ type Fixture struct {
 	SampledTileSHA256 map[string]SampledTile `json:"sampled_tiles,omitempty"`
 	ICCProfileSHA256  string                 `json:"icc_profile_sha256,omitempty"`
 	AssociatedImages  []AssociatedFixture    `json:"associated,omitempty"`
+	// Images is the multi-image view, populated for files where
+	// tiler.Images() returns more than one entry (multi-image OME).
+	// When populated, integration tests walk Images instead of the
+	// top-level Levels / TileSHA256 / SampledTileSHA256 fields. Each
+	// ImageFixture's per-tile hashes are namespaced by image index
+	// in the keys so OME images don't collide.
+	Images []ImageFixture `json:"images,omitempty"`
+}
+
+// ImageFixture is one main pyramid in a multi-image fixture.
+// SampledTileSHA256 keys use the image index prefix to avoid collisions
+// across images in the same fixture file.
+type ImageFixture struct {
+	Index             int                    `json:"index"`
+	Name              string                 `json:"name,omitempty"`
+	Levels            []LevelFixture         `json:"levels"`
+	TileSHA256        map[string]string      `json:"tiles,omitempty"`
+	SampledTileSHA256 map[string]SampledTile `json:"sampled_tiles,omitempty"`
 }
 
 // SampledTile is one entry in SampledTileSHA256: a hash paired with a

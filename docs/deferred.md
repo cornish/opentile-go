@@ -46,7 +46,7 @@ real slide motivates the work.
 | R4 | Aperio SVS corrupt-edge reconstruct fix (currently returns `ErrCorruptTile`) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Originally promoted to v0.4; demoted on 2026-04-26 because none of our local SVS slides exhibit corrupt edges and 12 tasks of cgo + Pillow-port work to deliver a synthetic-fixture-only feature isn't completeness, it's speculation. Issue captures the full upstream algorithm + Go-side dependency tree; trigger to take it on is a real slide that fails on us with `ErrCorruptTile`. |
 | R5 | Philips TIFF (sparse-tile filler) | v0.5 | ✅ landed (commits `1ad463c..7e7bde0`, parity verified across 4 fixtures) |
 | R6 | 3DHistech TIFF | parked | parked behind GH issue (TBD). MRXS conversion target produced by 3DHistech software; rare in practice. Trigger to take it on is a real slide. Upstream opentile has a ~200 LOC reader; cheap to revive if motivated. |
-| R7 | OME TIFF | v0.6 | next milestone. Closes the upstream-opentile format set. Uses sub-IFDs for pyramid levels rather than top-level IFDs (pattern hint surfaced from the v0.5 spec's "wrapper-page pattern" forward-looking note). |
+| R7 | OME TIFF | v0.6 | ✅ landed. Closes the upstream-opentile format set; SubIFD-based pyramid + multi-image deviation + dual-reference parity (opentile-py + tifffile). |
 | R8 | BigTIFF support | v0.2 | ✅ landed (Batch 1) |
 | R9 | JPEG 2000 decode/encode (currently passes through native tiles; decode matters for associated-image re-encoding and corrupt-tile reconstruct) | v0.5+ | deferred — see [#1](https://github.com/cornish/opentile-go/issues/1). Only consumer is R4; deferred together. Native JP2K tile passthrough (the v0.1+ behaviour) continues to work — decode is only needed for the reconstruct chain. |
 | R10 | Remote I/O backends (S3, HTTP range, fsspec equivalents) | out-of-scope; consumers supply `io.ReaderAt` | permanent |
@@ -57,6 +57,85 @@ real slide motivates the work.
 | R15 | Sakura SVSlide | parked | parked behind GH issue (TBD). Rare format; openslide reads it. Trigger-driven deferral. |
 | R16 | Leica SCN | v0.8 (tentative) | BigTIFF-based; common in research microscopy. Openslide reader as reference. Decide based on real-slide demand. |
 | R17 | Generic Tiled TIFF | v0.8+ (tentative) | catch-all fallback for unknown vendors with standard TIFF tile layout. Decide based on real-slide demand and whether end users are hitting `ErrUnsupportedFormat` on standards-compliant slides. |
+
+---
+
+## 1a. Deviations from upstream Python opentile
+
+Behaviours where opentile-go intentionally differs from upstream
+Python opentile 0.20.0. Each entry names the upstream behaviour, our
+deviation, and why. This section is the canonical source of truth;
+README.md and per-format docs link here.
+
+### NDPI synthesised label (since v0.2)
+
+- **Upstream:** `NdpiTiler.labels` returns empty — Python opentile does
+  not surface NDPI labels at all.
+- **opentile-go:** synthesises a label by cropping the left 30% of the
+  overview page (`formats/ndpi/associated.go::newLabelImage`).
+  Disable via `opentile.WithNDPISynthesizedLabel(false)`.
+- **Reason:** Aperio-style label affordance is more useful for
+  downstream consumers than nothing; opt-out preserves the upstream
+  no-label behaviour for callers that need it.
+- **Tracking:** L14 in §2 below.
+
+### NDPI Map page surfacing (since v0.4)
+
+- **Upstream:** filters out tifffile's `series.name == 'Map'` pages
+  even though tifffile classifies them.
+- **opentile-go:** exposes them as `Tiler.Associated()` entries with
+  `Kind() == "map"` (single-channel grayscale uncompressed strip
+  passthrough).
+- **Reason:** the data is in the file and tifffile already classifies
+  it; surfacing matches what the underlying TIFF carries. Not opt-out-
+  able; slides without a Map page silently produce no map entry.
+- **Tracking:** R13 in §1, retired in v0.4 (commit `7ac3f88`).
+
+### Multi-image OME pyramid exposure (since v0.6)
+
+- **Upstream:** in multi-image OME-TIFF files (e.g.
+  `Leica-2.ome.tiff` with 4 main pyramids), the base
+  `Tiler.__init__` loop silently overwrites `_level_series_index` on
+  each match — only the last main pyramid is exposed via the
+  legacy single-pyramid API.
+- **opentile-go:** exposes all main pyramids via the new
+  `Tiler.Images()` API; legacy `Tiler.Levels()` remains as a
+  shortcut for `Images()[0].Levels()`. Single-image formats
+  (SVS / NDPI / Philips) return a one-element slice.
+- **Reason:** encoding upstream's accidental drop in our port would
+  bake in an upstream oversight. Not intentional design.
+- **Verification:** parity for the dropped Leica-2 main pyramids
+  comes via the v0.6 tifffile-based oracle
+  (`tests/oracle/tifffile_test.go`); opentile-py oracle covers the
+  last-wins-exposed pyramid only.
+- **Tracking:** R7 in §1, retired in v0.6.
+
+### OME PlanarConfiguration=2 plane-0-only indexing (since v0.6)
+
+- **Upstream:** silently uses plane 0 only when `PlanarConfiguration=2`
+  via flat `y*W + x` indexing into the per-channel-tripled
+  TileOffsets / StripOffsets arrays.
+- **opentile-go:** mirrors that for byte parity. Other planes are
+  inaccessible through our public API.
+- **Reason:** matching upstream's plane-0 selection preserves
+  byte-parity; exposing the other planes would require either
+  decoding + merging (changes our tile-passthrough contract) or
+  per-plane bytes (no obvious API). Both Leica fixtures hit this on
+  tiled levels.
+- **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
+
+### OME first-strip-only on multi-strip OneFrame (since v0.6)
+
+- **Upstream:** Python opentile's `_read_frame(0)` consumes only
+  strip 0 (plane 0 row 0 on `PlanarConfiguration=2`) and lets
+  libjpeg-turbo's `TJERR_WARNING` recover from the truncated scan.
+- **opentile-go:** sets `oneframe.Options.FirstStripOnly` on OME
+  pages. Our cgo `tjTransform` wrapper distinguishes warning from
+  fatal via `tjGetErrorCode` and treats warnings as success when the
+  output is populated.
+- **Reason:** byte parity for OneFrame levels of OME files (Leica-1
+  L2-L4, Leica-2 L2-L5).
+- **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
 
 ---
 
@@ -274,10 +353,223 @@ that locks the change in.
 
 ---
 
-## 8. Gate outcomes (live)
+## 8. Retired in v0.6
 
-JIT verification gate outcomes from the v0.4 and v0.5 plans. Each
-gate decides a done-when bar or fix path for subsequent tasks.
+Items closed during the v0.6 OME TIFF milestone. One line per ID;
+named commits' messages have the full rationale and the parity check
+that locks the change in.
+
+**Roadmap items (R-prefix):**
+
+- **R7** — OME TIFF support landed end-to-end. New `formats/ome/`
+  package, new `internal/tiff` SubIFD support (`Page.SubIFDOffsets`
+  + `File.PageAtOffset`), new public API (`Image` interface +
+  `Tiler.Images()`), shared `internal/oneframe` package factored
+  from NDPI. Both Leica fixtures (Leica-1, Leica-2) open cleanly:
+  byte-identical to Python opentile 0.20.0 + tifffile across every
+  Image / level / sampled position we expose. Multi-image deviation
+  exposes Leica-2's 4 main pyramids; the 3 dropped by upstream are
+  byte-validated via the new tifffile oracle.
+
+**Public API additions:**
+
+- `Image` interface (Index / Name / Levels / Level / MPP).
+- `Tiler.Images() []Image` — always ≥ 1 entry; multi-image OME
+  exposes multiple. Existing `Tiler.Levels()` / `Level(i)` continue
+  to work as documented shortcuts to `Images()[0]`.
+- `opentile.SingleImage` helper used by SVS / NDPI / Philips for the
+  one-element wrapper.
+- `opentile.FormatOME` constant.
+
+**Internal additions:**
+
+- `internal/tiff.TagSubIFDs` constant (TIFF tag 330) +
+  `Page.SubIFDOffsets()` accessor.
+- `internal/tiff.File.PageAtOffset(off)` for SubIFD traversal.
+  `scalarU32` falls through to `Values64` for BigTIFF LONG8/IFD8
+  scalar values (caught while wiring SubIFD reads on Leica
+  fixtures — `ImageWidth` / `ImageLength` were silently failing).
+- `internal/oneframe/` package — factored from
+  `formats/ndpi/oneframe.go`; serves NDPI + OME (and likely v0.7
+  BIF). New `Options.FirstStripOnly` flag for OME multi-strip
+  planar pages.
+- `internal/jpegturbo` cgo wrapper now distinguishes `TJERR_WARNING`
+  from fatal via `tjGetErrorCode`; treats warnings as success when
+  the output is populated. Required for OME OneFrame's truncated
+  scan data; NDPI parity preserved.
+
+**JIT verification gates (Tasks 1-5 of the v0.6 plan):**
+
+- **T1** — `is_ome` detection gate (commit `b2950e6`): both Leica
+  fixtures match `description[-10:].strip().endswith('OME>')`; zero
+  false positives across 15 non-OME fixtures.
+- **T2** — SubIFD parsing audit (commit `2b0a6cc`): SubIFDs reachable
+  via tifffile's `series.levels`. Discovery: OneFrame levels are
+  dominant (3 of 5 in Leica-1, 4 of 6 per Leica-2 main pyramid).
+- **T3** — OneFrame factor decision (commit `72ba57f`): factor.
+  NDPI's `oneframe.go` body is already format-agnostic.
+- **T4** — OME-XML schema audit (commit `c807f8e`): both fixtures
+  use namespace 2016-06; uniform µm units; uint8 type.
+- **T5** — tifffile splice-replication harness (commit `e170766`):
+  OME files have no shared JPEGTables on tested fixtures; opentile-py
+  output is byte-identical to tifffile raw bytes for tiled levels.
+  Refined parity strategy.
+
+**Mid-task discoveries (where reading upstream changed the design):**
+
+- **PlanarConfiguration=2 plane-0-only indexing**: discovered when our
+  initial OME tile reader rejected Leica-1 L0 with "tile table
+  mismatch: offsets=16416 ... grid=72x76". Python opentile silently
+  uses plane 0 only via flat indexing; we matched for byte parity
+  and added a deviation note.
+- **Multi-strip OneFrame**: Leica-1 L2 has 7206 strips (3 planes × 2402
+  rows); Python's `_read_frame(0)` consumes only strip 0. Forced the
+  shared `oneframe.Options.FirstStripOnly` flag.
+- **`tjTransform` warning vs fatal**: libjpeg-turbo raises
+  TJERR_WARNING ("premature end of data segment") on OME OneFrame
+  inputs whose SOF claims full-page dimensions but only strip 0 of
+  scan data is present. Python tolerates the warning silently; we
+  added warning-vs-fatal discrimination via `tjGetErrorCode`.
+
+---
+
+## 9. Gate outcomes (live)
+
+JIT verification gate outcomes from the v0.4, v0.5, and v0.6 plans.
+Each gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.6 gates
+
+#### Task 5 — tifffile splice-replication harness
+
+- **Date:** 2026-04-26
+- **Outcome:** simpler than spec assumed. **OME files don't carry
+  shared JPEGTables** — every page in our fixtures has
+  `jpegtables=None`, every tile / strip's raw bytes start with
+  SOI+JFIF (self-contained). For tiled levels, opentile-py's
+  `get_tile()` output is **byte-identical to tifffile's raw bytes**
+  with no splicing involved (verified on Leica-1 L0 (0,0):
+  sha `668b391411f5ec95`, 17359 bytes, both paths).
+
+- **Refined parity strategy** (revises spec §5):
+
+  1. **Tiled levels of every Image**: tifffile reads raw tile bytes
+     via `dataoffsets[idx]` / `databytecounts[idx]`; compare directly
+     to our `Tile(x, y)` output. No Python-side splice needed. Works
+     for all images including those opentile-py drops.
+
+  2. **OneFrame levels of opentile-py-exposed images**
+     (Leica-1 main; Leica-2 series 4): opentile-py's `get_tile()`
+     gives the cropped output bytes. Compare directly to our output.
+
+  3. **OneFrame levels of dropped images** (Leica-2 series 1-3): no
+     byte-stable Python reference (opentile-py never sees them, and
+     tifffile only gives raw single-strip bytes, not the cropped
+     output). Coverage strategy:
+     - Transitive correctness: our OneFrame implementation is the
+       shared `internal/oneframe/` package validated by NDPI parity
+       on every NDPI fixture.
+     - Integration fixture SHAs: each OneFrame tile in those images
+       gets a committed SHA snapshot; regressions are caught by
+       `TestSlideParity`.
+
+- **Consequence:** the new tifffile oracle (Task 19) is simpler than
+  the spec's draft — no Python-side splice logic, just raw-byte read.
+  ~30 LOC of Python rather than ~80.
+
+#### Task 4 — OME-XML schema audit
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Both fixtures use the OME 2016-06 schema
+  (namespace `http://www.openmicroscopy.org/Schemas/OME/2016-06`).
+  Per-fixture Image inventory:
+
+  | Fixture | Images | Names observed | PhysicalSize unit | Type |
+  |---|---|---|---|---|
+  | Leica-1.ome.tiff | 2 | `'macro'`, `''` (1) | µm on every Pixels | uint8 |
+  | Leica-2.ome.tiff | 5 | `'macro'`, `''` × 4 | µm on every Pixels | uint8 |
+
+  All Pixels elements carry PhysicalSizeX / PhysicalSizeY +
+  PhysicalSizeXUnit / PhysicalSizeYUnit + SizeX / SizeY + Type
+  attributes. No fixture is missing any. Empty Name attributes mean
+  "main pyramid" per upstream's `_is_*_series` predicates (none of
+  label / macro / thumbnail).
+
+- **Consequence:** Task 12 (metadata parser) handles a single
+  namespace URI (2016-06) for our fixtures. The parser should still
+  use namespace wildcards (`xml:",any"` semantics) to be robust
+  across OME schema versions — slides converted by older tooling
+  may use earlier namespaces. All extracted fields (PhysicalSize,
+  Size) can rely on µm units; reject other units as
+  `ErrUnsupportedFormat` rather than half-implementing
+  unit conversions. Type=uint8 is the only supported value (matches
+  spec §8 out-of-scope).
+
+#### Task 3 — OneFrame factor-or-copy decision
+
+- **Date:** 2026-04-26
+- **Outcome:** **factor**. Reading `formats/ndpi/oneframe.go` end-to-end:
+  the body is already format-agnostic — single-strip JPEG read via
+  generic `tiff.TagStripOffsets` / `tiff.TagStripByteCounts`, SOF
+  parse and rewrite via `internal/jpeg`, MCU-aligned crop via
+  `internal/jpegturbo`. No NDPI-specific tags (no McuStarts, no NDPI
+  metadata refs). The only NDPI-shaped bits are the package name and
+  one comment string.
+- **Cross-check:** OME OneFrame levels also use single-strip
+  JPEG-compressed pages whose strip bytes start with SOI+JFIF
+  (self-contained — `jpegtables=None` on every OME fixture page).
+  No JPEGTables splice required. Behaviour matches what
+  `formats/ndpi/oneframe.go` already does.
+- **Consequence:** Task 10 factors the body into `internal/oneframe/`.
+  NDPI and OME both import it. Format-specific bits (MPP, pyramid
+  index, level index) are set by the format package after
+  construction. The factored package is a direct enabler for v0.7
+  (BIF) which likely needs the same machinery.
+
+#### Task 2 — SubIFD parsing audit
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. SubIFDs (TIFF tag 330) are present on every
+  OME pyramid base page and reachable via tifffile's `series.levels`
+  API. Per-fixture inventory:
+
+  | Fixture | Main series | SubIFDs / page | Total levels (top + sub) | Tiled / OneFrame split |
+  |---|---|---|---|---|
+  | Leica-1.ome.tiff | 1 (page 1 base) | 4 | 5 | L0/L1 tiled, L2/L3/L4 OneFrame |
+  | Leica-2.ome.tiff | 4 (pages 1-4 bases) | 5 each | 6 each = 24 main pyramid levels | L0/L1 tiled, L2-L5 OneFrame |
+  | (both) macro page | macro = page 0 | 2 | 3 (L0 used as AssociatedImage; L1/L2 ignored) | All OneFrame |
+
+  Python opentile reports `5 levels` for Leica-1 main and `6 levels`
+  for Leica-2's exposed main series — matching tifffile's `series.levels`
+  one-for-one. Compression on every page is JPEG (7) on both fixtures.
+
+- **Consequences:**
+  1. `internal/tiff.Page.SubIFDOffsets()` (Task 6) and
+     `tiff.File.PageAtOffset()` (Task 7) are required.
+  2. **OneFrame levels are dominant** (3-4 of 5-6 levels per main
+     pyramid). Skipping them in v0.6 would parity-skip the majority
+     of pyramid output — Task 15 (OneFrame support) is mandatory,
+     not optional.
+  3. The macro's own pyramid (its 2 SubIFDs) is NOT exposed in our
+     port; we use only macro L0 as the AssociatedImage, matching
+     upstream.
+
+#### Task 1 — `is_ome` detection gate
+
+- **Date:** 2026-04-26
+- **Outcome:** clean. Tifffile's detection rule
+  (`page index == 0 AND description[-10:].strip().endswith('OME>')`,
+  `tifffile.py:10125-10129`) matches both Leica OME fixtures and
+  produces zero false-positives across the other 15 fixtures (5 SVS,
+  3 NDPI, 4 Philips, 2 Ventana .bif, 1 generic TIFF). Description
+  tails: `'</StructuredAnnotations></OME>'` on both Leica fixtures;
+  every non-OME fixture's tail is unrelated. The rule is simpler
+  than v0.5's spec draft assumed (which proposed a 3-clause check
+  on `<?xml`, `<OME ` substring, and the OME namespace URL).
+- **Consequence:** the v0.6 OME factory's `Supports()` predicate
+  ports the rule verbatim — `strings.HasSuffix(strings.TrimSpace(desc[len-10:]), "OME>")`
+  with bounds checks for short descriptions. No namespace-string
+  matching needed.
 
 ### v0.5 gates
 
@@ -399,6 +691,6 @@ gate decides a done-when bar or fix path for subsequent tasks.
 
 ---
 
-## 9. Triage process
+## 10. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.

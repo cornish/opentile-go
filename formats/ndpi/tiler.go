@@ -14,6 +14,10 @@ type tiler struct {
 
 func (t *tiler) Format() opentile.Format { return opentile.FormatNDPI }
 
+func (t *tiler) Images() []opentile.Image {
+	return []opentile.Image{opentile.NewSingleImage(t.levels)}
+}
+
 func (t *tiler) Levels() []opentile.Level {
 	// Return a defensive copy of the slice header so callers cannot mutate
 	// library state. The underlying Level pointers are shared.

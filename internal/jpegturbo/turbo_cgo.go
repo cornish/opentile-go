@@ -199,11 +199,23 @@ static int go_tj_transform_crop_fill(
     t.customFilter = go_tj_fill_background;
 
     int rc = tjTransform(h_, src, src_size, 1, dst, dst_size, &t, 0);
-    if (rc != 0 && err_msg != NULL && err_cap > 0) {
-        const char *m = tjGetErrorStr2(h_);
-        if (m != NULL) {
-            strncpy(err_msg, m, err_cap - 1);
-            err_msg[err_cap - 1] = '\0';
+    // libjpeg-turbo returns rc=-1 on both warnings (recoverable —
+    // truncated input but valid output produced) and fatal errors. OME
+    // OneFrame inputs are page-tag-claimed-WxH JPEGs whose scan data
+    // covers only the first row (the rest is library OOB-fill); the
+    // result is a TJERR_WARNING ("premature end of data segment")
+    // that Python opentile silently tolerates. We mirror that for
+    // parity by treating warnings as success.
+    if (rc != 0) {
+        int code = tjGetErrorCode(h_);
+        if (code == TJERR_WARNING && *dst != NULL && *dst_size > 0) {
+            rc = 0; // warning, output is valid — proceed
+        } else if (err_msg != NULL && err_cap > 0) {
+            const char *m = tjGetErrorStr2(h_);
+            if (m != NULL) {
+                strncpy(err_msg, m, err_cap - 1);
+                err_msg[err_cap - 1] = '\0';
+            }
         }
     }
     tjDestroy(h_);

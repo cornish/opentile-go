@@ -40,13 +40,14 @@ type noopTiler struct {
 	format Format
 }
 
-func (n *noopTiler) Format() Format                 { return n.format }
-func (n *noopTiler) Levels() []Level                { return nil }
-func (n *noopTiler) Level(i int) (Level, error)     { return nil, ErrLevelOutOfRange }
-func (n *noopTiler) Associated() []AssociatedImage  { return nil }
-func (n *noopTiler) Metadata() Metadata             { return Metadata{} }
-func (n *noopTiler) ICCProfile() []byte             { return nil }
-func (n *noopTiler) Close() error                   { return nil }
+func (n *noopTiler) Format() Format                { return n.format }
+func (n *noopTiler) Images() []Image               { return []Image{NewSingleImage(nil)} }
+func (n *noopTiler) Levels() []Level               { return nil }
+func (n *noopTiler) Level(i int) (Level, error)    { return nil, ErrLevelOutOfRange }
+func (n *noopTiler) Associated() []AssociatedImage { return nil }
+func (n *noopTiler) Metadata() Metadata            { return Metadata{} }
+func (n *noopTiler) ICCProfile() []byte            { return nil }
+func (n *noopTiler) Close() error                  { return nil }
 
 // withRegistry replaces the package-global format registry with the given
 // factories for the duration of the test, restoring the original on

@@ -134,6 +134,9 @@ type tiler struct {
 }
 
 func (t *tiler) Format() opentile.Format                { return opentile.FormatSVS }
+func (t *tiler) Images() []opentile.Image {
+	return []opentile.Image{opentile.NewSingleImage(t.levels)}
+}
 func (t *tiler) Levels() []opentile.Level {
 	// Return a fresh slice so callers cannot mutate the immutable internal
 	// state. The underlying Level pointers are shared; only the slice header

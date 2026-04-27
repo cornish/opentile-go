@@ -26,6 +26,7 @@ const (
 	TagTileLength        uint16 = 323
 	TagTileOffsets       uint16 = 324
 	TagTileByteCounts    uint16 = 325
+	TagSubIFDs           uint16 = 330
 	TagJPEGTables        uint16 = 347
 	TagYCbCrSubSampling  uint16 = 530
 	TagInterColorProfile uint16 = 34675
@@ -42,16 +43,30 @@ type Page struct {
 func newPage(i *ifd, br *byteReader) *Page { return &Page{ifd: i, br: br} }
 
 // scalarU32 returns the first value of a tag, or (0, false) if missing.
+//
+// Tries Values() first (uint32 path, handles SHORT / LONG / IFD); falls back
+// to Values64 (handles LONG8 / IFD8) for BigTIFF entries that store small
+// scalars in 8-byte fields. Narrowing to uint32 is safe for the tags this
+// helper is meant to back (ImageWidth / Length / TileWidth / Length /
+// Compression / Photometric / SamplesPerPixel / BitsPerSample /
+// ResolutionUnit) — none of which legitimately exceeds uint32 range on
+// real slides.
 func (p *Page) scalarU32(tag uint16) (uint32, bool) {
 	e, ok := p.ifd.get(tag)
 	if !ok {
 		return 0, false
 	}
-	vals, err := e.Values(p.br)
-	if err != nil || len(vals) == 0 {
+	if vals, err := e.Values(p.br); err == nil && len(vals) > 0 {
+		return vals[0], true
+	}
+	vals64, err := e.Values64(p.br)
+	if err != nil || len(vals64) == 0 {
 		return 0, false
 	}
-	return vals[0], true
+	if vals64[0] > uint64(^uint32(0)) {
+		return 0, false
+	}
+	return uint32(vals64[0]), true
 }
 
 // ScalarU32 returns the first value of an arbitrary tag as uint32, or
@@ -94,6 +109,22 @@ func (p *Page) ImageDescription() (string, bool) {
 // `software[:10] == 'Philips DP'`.
 func (p *Page) Software() (string, bool) {
 	return p.ASCII(TagSoftware)
+}
+
+// SubIFDOffsets returns the SubIFDs tag (330) value as a slice of
+// uint64 offsets, or (nil, false) if absent. Used by OME TIFF where
+// reduced-resolution pyramid levels live in SubIFDs of the base page
+// rather than as top-level IFDs. Decodes both classic-TIFF LONG/IFD
+// and BigTIFF LONG8/IFD8 type widths via the existing arrayU64 helper.
+func (p *Page) SubIFDOffsets() ([]uint64, bool) {
+	if !p.HasTag(TagSubIFDs) {
+		return nil, false
+	}
+	offs, err := p.arrayU64(TagSubIFDs)
+	if err != nil {
+		return nil, false
+	}
+	return offs, true
 }
 
 // JPEGTables returns the JPEG tables blob used as a prefix for tiles, if present.

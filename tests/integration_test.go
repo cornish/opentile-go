@@ -14,9 +14,10 @@ import (
 	"github.com/cornish/opentile-go/tests"
 )
 
-// slideCandidates lists SVS, NDPI, and Philips slides this integration
-// suite knows about. Each is tested only if both the on-disk slide and
-// the committed fixture JSON are present; otherwise the slide is skipped.
+// slideCandidates lists SVS, NDPI, Philips, and OME slides this
+// integration suite knows about. Each is tested only if both the
+// on-disk slide and the committed fixture JSON are present; otherwise
+// the slide is skipped.
 var slideCandidates = []string{
 	"CMU-1-Small-Region.svs",
 	"CMU-1.svs",
@@ -30,15 +31,18 @@ var slideCandidates = []string{
 	"Philips-2.tiff",
 	"Philips-3.tiff",
 	"Philips-4.tiff",
+	"Leica-1.ome.tiff",
+	"Leica-2.ome.tiff",
 }
 
-// resolveSlide looks up name in dir, dir/svs, dir/ndpi, dir/phillips-tiff
-// and returns the first existing absolute path. Used so
+// resolveSlide looks up name in dir, dir/svs, dir/ndpi, dir/phillips-tiff,
+// dir/ome-tiff and returns the first existing absolute path. Used so
 // OPENTILE_TESTDIR can be set to the repo sample_files root and cover
-// every supported format in one run. The Philips subdir is "phillips-tiff"
-// (typo preserved from the original sample_files layout).
+// every supported format in one run. The Philips subdir is
+// "phillips-tiff" (typo preserved from the original sample_files
+// layout).
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
@@ -91,59 +95,31 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 	if string(tiler.Format()) != fix.Format {
 		t.Errorf("Format: got %q, want %q", tiler.Format(), fix.Format)
 	}
-	levels := tiler.Levels()
-	if len(levels) != len(fix.Levels) {
-		t.Fatalf("level count: got %d, want %d", len(levels), len(fix.Levels))
-	}
-	for i, lvl := range levels {
-		exp := fix.Levels[i]
-		if lvl.Index() != i {
-			t.Errorf("level %d: Index()=%d, want %d", i, lvl.Index(), i)
+
+	// Multi-image fixtures (OME) populate fix.Images and use that
+	// view; single-image fixtures use the legacy top-level Levels /
+	// TileSHA256 / SampledTileSHA256 fields.
+	if len(fix.Images) > 0 {
+		images := tiler.Images()
+		if len(images) != len(fix.Images) {
+			t.Fatalf("image count: got %d, want %d", len(images), len(fix.Images))
 		}
-		if lvl.PyramidIndex() != exp.PyramidIdx {
-			t.Errorf("level %d: PyramidIndex()=%d, want %d", i, lvl.PyramidIndex(), exp.PyramidIdx)
-		}
-		if mpp := lvl.MPP(); mpp.W < 0 || mpp.H < 0 {
-			t.Errorf("level %d: MPP negative %v", i, mpp)
-		}
-		if fp := lvl.FocalPlane(); fp < 0 {
-			t.Errorf("level %d: FocalPlane negative %v", i, fp)
-		}
-		if lvl.Size().W != exp.Size[0] || lvl.Size().H != exp.Size[1] {
-			t.Errorf("level %d size: got %v, want %v", i, lvl.Size(), exp.Size)
-		}
-		if lvl.TileSize().W != exp.TileSize[0] || lvl.TileSize().H != exp.TileSize[1] {
-			t.Errorf("level %d tile size: got %v, want %v", i, lvl.TileSize(), exp.TileSize)
-		}
-		if lvl.Grid().W != exp.Grid[0] || lvl.Grid().H != exp.Grid[1] {
-			t.Errorf("level %d grid: got %v, want %v", i, lvl.Grid(), exp.Grid)
-		}
-		if lvl.Compression().String() != exp.Compression {
-			t.Errorf("level %d compression: got %q, want %q", i, lvl.Compression(), exp.Compression)
-		}
-		// Tile hashes — full-walk mode
-		if len(fix.TileSHA256) > 0 {
-			for y := 0; y < lvl.Grid().H; y++ {
-				for x := 0; x < lvl.Grid().W; x++ {
-					b, err := lvl.Tile(x, y)
-					if err != nil {
-						t.Errorf("Tile(%d,%d) level %d: %v", x, y, i, err)
-						continue
-					}
-					sum := sha256.Sum256(b)
-					got := hex.EncodeToString(sum[:])
-					key := tests.TileKey(i, x, y)
-					want, ok := fix.TileSHA256[key]
-					if !ok {
-						t.Errorf("fixture missing key %s", key)
-						continue
-					}
-					if got != want {
-						t.Errorf("tile %s hash: got %s, want %s", key, got, want)
-					}
-				}
+		for ii, img := range images {
+			fixImg := fix.Images[ii]
+			if img.Index() != fixImg.Index {
+				t.Errorf("image %d Index: got %d, want %d", ii, img.Index(), fixImg.Index)
 			}
+			if img.Name() != fixImg.Name {
+				t.Errorf("image %d Name: got %q, want %q", ii, img.Name(), fixImg.Name)
+			}
+			checkLevels(t, img.Levels(), fixImg.Levels, fixImg.TileSHA256, fixImg.SampledTileSHA256, fmt.Sprintf("image %d ", ii))
 		}
+	} else {
+		levels := tiler.Levels()
+		if len(levels) != len(fix.Levels) {
+			t.Fatalf("level count: got %d, want %d", len(levels), len(fix.Levels))
+		}
+		checkLevels(t, levels, fix.Levels, fix.TileSHA256, fix.SampledTileSHA256, "")
 	}
 
 	// ICCProfile: a non-nil slice must have non-zero length. Some slides
@@ -151,32 +127,6 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 	// case where the tag was found but empty.
 	if icc := tiler.ICCProfile(); icc != nil && len(icc) == 0 {
 		t.Error("ICCProfile non-nil but empty")
-	}
-
-	// Sampled-walk mode: walk only deliberately-chosen positions.
-	if len(fix.SampledTileSHA256) > 0 {
-		for i, lvl := range levels {
-			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
-			for _, p := range positions {
-				b, err := lvl.Tile(p.X, p.Y)
-				if err != nil {
-					t.Errorf("sampled Tile(%d,%d) level %d: %v", p.X, p.Y, i, err)
-					continue
-				}
-				key := tests.SampleKey(i, p)
-				expEntry, ok := fix.SampledTileSHA256[key]
-				if !ok {
-					t.Errorf("sampled fixture missing key %s", key)
-					continue
-				}
-				sum := sha256.Sum256(b)
-				got := hex.EncodeToString(sum[:])
-				if got != expEntry.SHA256 {
-					t.Errorf("sampled tile %s (%s): got %s, want %s",
-						key, expEntry.Reason, got, expEntry.SHA256)
-				}
-			}
-		}
 	}
 
 	md := tiler.Metadata()
@@ -207,6 +157,102 @@ func checkSlideAgainstFixture(t *testing.T, slide, fixturePath string) {
 			sum := sha256.Sum256(b)
 			if got := hex.EncodeToString(sum[:]); got != exp.SHA256 {
 				t.Errorf("associated[%d] sha256: got %s, want %s", i, got, exp.SHA256)
+			}
+		}
+	}
+}
+
+// checkLevels walks a single Image's level chain against its fixture
+// view. Used by checkSlideAgainstFixture for both the single-image
+// (top-level Levels field) and multi-image (per-Image) layouts.
+//
+// The labelPrefix is prepended to t.Errorf messages so multi-image
+// failures are unambiguous; pass "" for single-image, "image N " for
+// multi-image.
+func checkLevels(
+	t *testing.T,
+	levels []opentile.Level,
+	fixLevels []tests.LevelFixture,
+	fixTileSHA map[string]string,
+	fixSampledSHA map[string]tests.SampledTile,
+	labelPrefix string,
+) {
+	t.Helper()
+	if len(levels) != len(fixLevels) {
+		t.Fatalf("%slevel count: got %d, want %d", labelPrefix, len(levels), len(fixLevels))
+	}
+	for i, lvl := range levels {
+		exp := fixLevels[i]
+		if lvl.Index() != i {
+			t.Errorf("%slevel %d: Index()=%d, want %d", labelPrefix, i, lvl.Index(), i)
+		}
+		if lvl.PyramidIndex() != exp.PyramidIdx {
+			t.Errorf("%slevel %d: PyramidIndex()=%d, want %d", labelPrefix, i, lvl.PyramidIndex(), exp.PyramidIdx)
+		}
+		if mpp := lvl.MPP(); mpp.W < 0 || mpp.H < 0 {
+			t.Errorf("%slevel %d: MPP negative %v", labelPrefix, i, mpp)
+		}
+		if fp := lvl.FocalPlane(); fp < 0 {
+			t.Errorf("%slevel %d: FocalPlane negative %v", labelPrefix, i, fp)
+		}
+		if lvl.Size().W != exp.Size[0] || lvl.Size().H != exp.Size[1] {
+			t.Errorf("%slevel %d size: got %v, want %v", labelPrefix, i, lvl.Size(), exp.Size)
+		}
+		if lvl.TileSize().W != exp.TileSize[0] || lvl.TileSize().H != exp.TileSize[1] {
+			t.Errorf("%slevel %d tile size: got %v, want %v", labelPrefix, i, lvl.TileSize(), exp.TileSize)
+		}
+		if lvl.Grid().W != exp.Grid[0] || lvl.Grid().H != exp.Grid[1] {
+			t.Errorf("%slevel %d grid: got %v, want %v", labelPrefix, i, lvl.Grid(), exp.Grid)
+		}
+		if lvl.Compression().String() != exp.Compression {
+			t.Errorf("%slevel %d compression: got %q, want %q", labelPrefix, i, lvl.Compression(), exp.Compression)
+		}
+		// Full-walk tile hashes
+		if len(fixTileSHA) > 0 {
+			for y := 0; y < lvl.Grid().H; y++ {
+				for x := 0; x < lvl.Grid().W; x++ {
+					b, err := lvl.Tile(x, y)
+					if err != nil {
+						t.Errorf("%sTile(%d,%d) level %d: %v", labelPrefix, x, y, i, err)
+						continue
+					}
+					sum := sha256.Sum256(b)
+					got := hex.EncodeToString(sum[:])
+					key := tests.TileKey(i, x, y)
+					want, ok := fixTileSHA[key]
+					if !ok {
+						t.Errorf("%sfixture missing key %s", labelPrefix, key)
+						continue
+					}
+					if got != want {
+						t.Errorf("%stile %s hash: got %s, want %s", labelPrefix, key, got, want)
+					}
+				}
+			}
+		}
+	}
+	// Sampled-walk hashes.
+	if len(fixSampledSHA) > 0 {
+		for i, lvl := range levels {
+			positions := tests.SamplePositions(lvl.Grid(), lvl.Size(), lvl.TileSize())
+			for _, p := range positions {
+				b, err := lvl.Tile(p.X, p.Y)
+				if err != nil {
+					t.Errorf("%ssampled Tile(%d,%d) level %d: %v", labelPrefix, p.X, p.Y, i, err)
+					continue
+				}
+				key := tests.SampleKey(i, p)
+				expEntry, ok := fixSampledSHA[key]
+				if !ok {
+					t.Errorf("%ssampled fixture missing key %s", labelPrefix, key)
+					continue
+				}
+				sum := sha256.Sum256(b)
+				got := hex.EncodeToString(sum[:])
+				if got != expEntry.SHA256 {
+					t.Errorf("%ssampled tile %s (%s): got %s, want %s",
+						labelPrefix, key, expEntry.Reason, got, expEntry.SHA256)
+				}
 			}
 		}
 	}

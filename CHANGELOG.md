@@ -11,14 +11,95 @@ upstream references, and retirement audit per milestone.
 
 ## [Unreleased]
 
-Active limitations after v0.5 are exclusively Permanent design choices
+Active limitations after v0.6 are exclusively Permanent design choices
 (L4, L5, L14 in `docs/deferred.md` §2). Open work parked in tracked
 issues:
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
-  SVS corrupt-edge reconstruct + JP2K decode/encode. Deferred from v0.4
-  to v0.5+; no local SVS slide exhibits the corrupt-edge bug, so the
-  work is parked until a real slide motivates it.
+  SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
+  exhibits the corrupt-edge bug; work parked until one motivates it.
+- **R6** ([#2](https://github.com/cornish/opentile-go/issues/2)) —
+  3DHistech TIFF. Niche MRXS conversion target; never encountered in
+  the wild. Trigger-driven park.
+- **R15** ([#3](https://github.com/cornish/opentile-go/issues/3)) —
+  Sakura SVSlide. Trigger-driven park.
+
+## [0.6.0] — 2026-04-27
+
+OME-TIFF support — the fourth format opentile-go handles, closing the
+upstream Python opentile 0.20.0 format set. Output is byte-identical to
+**Python opentile 0.20.0 + tifffile** across every sampled tile and
+every associated image we expose, on both Leica fixtures.
+
+### Added
+
+- **OME-TIFF format** — `formats/ome/`. Tiled levels with SubIFD-based
+  pyramid traversal; OneFrame (non-tiled) levels via the new shared
+  `internal/oneframe/` package; macro / label / thumbnail associated
+  images; OME-XML metadata via stdlib `encoding/xml`. Two fixtures
+  in the parity slate (`Leica-1.ome.tiff`, `Leica-2.ome.tiff`).
+- **`Image` interface + `Tiler.Images() []Image`** (additive public API).
+  Multi-image OME-TIFF files (Leica-2 carries 4 main pyramids) expose
+  every pyramid via `Images()`. Single-image formats (SVS, NDPI,
+  Philips) return a one-element slice via the new `opentile.SingleImage`
+  helper. Existing `Tiler.Levels()` / `Level(i)` keep working as
+  documented shortcuts to `Images()[0]`.
+- **`opentile.FormatOME`** constant.
+- **`internal/tiff.TagSubIFDs`** (TIFF tag 330) +
+  **`Page.SubIFDOffsets()`** accessor.
+- **`internal/tiff.File.PageAtOffset(off)`** for SubIFD traversal.
+- **`internal/oneframe/`** package — factored from
+  `formats/ndpi/oneframe.go` so OME (and later v0.7 BIF) reuse the
+  same machinery. New `Options.FirstStripOnly` flag for OME's
+  multi-strip planar pages.
+- **`internal/jpegturbo` warning tolerance** — distinguishes
+  `TJERR_WARNING` from fatal via `tjGetErrorCode`; treats warnings as
+  success when `*dst` is populated. Required for OME OneFrame's
+  truncated scan data; NDPI parity preserved.
+- **`tests/oracle/tifffile_runner.py`** + **`tests/oracle/tifffile_session.go`** —
+  new tifffile-based parity oracle covering every Image's tiled levels,
+  including the 3 Leica-2 main pyramids opentile-py drops via its
+  last-wins loop.
+- **Per-format docs** under `docs/formats/` — one .md per format
+  (svs, ndpi, philips, ome) with capability matrix, deviations, fix
+  history, and upstream references.
+- **Canonical `Deviations` section** in `docs/deferred.md` §1a.
+
+### Changed
+
+- **README rewritten** for public consumption. New format-support
+  summary table; comprehensive API guide including the multi-image
+  `Tiler.Images()` flow; "Deviations" subsection. Drops "Pure-Go"
+  claim — opentile-go has one cgo dependency. Builds without cgo
+  via `-tags nocgo` (SVS-only / NDPI-striped consumers unaffected).
+- **Fixture schema** gained `Images []ImageFixture` for multi-image
+  formats. Single-image fixtures unchanged.
+- `internal/tiff.Page.scalarU32` falls through to `Values64` for
+  BigTIFF LONG8/IFD8 scalar values — discovered while wiring SubIFD
+  reads on the Leica fixtures, where `ImageWidth` / `ImageLength`
+  were silently failing.
+
+### Deviations from upstream Python opentile
+
+Three new deliberate divergences (see
+[`docs/deferred.md` §1a](docs/deferred.md) for full reasoning):
+
+- **Multi-image OME pyramid exposure**: upstream's last-wins loop
+  silently drops 3 of 4 main pyramids in `Leica-2.ome.tiff`; we
+  expose all of them via `Tiler.Images()`. Use `Tiler.Levels()` for
+  first-image-only behaviour.
+- **PlanarConfiguration=2 plane-0-only indexing**: matches Python's
+  silent flat-indexing into per-channel-tripled offset arrays.
+- **First-strip-only on multi-strip OneFrame**: matches Python's
+  `_read_frame(0)` behaviour on `rowsperstrip × samplesperpixel`
+  planar pages.
+
+### Retired
+
+- **R7** (OME TIFF) — landed end-to-end. `docs/deferred.md §8` has
+  the v0.6 retirement audit + the five JIT-gate outcomes (T1
+  detection, T2 SubIFD parsing, T3 OneFrame factor decision, T4
+  OME-XML schema, T5 tifffile splice-replication harness).
 
 ## [0.5.1] — 2026-04-26
 
@@ -244,7 +325,8 @@ Initial functional milestone. Aperio SVS tiled-level passthrough.
 - Three real-slide fixtures: CMU-1-Small-Region.svs, CMU-1.svs (JPEG),
   JP2K-33003-1.svs (JP2K passthrough).
 
-[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cornish/opentile-go/releases/tag/v0.6.0
 [0.5.1]: https://github.com/cornish/opentile-go/releases/tag/v0.5.1
 [0.5.0]: https://github.com/cornish/opentile-go/releases/tag/v0.5.0
 [0.4.0]: https://github.com/cornish/opentile-go/releases/tag/v0.4.0

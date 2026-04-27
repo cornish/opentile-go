@@ -2,107 +2,107 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-Pure-Go port of [opentile](https://github.com/imi-bigpicture/opentile), a library for reading
-tiles from whole-slide imaging (WSI) TIFF files used in digital pathology.
-
-**Status — v0.5**: Philips TIFF added — third format opentile-go handles,
-paralleling the v0.2 NDPI add. Aperio SVS (JPEG and JPEG 2000), Hamamatsu
-NDPI, and Philips TIFF fully supported, with associated images
-(label, overview, thumbnail, NDPI Map pages), BigTIFF, Hamamatsu's
-64-bit offset extension, and the Philips sparse-tile blank-tile
-mechanism. Public API frozen since v0.3.
-
-Output is **byte-identical to Python
-[opentile](https://github.com/imi-bigpicture/opentile) 0.20.0 on every
-sampled tile and associated image we expose**, across all 11 oracle
-slides (5 SVS + 2 NDPI + 4 Philips); 12 fixtures total in the
-integration suite (the 11 above plus Hamamatsu-1.ndpi sampled). The
-v0.4 NDPI edge-tile divergence (was tracked as L12) was diagnosed as a
-control-flow bug in our Go-side dispatch and fixed in v0.4 —
-geometry-first dispatch matches Python's `__need_fill_background` gate
-exactly.
-
-Three permanent design choices remain documented (L4 missing-MPP, L5
-NDPI sniff, L14 Go-side label synthesis on NDPI). Aperio SVS
-corrupt-edge reconstruct (R4) and JPEG 2000 decode/encode (R9) are
-parked at [#1](https://github.com/cornish/opentile-go/issues/1) until
-a real slide motivates them.
-
-OME TIFF is next (v0.6); after that opentile-go ventures beyond
-upstream's coverage starting with Ventana BIF (v0.7). 3DHistech TIFF
-and Sakura SVSlide are parked. See
-[`docs/deferred.md`](./docs/deferred.md) for the full roadmap.
-
-## Prerequisites
-
-- Go 1.23+ (for `iter.Seq2`)
-- [libjpeg-turbo](https://libjpeg-turbo.org/) 2.1+ (for NDPI pyramid levels and
-  NDPI label cropping)
-  - macOS: `brew install jpeg-turbo`
-  - Debian/Ubuntu: `apt-get install libturbojpeg0-dev`
-- `pkg-config` to resolve `libturbojpeg` at build time
-
-Building without cgo is supported via `-tags nocgo` (or `CGO_ENABLED=0`). The
-nocgo build supports SVS (all features) and NDPI striped pyramid levels; NDPI
-one-frame pyramid levels and NDPI edge-tile fill return `ErrCGORequired`.
-
-## Install
-
-```
-go get github.com/cornish/opentile-go
-```
-
-## Usage
+A Go library for reading raw compressed tiles from whole-slide imaging (WSI) TIFF files used in digital pathology. Direct port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library, with byte-identical output on every supported format.
 
 ```go
-package main
-
 import (
-    "fmt"
-    "log"
-
     opentile "github.com/cornish/opentile-go"
     _ "github.com/cornish/opentile-go/formats/all"
 )
 
-func main() {
-    tiler, err := opentile.OpenFile("slide.svs")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer tiler.Close()
+t, err := opentile.OpenFile("slide.svs")
+if err != nil { /* ... */ }
+defer t.Close()
 
-    fmt.Println("format:", tiler.Format())
-    fmt.Println("levels:", len(tiler.Levels()))
-
-    base, _ := tiler.Level(0)
-    fmt.Printf("base: %v tiles of %v pixels, compression %s\n",
-        base.Grid(), base.TileSize(), base.Compression())
-
-    tile, err := base.Tile(0, 0)
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Printf("tile[0,0]: %d bytes of %s\n", len(tile), base.Compression())
-}
+base, _ := t.Level(0)
+tile, err := base.Tile(0, 0) // raw compressed JPEG / JP2K / etc. bytes
 ```
 
-`Tile(x, y)` returns the raw compressed bitstream exactly as stored in the source TIFF (JPEG or JPEG 2000 in v0.1). Decode with any codec appropriate for the reported `Compression`.
+`Tile(x, y)` returns the raw compressed bitstream as stored on disk — opentile-go is a tile-extraction library, not a decoder. Decode the returned bytes with whatever JPEG / JPEG 2000 / etc. library suits your downstream pipeline.
 
-### Streaming
+## Supported formats
 
-For memory-sensitive callers, `Level.TileReader(x, y)` returns an `io.ReadCloser` backed by an `io.SectionReader`, avoiding a buffer copy:
+| Format | Extension | Levels | Associated | Compression | Parity bar | Detail |
+|---|---|---|---|---|---|---|
+| **Aperio SVS** | `.svs` | tiled | label, overview, thumbnail | JPEG, JP2K (passthrough) | byte-parity vs. Python opentile | [docs/formats/svs.md](./docs/formats/svs.md) |
+| **Hamamatsu NDPI** | `.ndpi` | tiled (striped + OneFrame) | overview, synthesised label\*, Map\* | JPEG | byte-parity vs. Python opentile | [docs/formats/ndpi.md](./docs/formats/ndpi.md) |
+| **Philips TIFF** | `.tiff` | tiled, with sparse-tile fill | label, overview, thumbnail | JPEG | byte-parity vs. Python opentile | [docs/formats/philips.md](./docs/formats/philips.md) |
+| **OME-TIFF** | `.ome.tiff` | tiled (SubIFD) + OneFrame | macro, label, thumbnail | JPEG (uint8 RGB only) | byte-parity vs. Python opentile + tifffile | [docs/formats/ome.md](./docs/formats/ome.md) |
+
+\* Marks Go-side extensions beyond upstream Python opentile; see [Deviations](#deviations-from-upstream-python-opentile) below.
+
+**Detection** is automatic. `opentile.OpenFile` walks the registered factories and dispatches the first one that reports `Supports(file) == true`; format packages register at import time via `_ "github.com/cornish/opentile-go/formats/all"`.
+
+**Format coverage**: opentile-go ports the four formats Python opentile 0.20.0 supports for tile extraction. 3DHistech TIFF (the fifth) is parked at [#2](https://github.com/cornish/opentile-go/issues/2). Beyond upstream's coverage, Ventana BIF (Roche / iScan scanners) is planned for v0.7; Sakura SVSlide is parked at [#3](https://github.com/cornish/opentile-go/issues/3).
+
+## Prerequisites
+
+- **Go 1.23+** (uses `iter.Seq2`).
+- **libjpeg-turbo 2.1+** for tile-domain JPEG operations (NDPI edge-tile fill, Philips sparse-tile fill, OME OneFrame extraction).
+  - macOS: `brew install jpeg-turbo`
+  - Debian / Ubuntu: `apt-get install libturbojpeg0-dev`
+- **`pkg-config`** to resolve `libturbojpeg` at build time.
+
+opentile-go is **mostly Go with one cgo dependency** — `internal/jpegturbo/` wraps libjpeg-turbo's `tjTransform` for lossless DCT-domain crops. Building without cgo (`-tags nocgo` or `CGO_ENABLED=0`) is supported: SVS works fully, NDPI striped levels work, but NDPI OneFrame / NDPI edge-tile fill / Philips sparse-tile fill / OME OneFrame return `ErrCGORequired`.
+
+## Install
+
+```sh
+go get github.com/cornish/opentile-go
+```
+
+Pin to v0.5.1 or later (v0.5.0 shipped with a wrong module path; see [CHANGELOG](./CHANGELOG.md)).
+
+## API
+
+### Opening a slide
+
+```go
+t, err := opentile.OpenFile("slide.tiff")
+if err != nil { /* ErrUnsupportedFormat or open error */ }
+defer t.Close()
+
+fmt.Println("format:", t.Format())                 // "svs", "ndpi", "philips", "ome"
+fmt.Println("levels:", len(t.Levels()))
+```
+
+Pass options to override defaults:
+
+```go
+t, err := opentile.OpenFile("slide.ndpi",
+    opentile.WithTileSize(1024, 1024),                     // virtual tile size for OneFrame levels
+    opentile.WithNDPISynthesizedLabel(false),              // disable the v0.2 NDPI label synthesis
+)
+```
+
+For an `io.ReaderAt` source (S3, in-memory, etc.) instead of a filename:
+
+```go
+t, err := opentile.Open(reader, size, opts...)
+```
+
+### Reading tiles
+
+```go
+base, _ := t.Level(0)
+
+// Per-tile metadata.
+fmt.Printf("base: %v tiles of %v pixels, compression %s, mpp %v\n",
+    base.Grid(), base.TileSize(), base.Compression(), base.MPP())
+
+// Get one tile's raw compressed bytes.
+tile, err := base.Tile(0, 0)
+```
+
+Stream a tile via `io.ReadCloser`:
 
 ```go
 rc, err := base.TileReader(0, 0)
-if err != nil { log.Fatal(err) }
 defer rc.Close()
-_, _ = io.Copy(dst, rc)
+io.Copy(dst, rc)
 ```
 
-### Iteration
-
-`Level.Tiles(ctx)` yields every tile position in row-major order as a Go 1.23 iterator:
+Iterate every tile in row-major order:
 
 ```go
 for pos, res := range base.Tiles(ctx) {
@@ -111,118 +111,111 @@ for pos, res := range base.Tiles(ctx) {
 }
 ```
 
-### Metadata
+### Multi-image files
 
-`Tiler.Metadata()` returns the cross-format fields — magnification, scanner, acquisition datetime. Aperio-specific fields (MPP, software line, filename) are accessible via `svs.MetadataOf`:
+OME-TIFF can carry multiple main pyramids in a single file. `Tiler.Images()` returns them all; `Tiler.Levels()` is a shortcut to `Images()[0].Levels()` for callers that don't need to distinguish.
 
 ```go
-import svs "github.com/cornish/opentile-go/formats/svs"
-
-md := tiler.Metadata()
-fmt.Println("magnification:", md.Magnification)
-
-if sm, ok := svs.MetadataOf(tiler); ok {
-    fmt.Println("MPP:", sm.MPP, "µm/px")
+for _, img := range t.Images() {
+    fmt.Printf("Image %d (%q): %d levels, %v µm/px\n",
+        img.Index(), img.Name(), len(img.Levels()), img.MPP())
+    base, _ := img.Level(0)
+    tile, _ := base.Tile(0, 0)
+    // ...
 }
 ```
 
-NDPI-specific fields (source-lens magnification, focal offset, scanner serial) are accessible via `ndpi.MetadataOf`:
-
-```go
-import ndpi "github.com/cornish/opentile-go/formats/ndpi"
-
-if nm, ok := ndpi.MetadataOf(tiler); ok {
-    fmt.Println("source lens:", nm.SourceLens, "x")
-    fmt.Println("focal offset:", nm.FocalOffset, "mm")
-    fmt.Println("scanner:", nm.Reference)
-}
-```
+For SVS, NDPI, and Philips, `Images()` always returns a one-element slice — Levels() / Level(i) work as before.
 
 ### Associated images
 
-`Tiler.Associated()` returns label / overview / thumbnail images where the format provides them. Each `AssociatedImage` exposes `Kind()`, `Size()`, `Compression()`, and `Bytes()` (a standalone, decoder-ready blob in whatever codec the source TIFF carries):
+`Tiler.Associated()` returns label / overview / thumbnail / map images where the format provides them:
 
 ```go
-for _, a := range tiler.Associated() {
+for _, a := range t.Associated() {
     b, err := a.Bytes()
     if err != nil { continue }
     fmt.Printf("%s: %v, %s, %d bytes\n", a.Kind(), a.Size(), a.Compression(), len(b))
 }
 ```
 
-SVS slides provide thumbnail, overview, and label (the label is emitted as raw LZW strip-0 bytes matching upstream Python opentile's behavior — see `docs/deferred.md` L10). NDPI slides provide overview and a synthesized label cropped from the overview's left 30%.
+`a.Bytes()` returns a self-contained, decoder-ready blob in whatever codec the source TIFF carries (typically JPEG or LZW). `a.Kind()` is `"label"`, `"overview"`, `"thumbnail"`, or `"map"` (NDPI only).
 
-## Concurrency
+### Format-specific metadata
 
-`Level.Tile(x, y)` and `Level.TileReader(x, y)` are safe to call concurrently from multiple goroutines, provided the underlying `io.ReaderAt` supplied to `Open` is also safe for concurrent use. `*os.File` satisfies this, so `OpenFile` is goroutine-safe out of the box. All internal caches (parsed IFDs, per-tile offset/length tables, metadata) are populated at `Open()` time and then immutable — no locks on the tile hot path.
+Cross-format fields (manufacturer, scanner serial, acquisition datetime, magnification) are surfaced via `t.Metadata()`. Format-specific fields are accessible by type-asserting through a per-format helper:
 
-`Close()` must not race with in-flight tile reads. Drain before closing.
+```go
+import (
+    svs "github.com/cornish/opentile-go/formats/svs"
+    ndpi "github.com/cornish/opentile-go/formats/ndpi"
+    philips "github.com/cornish/opentile-go/formats/philips"
+    ome "github.com/cornish/opentile-go/formats/ome"
+)
+
+if md, ok := svs.MetadataOf(t); ok {
+    fmt.Println("MPP (SVS):", md.MPP, "µm/px")
+}
+if md, ok := ndpi.MetadataOf(t); ok {
+    fmt.Println("source lens (NDPI):", md.SourceLens, "x")
+}
+if md, ok := philips.MetadataOf(t); ok {
+    fmt.Println("PixelSpacing (Philips):", md.PixelSpacing, "mm")
+}
+if md, ok := ome.MetadataOf(t); ok {
+    fmt.Println("OME images:", len(md.Images))
+}
+```
+
+`MetadataOf` walks any number of wrapper Tilers (e.g., `*fileCloser` from `OpenFile`) before asserting on the concrete type, so the helper works regardless of how the Tiler was obtained.
+
+### Concurrency
+
+`Level.Tile(x, y)` and `Level.TileReader(x, y)` are safe to call concurrently from multiple goroutines, provided the `io.ReaderAt` passed to `Open` is concurrent-safe. `*os.File` satisfies this; `OpenFile` is goroutine-safe out of the box.
+
+All internal caches (parsed IFDs, per-tile offset / length tables, metadata) are populated at `Open()` time and then immutable — no locks on the tile hot path. Format packages with shared lazy caches (`formats/ndpi/striped.go::Tile`'s per-frame assembly cache; `formats/ndpi/oneframe.go`'s extended-frame cache; `formats/philips/tiled.go`'s blank-tile cache) use `sync.Once` and produce byte-deterministic output regardless of which goroutine populates them first.
+
+`Close()` must not race with in-flight tile reads — drain before closing.
+
+## Deviations from upstream Python opentile
+
+opentile-go aims for byte-parity with Python opentile 0.20.0. A small number of deviations exist where matching upstream would encode an upstream oversight or where opentile-go provides a strictly more useful affordance:
+
+| Deviation | Format | Since | Opt-out / API | Why |
+|---|---|---|---|---|
+| Synthesised label | NDPI | v0.2 | `WithNDPISynthesizedLabel(false)` | Upstream doesn't surface NDPI labels at all; we crop the left 30% of the overview to provide an Aperio-style label affordance. |
+| Map pages exposed | NDPI | v0.4 | not opt-out-able (silent absence) | tifffile already classifies them as `series.name == 'Map'`; surfacing matches the underlying TIFF carrying. |
+| Multi-image OME pyramids | OME | v0.6 | use `Tiler.Levels()` instead of `Tiler.Images()` for first-image-only behaviour | Upstream's base Tiler loop silently drops 3 of 4 main pyramids in multi-image files via an unintentional last-wins assignment. We expose all of them via `Tiler.Images()`. |
+
+Full reasoning + per-deviation commit references are in [`docs/deferred.md`](./docs/deferred.md).
 
 ## Testing
 
-```
-go test ./... -race
+```sh
+make test     # go test ./... -race -count=1
+make vet      # go vet ./...
+make cover    # ≥80% per package; needs OPENTILE_TESTDIR
+make parity   # batched parity oracle vs Python opentile 0.20.0 + tifffile
+make bench    # NDPI per-tile throughput regression gate
 ```
 
-Integration tests require real slide files at `$OPENTILE_TESTDIR`. Fixtures
-for five slides are committed to `tests/fixtures/` (three SVS from openslide's
-public testdata plus two NDPI — CMU-1 and OS-2). The harness walks both
-`svs/` and `ndpi/` subdirectories of `$OPENTILE_TESTDIR`:
+Integration tests and the parity oracle require real slide files at `$OPENTILE_TESTDIR`. Fixture JSONs (committed) are at `tests/fixtures/`. Slides themselves are not redistributable and are gitignored.
 
-```
+```sh
 OPENTILE_TESTDIR="$PWD/sample_files" go test ./tests/... -v
 ```
 
-To regenerate fixtures from fresh slides:
+For parity testing against Python opentile + tifffile, set the Python interpreter and run with the `parity` build tag:
 
-```
-OPENTILE_TESTDIR="$PWD/sample_files" \
-    go test ./tests -tags generate -run TestGenerateFixtures -generate -v
-```
-
-### Parity testing against Python opentile
-
-An opt-in `//go:build parity` harness byte-compares tile and associated-image
-output against Python [opentile](https://github.com/imi-bigpicture/opentile)
-0.20.0, the reference implementation. The Go side shells out to a Python
-subprocess (`tests/oracle/oracle_runner.py`) for each tile or associated
-image and compares bytes:
-
-```
+```sh
 pip install -r tests/oracle/requirements.txt
 OPENTILE_ORACLE_PYTHON=$(which python) \
 OPENTILE_TESTDIR="$PWD/sample_files" \
   go test ./tests/oracle/... -tags parity -v
 ```
 
-Set `OPENTILE_ORACLE_PYTHON` to point at the interpreter that has opentile
-installed (typically a venv). The default run samples ~100 tile positions per
-level per slide (corners + diagonals + a 10×10 stride fill); pass
-`-parity-full` to walk every tile (adds minutes to tens of minutes per slide).
-A persistent stdin/stdout protocol keeps one Python subprocess resident per
-slide rather than spawning one per request, so the default sweep on all 7
-oracle slides completes in under 10 seconds on an M-series Mac.
+The default run samples ~100 tile positions per level per slide. A persistent stdin / stdout protocol keeps one Python subprocess resident per slide; full sweep on the v0.6 13-slide oracle slate completes in under 10 seconds.
 
-The harness reports byte-identical output on all sampled tiles for all
-committed fixtures, with the L12 edge-tile divergence on NDPI downgraded to
-`t.Log` (see `docs/deferred.md`).
+## License + attribution
 
-### Test helpers
-
-Test helpers (config builders, fixture types) live in the
-[`opentiletest`](./opentile/opentiletest) sibling package, mirroring the stdlib
-idiom (`httptest`, `iotest`):
-
-```go
-import "github.com/cornish/opentile-go/opentile/opentiletest"
-
-cfg := opentiletest.NewConfig(opentile.Size{W: 512, H: 512}, opentile.CorruptTileError)
-```
-
-## Scope
-
-See [`docs/superpowers/specs/2026-04-24-opentile-go-v03-design.md`](./docs/superpowers/specs/2026-04-24-opentile-go-v03-design.md) for the v0.3 design and the [`docs/deferred.md`](./docs/deferred.md) for the active roadmap and known limitations. Earlier milestone specs are kept under `docs/superpowers/specs/` for reference (v0.1: 2026-04-19, v0.2: 2026-04-21).
-
-## License
-
-Apache 2.0. This is an independent Go port of the Python `opentile` library (Copyright 2021–2024 Sectra AB); see [NOTICE](./NOTICE) for full attribution. Not affiliated with or endorsed by Sectra AB or the BigPicture project.
+Apache 2.0. Independent Go port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library (Copyright 2021–2024 Sectra AB); see [NOTICE](./NOTICE) for attribution. Not affiliated with or endorsed by Sectra AB or the BigPicture project.

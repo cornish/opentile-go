@@ -210,6 +210,52 @@ func TestPageSoftware(t *testing.T) {
 	}
 }
 
+// TestPageSubIFDOffsets confirms the SubIFDs accessor (TIFF tag 330)
+// reads a LONG-typed offset array correctly. Used by OME TIFF where
+// reduced-resolution pyramid levels live in SubIFDs of the base page
+// rather than as top-level IFDs.
+func TestPageSubIFDOffsets(t *testing.T) {
+	buf := new(bytes.Buffer)
+	buf.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0}) // header, first IFD at 8
+
+	const tSubIFDs uint16 = 330
+	// 1 entry. count(u16) + 12 entry bytes + 4 nextIFD = 18.
+	// External region starts at 8 + 18 = 26.
+	externalBase := uint32(26)
+	subOffsets := []uint32{1000, 2000, 3000}
+
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(buf, binary.LittleEndian, tSubIFDs)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(DTLong))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(len(subOffsets)))
+	_ = binary.Write(buf, binary.LittleEndian, externalBase)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // next IFD
+	for _, v := range subOffsets {
+		_ = binary.Write(buf, binary.LittleEndian, v)
+	}
+
+	data := buf.Bytes()
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got, ok := f.Pages()[0].SubIFDOffsets()
+	if !ok {
+		t.Fatal("SubIFDOffsets: expected ok=true")
+	}
+	want := []uint64{1000, 2000, 3000}
+	if !equalU64(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	// Page without the tag → ok=false.
+	data2 := buildPageTIFF(t)
+	f2, _ := Open(bytes.NewReader(data2), int64(len(data2)))
+	if _, ok := f2.Pages()[0].SubIFDOffsets(); ok {
+		t.Error("SubIFDOffsets on missing tag: expected ok=false")
+	}
+}
+
 func TestPageFloat32(t *testing.T) {
 	// Build a minimal TIFF with one FLOAT tag: tag=65421, type=11, count=1,
 	// value (inline) = 20.0 → IEEE 754 bits 0x41A00000.
