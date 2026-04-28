@@ -106,9 +106,13 @@ func TestOpenStubReturnsErrUnsupportedOnNonBIF(t *testing.T) {
 }
 
 // TestOpenStubReturnsTilerOnBIF: Open returns a non-nil Tiler when
-// detection passes. Subsequent T11+ tasks populate its content.
+// detection passes and at least one pyramid IFD is present.
+// Subsequent T13+ tasks populate Image / Level content.
 func TestOpenStubReturnsTilerOnBIF(t *testing.T) {
-	data := buildBIFLikeBigTIFF(t, []iFDSpec{{xmp: []byte(`<iScan/>`)}})
+	data := buildBIFLikeBigTIFF(t, []iFDSpec{
+		{xmp: []byte(`<iScan/>`), description: "Label_Image"},
+		{description: "level=0 mag=40 quality=95"},
+	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
@@ -126,10 +130,13 @@ func TestOpenStubReturnsTilerOnBIF(t *testing.T) {
 }
 
 // iFDSpec describes the contents of one IFD in a synthetic BIF-like
-// BigTIFF. Only the bits exercised by detection — XMP — are
-// configurable; ImageWidth/ImageLength are fixed at 1024×768.
+// BigTIFF. ImageWidth/ImageLength are fixed at 1024×768; XMP and
+// ImageDescription are optional. Used by detection / classification
+// / layout tests; downstream tile-reader tests will need richer
+// fixtures with TileOffsets / TileByteCounts / JPEGTables.
 type iFDSpec struct {
-	xmp []byte // nil = omit XMP tag
+	xmp         []byte // nil = omit XMP tag (700)
+	description string // empty = omit ImageDescription tag (270)
 }
 
 // buildBIFLikeBigTIFF builds a BigTIFF (little-endian) carrying len(ifds)
@@ -152,34 +159,50 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 	buf.Write([]byte{'I', 'I', 0x2B, 0x00, 0x08, 0x00, 0x00, 0x00})
 	_ = binary.Write(buf, binary.LittleEndian, uint64(0x10))
 
-	// First, compute offsets. Each IFD has count(8) + entries*(20) + nextIFD(8).
-	// XMP payloads larger than 8 bytes sit after all IFDs (out-of-line);
-	// payloads ≤ 8 bytes are written inline in the entry's value/offset cell.
+	// Two passes. Pass 1 lays out IFDs head-to-toe and reserves
+	// out-of-line payload areas for any field too large to fit in the
+	// 8-byte value/offset cell. Pass 2 actually writes everything.
+	//
+	// ImageDescription is type 2 (ASCII, NUL-terminated). We store the
+	// string + a trailing NUL — the spec requires the NUL.
 	ifdOffsets := make([]uint64, len(ifds))
 	xmpOffsets := make([]uint64, len(ifds))
+	descOffsets := make([]uint64, len(ifds))
+	descBytes := make([][]byte, len(ifds))
 	cursor := uint64(0x10)
 	for i, ifd := range ifds {
 		ifdOffsets[i] = cursor
 		entryCount := uint64(2) // ImageWidth + ImageLength
 		if ifd.xmp != nil {
-			entryCount = 3
+			entryCount++
+		}
+		if ifd.description != "" {
+			entryCount++
+			descBytes[i] = append([]byte(ifd.description), 0)
 		}
 		cursor += 8 + entryCount*20 + 8
-		_ = ifd
 	}
 	for i, ifd := range ifds {
 		if ifd.xmp != nil && len(ifd.xmp) > 8 {
 			xmpOffsets[i] = cursor
 			cursor += uint64(len(ifd.xmp))
 		}
+		if len(descBytes[i]) > 8 {
+			descOffsets[i] = cursor
+			cursor += uint64(len(descBytes[i]))
+		}
+		_ = ifd
 	}
 
 	for i, ifd := range ifds {
-		entries := 2
+		entries := uint64(2)
 		if ifd.xmp != nil {
-			entries = 3
+			entries++
 		}
-		_ = binary.Write(buf, binary.LittleEndian, uint64(entries))
+		if ifd.description != "" {
+			entries++
+		}
+		_ = binary.Write(buf, binary.LittleEndian, entries)
 		// ImageWidth (256, SHORT, count=1, value=1024 inline)
 		_ = binary.Write(buf, binary.LittleEndian, uint16(256))
 		_ = binary.Write(buf, binary.LittleEndian, uint16(3))
@@ -190,18 +213,29 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		_ = binary.Write(buf, binary.LittleEndian, uint16(3))
 		_ = binary.Write(buf, binary.LittleEndian, uint64(1))
 		_ = binary.Write(buf, binary.LittleEndian, uint64(768))
+		if ifd.description != "" {
+			// ImageDescription (270, ASCII, count=len(descBytes))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(270))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(2))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(len(descBytes[i])))
+			if len(descBytes[i]) <= 8 {
+				var inline [8]byte
+				copy(inline[:], descBytes[i])
+				buf.Write(inline[:])
+			} else {
+				_ = binary.Write(buf, binary.LittleEndian, descOffsets[i])
+			}
+		}
 		if ifd.xmp != nil {
 			// XMP (700, UNDEFINED, count=len(xmp))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(700))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(7))
 			_ = binary.Write(buf, binary.LittleEndian, uint64(len(ifd.xmp)))
 			if len(ifd.xmp) <= 8 {
-				// Inline: pad to 8 bytes in the value/offset cell.
 				var inline [8]byte
 				copy(inline[:], ifd.xmp)
 				buf.Write(inline[:])
 			} else {
-				// Out-of-line: write the payload offset.
 				_ = binary.Write(buf, binary.LittleEndian, xmpOffsets[i])
 			}
 		}
@@ -213,9 +247,14 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		_ = binary.Write(buf, binary.LittleEndian, nextIFD)
 	}
 
-	for _, ifd := range ifds {
+	// Out-of-line payload area: XMP first, then ImageDescription, in
+	// the same per-IFD interleaved order assigned during pass 1.
+	for i, ifd := range ifds {
 		if ifd.xmp != nil && len(ifd.xmp) > 8 {
 			buf.Write(ifd.xmp)
+		}
+		if len(descBytes[i]) > 8 {
+			buf.Write(descBytes[i])
 		}
 	}
 	return buf.Bytes()

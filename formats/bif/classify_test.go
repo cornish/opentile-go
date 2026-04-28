@@ -57,8 +57,10 @@ func TestGenerationString(t *testing.T) {
 // has `<iScan ScannerModel="VENTANA DP 200"/>` opens with
 // gen == GenerationSpecCompliant.
 func TestOpenClassifiesSpecCompliant(t *testing.T) {
-	xmp := []byte(`<iScan ScannerModel="VENTANA DP 200"/>`)
-	data := buildBIFLikeBigTIFF(t, []iFDSpec{{xmp: xmp}})
+	data := buildBIFLikeBigTIFF(t, []iFDSpec{
+		{xmp: []byte(`<iScan ScannerModel="VENTANA DP 200"/>`), description: "Label_Image"},
+		{description: "level=0 mag=40 quality=95"},
+	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)
@@ -83,8 +85,10 @@ func TestOpenClassifiesSpecCompliant(t *testing.T) {
 // `<iScan>` with no ScannerModel attribute opens with
 // gen == GenerationLegacyIScan.
 func TestOpenClassifiesLegacy(t *testing.T) {
-	xmp := []byte(`<iScan Magnification="40"/>`)
-	data := buildBIFLikeBigTIFF(t, []iFDSpec{{xmp: xmp}})
+	data := buildBIFLikeBigTIFF(t, []iFDSpec{
+		{xmp: []byte(`<iScan Magnification="40"/>`), description: "Label Image"},
+		{description: "level=0 mag=40 quality=90"},
+	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatalf("tiff.Open: %v", err)

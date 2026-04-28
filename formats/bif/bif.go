@@ -52,8 +52,12 @@ type Tiler struct {
 	file *tiff.File
 	cfg  *opentile.Config
 
-	gen   Generation     // routing decision (T11)
-	iscan *bifxml.IScan  // parsed IFD-0 metadata block; non-nil after Open
+	gen   Generation    // routing decision (T11)
+	iscan *bifxml.IScan // parsed IFD-0 metadata block; non-nil after Open
+
+	// IFD inventory (T12); built once at Open time.
+	levels        []classifiedIFD // pyramid IFDs sorted by parsed level=N
+	associatedIFD []classifiedIFD // label / probability / thumbnail IFDs
 }
 
 // Open constructs a BIF Tiler from a parsed TIFF file. v0.7 Batch C
@@ -67,11 +71,17 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	if err != nil {
 		return nil, err
 	}
+	levels, associated, _, err := inventory(file)
+	if err != nil {
+		return nil, err
+	}
 	return &Tiler{
-		file:  file,
-		cfg:   cfg,
-		iscan: iscan,
-		gen:   classifyGeneration(iscan),
+		file:          file,
+		cfg:           cfg,
+		iscan:         iscan,
+		gen:           classifyGeneration(iscan),
+		levels:        levels,
+		associatedIFD: associated,
 	}, nil
 }
 
