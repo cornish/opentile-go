@@ -214,9 +214,27 @@ func (t *Tiler) Associated() []opentile.AssociatedImage {
 // bif.MetadataOf(tiler).
 func (t *Tiler) Metadata() opentile.Metadata { return t.metadata().Metadata }
 
-// ICCProfile returns the IFD-2 ICC profile bytes (tag 34675), or nil
-// if absent. Populated in T18.
-func (t *Tiler) ICCProfile() []byte { return nil }
+// ICCProfile returns the level-0 IFD's InterColorProfile bytes
+// (TIFF tag 34675), or nil if the IFD doesn't carry an ICC profile.
+// Per spec §"IFD 2: High resolution scan", the profile lives only on
+// the level-0 (high-resolution) IFD; pyramid IFDs 3+ inherit it
+// implicitly. The profile applies to every pyramid level, the
+// overview/probability associated images excluded — those are sRGB
+// (overview) or grayscale (probability), no ICC needed.
+//
+// Returned bytes are the raw ICC profile blob, including the
+// 128-byte profile header. Consumers that want to verify the
+// magic should check `bytes[36:40] == "acsp"`.
+func (t *Tiler) ICCProfile() []byte {
+	if len(t.levelIFDs) == 0 {
+		return nil
+	}
+	prof, ok := t.levelIFDs[0].Page.ICCProfile()
+	if !ok || len(prof) == 0 {
+		return nil
+	}
+	return prof
+}
 
 // Close releases any resources held by the Tiler. Currently a no-op:
 // the underlying *tiff.File is owned by the caller.
