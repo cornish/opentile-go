@@ -152,6 +152,49 @@ func TestParseIScan_Malformed(t *testing.T) {
 	}
 }
 
+// TestParseIScan_ScanWhitePointPresentZero verifies that an explicit
+// ScanWhitePoint="0" attribute sets Present=true and Value=0.
+func TestParseIScan_ScanWhitePointPresentZero(t *testing.T) {
+	const xmp = `<iScan Magnification="40" ScanRes="0.25" ScanWhitePoint="0"/>`
+	got, err := bifxml.ParseIScan([]byte(xmp))
+	if err != nil {
+		t.Fatalf("ParseIScan: %v", err)
+	}
+	if !got.ScanWhitePointPresent {
+		t.Error("ScanWhitePointPresent should be true for ScanWhitePoint=\"0\"")
+	}
+	if got.ScanWhitePoint != 0 {
+		t.Errorf("ScanWhitePoint = %d; want 0", got.ScanWhitePoint)
+	}
+}
+
+// TestParseIScan_ScanWhitePointOutOfRange verifies that out-of-range values
+// are clamped to [0, 255] rather than silently zeroed.
+func TestParseIScan_ScanWhitePointOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		xml  string
+		want uint8
+	}{
+		{"too-high", `<iScan ScanWhitePoint="300"/>`, 255},
+		{"negative", `<iScan ScanWhitePoint="-50"/>`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bifxml.ParseIScan([]byte(tc.xml))
+			if err != nil {
+				t.Fatalf("ParseIScan: %v", err)
+			}
+			if !got.ScanWhitePointPresent {
+				t.Error("expected Present=true")
+			}
+			if got.ScanWhitePoint != tc.want {
+				t.Errorf("ScanWhitePoint = %d; want %d", got.ScanWhitePoint, tc.want)
+			}
+		})
+	}
+}
+
 // ── ParseEncodeInfo ───────────────────────────────────────────────────────────
 
 // TestParseEncodeInfo_Ventana1 covers the spec-compliant fixture (Ventana-1 IFD 2).

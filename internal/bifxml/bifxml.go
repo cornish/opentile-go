@@ -185,9 +185,8 @@ func parseIScanAttrs(attrs []xml.Attr, s *IScan) {
 		case "ScanWhitePoint":
 			if val != "" {
 				f := parseFloat(val)
-				if f >= 0 && f <= 255 {
-					s.ScanWhitePoint = uint8(math.Round(f))
-				}
+				clamped := math.Max(0, math.Min(255, math.Round(f)))
+				s.ScanWhitePoint = uint8(clamped)
 				s.ScanWhitePointPresent = true
 			}
 		case "Z-layers":
