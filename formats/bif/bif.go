@@ -68,6 +68,11 @@ type Tiler struct {
 	// Populated at Open time (T16); typically 2 entries (overview +
 	// {probability | thumbnail}).
 	associated []opentile.AssociatedImage
+
+	// cachedMetadata is built lazily on the first Metadata() /
+	// MetadataOf call (T17). Subsequent calls return the cached
+	// pointer; the struct itself is never mutated.
+	cachedMetadata *Metadata
 }
 
 // Open constructs a BIF Tiler from a parsed TIFF file. v0.7 Batch C
@@ -202,8 +207,12 @@ func (t *Tiler) Associated() []opentile.AssociatedImage {
 	return out
 }
 
-// Metadata returns the ventana.* property mirror. Populated in T17.
-func (t *Tiler) Metadata() opentile.Metadata { return opentile.Metadata{} }
+// Metadata returns the common opentile.Metadata fields populated
+// from the BIF <iScan> XMP block: Magnification, ScannerManufacturer,
+// ScannerModel, ScannerSoftware, ScannerSerial, AcquisitionDateTime.
+// For BIF-specific fields (Generation, ScanRes, AOIs, ...) call
+// bif.MetadataOf(tiler).
+func (t *Tiler) Metadata() opentile.Metadata { return t.metadata().Metadata }
 
 // ICCProfile returns the IFD-2 ICC profile bytes (tag 34675), or nil
 // if absent. Populated in T18.

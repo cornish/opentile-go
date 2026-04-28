@@ -22,6 +22,7 @@ const (
 	TagYResolution       uint16 = 283
 	TagResolutionUnit    uint16 = 296
 	TagSoftware          uint16 = 305
+	TagDateTime          uint16 = 306
 	TagTileWidth         uint16 = 322
 	TagTileLength        uint16 = 323
 	TagTileOffsets       uint16 = 324
