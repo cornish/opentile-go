@@ -212,7 +212,7 @@ func samplePositions(grid opentile.Size, full bool) []opentile.TilePos {
 }
 
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff", "ventana-bif"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true

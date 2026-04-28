@@ -57,6 +57,85 @@ func TestTifffileParity(t *testing.T) {
 	}
 }
 
+// bifTifffileSlideCandidates: slides where tifffile's serpentine-aware
+// raw-byte read should match opentile-go's Tile() output verbatim.
+// Restricted to fixtures WITHOUT shared JPEGTables (where opentile-go
+// returns raw passthrough bytes — same as tifffile). Fixtures WITH
+// shared JPEGTables (OS-1) modify the bytes via jpeg.InsertTables;
+// those use the openslide oracle for pixel parity instead.
+var bifTifffileSlideCandidates = []string{
+	"Ventana-1.bif",
+}
+
+// TestTifffileParityBIF runs the tifffile oracle against BIF
+// fixtures whose Tile() output is raw-passthrough (no JPEGTables
+// splice). Parity bar: byte-equality between opentile-go's Tile(col,
+// row) and tifffile's raw bytes at the same image-space position
+// (with serpentine remap applied on the Python side).
+//
+// Catches: wrong serpentine algebra, wrong page selection (level=N
+// ordering vs IFD index), wrong tile array indexing.
+func TestTifffileParityBIF(t *testing.T) {
+	dir := tests.TestdataDir()
+	if dir == "" {
+		t.Skip("OPENTILE_TESTDIR not set; skipping tifffile-BIF parity test")
+	}
+	for _, name := range bifTifffileSlideCandidates {
+		t.Run(name, func(t *testing.T) {
+			slide, ok := resolveSlide(dir, name)
+			if !ok {
+				t.Skipf("slide %s not present under %s", name, dir)
+			}
+			runTifffileBIFParityOnSlide(t, slide)
+		})
+	}
+}
+
+func runTifffileBIFParityOnSlide(t *testing.T, slide string) {
+	tiler, err := opentile.OpenFile(slide)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer tiler.Close()
+	if tiler.Format() != opentile.FormatBIF {
+		t.Fatalf("not a BIF tiler: format=%s", tiler.Format())
+	}
+
+	sess, err := oracle.NewTifffileSession(slide)
+	if err != nil {
+		t.Fatalf("tifffile session: %v", err)
+	}
+	defer func() {
+		if err := sess.Close(); err != nil {
+			t.Logf("tifffile session close: %v", err)
+		}
+	}()
+
+	for li, lvl := range tiler.Levels() {
+		positions := samplePositions(lvl.Grid(), false)
+		for _, pos := range positions {
+			our, err := lvl.Tile(pos.X, pos.Y)
+			if err != nil {
+				t.Errorf("level %d tile (%d,%d): Go error: %v", li, pos.X, pos.Y, err)
+				continue
+			}
+			theirs, err := sess.TileBIF(li, pos.X, pos.Y)
+			if err != nil {
+				t.Errorf("level %d tile (%d,%d): tifffile oracle error: %v", li, pos.X, pos.Y, err)
+				continue
+			}
+			if theirs == nil {
+				t.Errorf("level %d tile (%d,%d): tifffile returned zero-length (out-of-grid?)", li, pos.X, pos.Y)
+				continue
+			}
+			if !bytes.Equal(our, theirs) {
+				t.Errorf("slide %s level %d tile (%d,%d): byte-level divergence (go=%d bytes, tifffile=%d bytes)",
+					filepath.Base(slide), li, pos.X, pos.Y, len(our), len(theirs))
+			}
+		}
+	}
+}
+
 func runTifffileParityOnSlide(t *testing.T, slide string) {
 	tiler, err := opentile.OpenFile(slide, opentile.WithTileSize(tileSize, tileSize))
 	if err != nil {
