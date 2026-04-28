@@ -250,6 +250,16 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			// Compression (always JPEG=7 for synthetic tiled IFDs;
 			// matches every real BIF pyramid IFD).
 			m.entryCount += 5
+		} else {
+			// Non-tiled IFD: emit single-strip metadata so the
+			// associated-image constructor (T16) can read these
+			// pages without a "tag 273 missing" error. Each test
+			// IFD gets a zero-byte placeholder strip — Bytes() on
+			// these pages would return an empty buffer, but the
+			// test surface for v0.7 doesn't exercise associated
+			// Bytes() with synthetic data anyway. RowsPerStrip +
+			// StripOffsets + StripByteCounts: 3 tags.
+			m.entryCount += 3
 		}
 		if ifd.jpegTables != nil {
 			m.entryCount++
@@ -326,6 +336,25 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			_ = binary.Write(buf, binary.LittleEndian, uint16(2))
 			_ = binary.Write(buf, binary.LittleEndian, uint64(len(m.descBytes)))
 			writeInlineOrOffset(buf, m.descBytes, descOffsets[i])
+		}
+		// 273 StripOffsets / 278 RowsPerStrip / 279 StripByteCounts
+		// for non-tiled IFDs — placeholder single zero-byte strip.
+		if ifd.tileWidth == 0 {
+			// 273 StripOffsets (LONG, count=1, value=0 inline)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(273))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(0))
+			// 278 RowsPerStrip (LONG, count=1, value=imgH inline)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(278))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, m.imgH)
+			// 279 StripByteCounts (LONG, count=1, value=0 inline)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(279))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(0))
 		}
 		// 322 TileWidth, 323 TileLength, 324 TileOffsets, 325 TileByteCounts
 		if ifd.tileWidth > 0 {

@@ -63,6 +63,11 @@ type Tiler struct {
 	// Constructed Level objects, one per levelIFDs entry. Populated
 	// at Open time (T13); held in a SingleImage for Tiler.Images().
 	image *opentile.SingleImage
+
+	// Associated images built from the associatedIFD inventory.
+	// Populated at Open time (T16); typically 2 entries (overview +
+	// {probability | thumbnail}).
+	associated []opentile.AssociatedImage
 }
 
 // Open constructs a BIF Tiler from a parsed TIFF file. v0.7 Batch C
@@ -76,7 +81,7 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	if err != nil {
 		return nil, err
 	}
-	levelIFDs, associated, _, err := inventory(file)
+	levelIFDs, associatedIFDs, _, err := inventory(file)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +95,18 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		}
 		levels = append(levels, l)
 	}
+	associated := make([]opentile.AssociatedImage, 0, len(associatedIFDs))
+	for _, c := range associatedIFDs {
+		kind := kindFromIFDRole(c.Role)
+		if kind == "" {
+			continue
+		}
+		a, err := newAssociatedImage(kind, c.Page, file.ReaderAt())
+		if err != nil {
+			return nil, err
+		}
+		associated = append(associated, a)
+	}
 	return &Tiler{
 		file:          file,
 		cfg:           cfg,
@@ -97,8 +114,9 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		gen:           classifyGeneration(iscan),
 		encodeInfo:    encodeInfo,
 		levelIFDs:     levelIFDs,
-		associatedIFD: associated,
+		associatedIFD: associatedIFDs,
 		image:         opentile.NewSingleImage(levels),
+		associated:    associated,
 	}, nil
 }
 
@@ -173,8 +191,16 @@ func (t *Tiler) Levels() []opentile.Level { return t.image.Levels() }
 // Level is a shortcut for Images()[0].Level(i).
 func (t *Tiler) Level(i int) (opentile.Level, error) { return t.image.Level(i) }
 
-// Associated returns label / probability / thumbnail images. Populated in T16.
-func (t *Tiler) Associated() []opentile.AssociatedImage { return nil }
+// Associated returns the slide's associated images: every BIF has
+// an "overview" entry; spec-compliant slides additionally expose
+// "probability"; legacy iScan slides expose "thumbnail" instead.
+// Returns a fresh slice; callers may mutate the slice header
+// without affecting Tiler internal state.
+func (t *Tiler) Associated() []opentile.AssociatedImage {
+	out := make([]opentile.AssociatedImage, len(t.associated))
+	copy(out, t.associated)
+	return out
+}
 
 // Metadata returns the ventana.* property mirror. Populated in T17.
 func (t *Tiler) Metadata() opentile.Metadata { return opentile.Metadata{} }
