@@ -445,6 +445,11 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 - **Date:** 2026-04-27
 - **Outcome:** 2 BIF fixtures matched (`<iScan` substring found in IFDs 0 and 2 on both Ventana-1.bif and OS-1.bif), 0 false positives across 15 non-BIF fixtures (5 SVS, 3 NDPI, 1 generic TIFF, 2 OME-TIFF, 4 Philips TIFF). All BIF fixtures are BigTIFF as expected. Confirms substring `<iScan` is sufficient and specific for detection — aligns with openslide's approach (line 328 of `src/openslide-vendor-ventana.c` checks `strstr(xml, INITIAL_XML_ISCAN)`). No detection-rule refinement needed; ready for format reader implementation.
 
+#### Task 2 — ScannerModel prefix gate
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures probe as expected per spec §4 and §5.2. Ventana-1.bif reports `ScannerModel="VENTANA DP 200"` (matches prefix `"VENTANA DP"`) → routes to spec-compliant path. OS-1.bif has no ScannerModel attribute in the XMP (`<iScan>` element; attribute missing) → routes to legacy-iScan path. The `strings.HasPrefix(scannerModel, "VENTANA DP")` classification rule is confirmed as sufficient and specific to distinguish Ventana (spec-compliant) from legacy iScan (non-Ventana) scanners. Aligns with openslide's branching logic and the v0.7 design's §4 scope. No spec revision needed; gate passes.
+
 ### v0.6 gates
 
 #### Task 5 — tifffile splice-replication harness
