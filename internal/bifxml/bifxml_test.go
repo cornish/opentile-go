@@ -95,12 +95,12 @@ func TestParseIScan_OS1(t *testing.T) {
 	if got.ScanRes < 0.2324 || got.ScanRes > 0.2326 {
 		t.Errorf("ScanRes = %v; want ~0.2325", got.ScanRes)
 	}
-	// ScanWhitePoint absent → default 255, Present = false
+	// ScanWhitePoint absent → zero-value, Present = false
 	if got.ScanWhitePointPresent {
 		t.Error("ScanWhitePointPresent should be false for OS-1")
 	}
-	if got.ScanWhitePoint != 255 {
-		t.Errorf("ScanWhitePoint default = %d; want 255", got.ScanWhitePoint)
+	if got.ScanWhitePoint != 0 {
+		t.Errorf("ScanWhitePoint = %d; want 0 (attribute absent)", got.ScanWhitePoint)
 	}
 	if got.ZLayers != 1 {
 		t.Errorf("ZLayers = %d; want 1", got.ZLayers)

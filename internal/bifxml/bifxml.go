@@ -28,7 +28,7 @@ type IScan struct {
 	Magnification float64 // 0 if missing
 	ScanRes       float64 // microns per pixel; 0 if missing
 
-	ScanWhitePoint        uint8 // 0..255; 255 if missing and ScanWhitePointPresent is false
+	ScanWhitePoint        uint8 // 0..255 when present; consult ScanWhitePointPresent to detect absence
 	ScanWhitePointPresent bool  // false when the attribute is absent entirely
 
 	ZLayers      int    // default 1
@@ -117,15 +117,16 @@ var aoiNameRE = regexp.MustCompile(`^AOI(\d+)$`)
 //   - <Metadata><iScan ...> (Ventana-1 / spec-compliant BIF)
 //   - bare <iScan ...> as the document root (OS-1 / legacy BIF)
 //
-// Missing or empty attributes produce zero values; ScanWhitePoint defaults to 255
-// when the attribute is absent. Unknown attributes are collected in RawAttributes.
+// Missing or empty attributes produce zero values. The ScanWhitePoint field's
+// value must be interpreted with ScanWhitePointPresent: when Present is false,
+// the attribute was absent (caller's responsibility to apply a default).
+// Unknown attributes are collected in RawAttributes.
 func ParseIScan(xmp []byte) (*IScan, error) {
 	dec := xml.NewDecoder(strings.NewReader(string(xmp)))
 	dec.Strict = false
 
 	result := &IScan{
 		ZLayers:       1,
-		ScanWhitePoint: 255,
 		RawAttributes: make(map[string]string),
 	}
 	var inIScan bool
