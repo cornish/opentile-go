@@ -90,7 +90,17 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	if err != nil {
 		return nil, err
 	}
-	encodeInfo := loadEncodeInfo(levelIFDs)
+	// Spec §"IFD 2": EncodeInfo @Ver must be ≥ 2; lower versions
+	// don't carry enough information to reconstruct the image and
+	// the spec mandates rejecting them. bifxml.ParseEncodeInfo
+	// enforces this and returns (nil, error) for Ver < 2; we
+	// propagate that error verbatim. Missing XMP on the level-0 IFD
+	// (legacy iScan slides may not carry <EncodeInfo>) yields a
+	// non-error nil EncodeInfo and the slide opens normally.
+	encodeInfo, err := loadEncodeInfo(levelIFDs)
+	if err != nil {
+		return nil, err
+	}
 	scanWhite := scanWhitePointFor(iscan)
 	levels := make([]opentile.Level, 0, len(levelIFDs))
 	for i, c := range levelIFDs {
@@ -139,22 +149,29 @@ func scanWhitePointFor(iscan *bifxml.IScan) uint8 {
 
 // loadEncodeInfo parses the level-0 IFD's XMP into an EncodeInfo
 // struct. The level-0 IFD is the first entry in levels (sorted
-// ascending). Returns nil if the IFD has no XMP or parsing fails —
-// non-spec-compliant slides may omit it; downstream code (TileOverlap)
-// treats nil as "no overlap data".
-func loadEncodeInfo(levels []classifiedIFD) *bifxml.EncodeInfo {
+// ascending).
+//
+// Returns (nil, nil) when the level-0 IFD has no XMP tag at all —
+// legitimate for some legacy iScan slides; downstream code
+// (TileOverlap) treats nil as "no overlap data".
+//
+// Returns (nil, error) when the XMP IS present but the parser
+// rejects it (currently only Ver < 2; bifxml may grow more
+// guards in future). Callers propagate the error so Open fails
+// loudly on a spec-violating slide.
+func loadEncodeInfo(levels []classifiedIFD) (*bifxml.EncodeInfo, error) {
 	if len(levels) == 0 {
-		return nil
+		return nil, nil
 	}
 	xmp, ok := levels[0].Page.XMP()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	ei, err := bifxml.ParseEncodeInfo(xmp)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("bif: parse EncodeInfo XMP from level-0 IFD: %w", err)
 	}
-	return ei
+	return ei, nil
 }
 
 // loadIScan locates the IFD whose XMP carries the `<iScan>` element

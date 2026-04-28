@@ -68,18 +68,38 @@ type Metadata struct {
 	EncodeInfoVer int
 }
 
+// tilerUnwrapper matches the unexported wrapper interface returned
+// by opentile.OpenFile. Mirrors svs.tilerUnwrapper.
+type tilerUnwrapper interface {
+	UnwrapTiler() opentile.Tiler
+}
+
+// maxTilerUnwrapHops caps the number of UnwrapTiler calls MetadataOf
+// will make. The realistic chain length is 1 (just the file-closer
+// wrapper); 16 is ample headroom while still preventing infinite
+// loops on a wrapper that cycles.
+const maxTilerUnwrapHops = 16
+
 // MetadataOf returns the BIF-specific metadata if t is a BIF Tiler,
-// otherwise returns (nil, false). Mirrors svs.MetadataOf's contract.
+// otherwise (nil, false). Walks any number of wrappers (e.g., the
+// file-closer wrapper returned by opentile.OpenFile) before
+// asserting on the concrete type. Mirrors svs.MetadataOf.
 //
 //	if md, ok := bif.MetadataOf(tiler); ok {
 //	    use md.Generation, md.ScanRes, ...
 //	}
 func MetadataOf(t opentile.Tiler) (*Metadata, bool) {
-	bt, ok := t.(*Tiler)
-	if !ok {
-		return nil, false
+	for i := 0; t != nil && i <= maxTilerUnwrapHops; i++ {
+		if bt, ok := t.(*Tiler); ok {
+			return bt.metadata(), true
+		}
+		u, ok := t.(tilerUnwrapper)
+		if !ok {
+			return nil, false
+		}
+		t = u.UnwrapTiler()
 	}
-	return bt.metadata(), true
+	return nil, false
 }
 
 // metadata builds the Metadata struct from this Tiler's parsed
