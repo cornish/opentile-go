@@ -435,8 +435,15 @@ that locks the change in.
 
 ## 9. Gate outcomes (live)
 
-JIT verification gate outcomes from the v0.4, v0.5, and v0.6 plans.
+JIT verification gate outcomes from the v0.4, v0.5, v0.6, and v0.7 plans.
 Each gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.7 gates
+
+#### Task 1 — Detection gate (`<iScan` substring)
+
+- **Date:** 2026-04-27
+- **Outcome:** 2 BIF fixtures matched (`<iScan` substring found in IFDs 0 and 2 on both Ventana-1.bif and OS-1.bif), 0 false positives across 16 non-BIF fixtures (5 SVS, 3 NDPI, 1 generic TIFF, 2 OME-TIFF, 4 Philips TIFF). All BIF fixtures are BigTIFF as expected. Confirms substring `<iScan` is sufficient and specific for detection — aligns with openslide's approach (line 328 of `src/openslide-vendor-ventana.c` checks `strstr(xml, INITIAL_XML_ISCAN)`). No detection-rule refinement needed; ready for format reader implementation.
 
 ### v0.6 gates
 
