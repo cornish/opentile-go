@@ -111,7 +111,7 @@ func TestOpenStubReturnsErrUnsupportedOnNonBIF(t *testing.T) {
 func TestOpenStubReturnsTilerOnBIF(t *testing.T) {
 	data := buildBIFLikeBigTIFF(t, []iFDSpec{
 		{xmp: []byte(`<iScan/>`), description: "Label_Image"},
-		{description: "level=0 mag=40 quality=95"},
+		{description: "level=0 mag=40 quality=95", imageWidth: 256, imageLength: 256, tileWidth: 256, tileLength: 256},
 	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -130,13 +130,33 @@ func TestOpenStubReturnsTilerOnBIF(t *testing.T) {
 }
 
 // iFDSpec describes the contents of one IFD in a synthetic BIF-like
-// BigTIFF. ImageWidth/ImageLength are fixed at 1024×768; XMP and
-// ImageDescription are optional. Used by detection / classification
-// / layout tests; downstream tile-reader tests will need richer
-// fixtures with TileOffsets / TileByteCounts / JPEGTables.
+// BigTIFF. ImageWidth/ImageLength default to 1024×768 (override via
+// imageWidth/imageLength); XMP and ImageDescription are optional.
+// When tileWidth > 0, the IFD also carries TileWidth/TileLength/
+// TileOffsets/TileByteCounts tags — a complete tile pyramid IFD.
+//
+// The synthetic builder is shared across detection / classification /
+// layout / level tests; downstream tile-reader tests (T14 / T15)
+// will extend it with JPEGTables and explicit per-tile content.
 type iFDSpec struct {
 	xmp         []byte // nil = omit XMP tag (700)
 	description string // empty = omit ImageDescription tag (270)
+
+	// imageWidth/imageLength default to 1024 / 768 when zero. They
+	// determine the file's stated image dimensions. For pyramid
+	// IFDs (tileWidth > 0), the TileGrid is computed as
+	// ceil(imageWidth/tileWidth) × ceil(imageLength/tileLength).
+	imageWidth, imageLength int
+
+	// Tile metadata. When tileWidth == 0 (default), the IFD is
+	// strip-based or otherwise not a pyramid IFD: no Tile* tags.
+	// When tileWidth > 0, the IFD becomes a tiled JPEG layout with
+	// TileWidth / TileLength tags and TileOffsets / TileByteCounts
+	// arrays. Each tile's bytes are filled with `tileFill` (default
+	// 0x00) — not real JPEG, but enough to exercise the offset/length
+	// plumbing in level.go.
+	tileWidth, tileLength int
+	tileFill              byte // arbitrary fill byte, default 0
 }
 
 // buildBIFLikeBigTIFF builds a BigTIFF (little-endian) carrying len(ifds)
@@ -159,87 +179,143 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 	buf.Write([]byte{'I', 'I', 0x2B, 0x00, 0x08, 0x00, 0x00, 0x00})
 	_ = binary.Write(buf, binary.LittleEndian, uint64(0x10))
 
-	// Two passes. Pass 1 lays out IFDs head-to-toe and reserves
-	// out-of-line payload areas for any field too large to fit in the
-	// 8-byte value/offset cell. Pass 2 actually writes everything.
-	//
-	// ImageDescription is type 2 (ASCII, NUL-terminated). We store the
-	// string + a trailing NUL — the spec requires the NUL.
-	ifdOffsets := make([]uint64, len(ifds))
-	xmpOffsets := make([]uint64, len(ifds))
-	descOffsets := make([]uint64, len(ifds))
-	descBytes := make([][]byte, len(ifds))
-	cursor := uint64(0x10)
+	// Per-IFD computed metadata. Defaults applied here so the layout
+	// pass below treats every entry uniformly.
+	type meta struct {
+		entryCount uint64
+		descBytes  []byte // ASCII bytes for ImageDescription, NUL-terminated; nil if absent
+		imgW, imgH uint64 // ImageWidth/ImageLength values
+		tw, th     uint64 // TileWidth/TileLength values; 0 = no tile tags
+		gridW      uint64
+		gridH      uint64
+		tileBytes  []byte // concatenated raw tile bytes; nil if no tile tags
+	}
+	metas := make([]meta, len(ifds))
 	for i, ifd := range ifds {
-		ifdOffsets[i] = cursor
-		entryCount := uint64(2) // ImageWidth + ImageLength
+		m := &metas[i]
+		m.imgW = uint64(ifd.imageWidth)
+		if m.imgW == 0 {
+			m.imgW = 1024
+		}
+		m.imgH = uint64(ifd.imageLength)
+		if m.imgH == 0 {
+			m.imgH = 768
+		}
+		m.entryCount = 2 // ImageWidth + ImageLength baseline
 		if ifd.xmp != nil {
-			entryCount++
+			m.entryCount++
 		}
 		if ifd.description != "" {
-			entryCount++
-			descBytes[i] = append([]byte(ifd.description), 0)
+			m.entryCount++
+			m.descBytes = append([]byte(ifd.description), 0)
 		}
-		cursor += 8 + entryCount*20 + 8
+		if ifd.tileWidth > 0 {
+			m.tw = uint64(ifd.tileWidth)
+			m.th = uint64(ifd.tileLength)
+			m.gridW = (m.imgW + m.tw - 1) / m.tw
+			m.gridH = (m.imgH + m.th - 1) / m.th
+			n := m.gridW * m.gridH
+			tileSize := m.tw * m.th
+			m.tileBytes = bytes.Repeat([]byte{ifd.tileFill}, int(n*tileSize))
+			m.entryCount += 4 // TileWidth + TileLength + TileOffsets + TileByteCounts
+		}
 	}
+
+	// Pass 1: compute IFD offsets head-to-toe.
+	ifdOffsets := make([]uint64, len(ifds))
+	cursor := uint64(0x10)
+	for i := range ifds {
+		ifdOffsets[i] = cursor
+		cursor += 8 + metas[i].entryCount*20 + 8
+	}
+	// Pass 2: assign out-of-line payload offsets.
+	xmpOffsets := make([]uint64, len(ifds))
+	descOffsets := make([]uint64, len(ifds))
+	tileOffArrayOffsets := make([]uint64, len(ifds))
+	tileCntArrayOffsets := make([]uint64, len(ifds))
+	tileDataOffsets := make([]uint64, len(ifds))
 	for i, ifd := range ifds {
+		m := &metas[i]
 		if ifd.xmp != nil && len(ifd.xmp) > 8 {
 			xmpOffsets[i] = cursor
 			cursor += uint64(len(ifd.xmp))
 		}
-		if len(descBytes[i]) > 8 {
+		if len(m.descBytes) > 8 {
 			descOffsets[i] = cursor
-			cursor += uint64(len(descBytes[i]))
+			cursor += uint64(len(m.descBytes))
 		}
-		_ = ifd
+		if ifd.tileWidth > 0 {
+			n := m.gridW * m.gridH
+			// TileOffsets array (LONG8 = 8 bytes/entry). Inline only when n == 1.
+			if n > 1 {
+				tileOffArrayOffsets[i] = cursor
+				cursor += n * 8
+				tileCntArrayOffsets[i] = cursor
+				cursor += n * 8
+			}
+			tileDataOffsets[i] = cursor
+			cursor += uint64(len(m.tileBytes))
+		}
 	}
 
+	// Pass 3: emit IFDs.
 	for i, ifd := range ifds {
-		entries := uint64(2)
-		if ifd.xmp != nil {
-			entries++
-		}
-		if ifd.description != "" {
-			entries++
-		}
-		_ = binary.Write(buf, binary.LittleEndian, entries)
-		// ImageWidth (256, SHORT, count=1, value=1024 inline)
+		m := &metas[i]
+		_ = binary.Write(buf, binary.LittleEndian, m.entryCount)
+		// ImageWidth (256, LONG, count=1)
 		_ = binary.Write(buf, binary.LittleEndian, uint16(256))
-		_ = binary.Write(buf, binary.LittleEndian, uint16(3))
+		_ = binary.Write(buf, binary.LittleEndian, uint16(4))
 		_ = binary.Write(buf, binary.LittleEndian, uint64(1))
-		_ = binary.Write(buf, binary.LittleEndian, uint64(1024))
-		// ImageLength (257, SHORT, count=1, value=768 inline)
+		_ = binary.Write(buf, binary.LittleEndian, m.imgW)
+		// ImageLength (257, LONG, count=1)
 		_ = binary.Write(buf, binary.LittleEndian, uint16(257))
-		_ = binary.Write(buf, binary.LittleEndian, uint16(3))
+		_ = binary.Write(buf, binary.LittleEndian, uint16(4))
 		_ = binary.Write(buf, binary.LittleEndian, uint64(1))
-		_ = binary.Write(buf, binary.LittleEndian, uint64(768))
+		_ = binary.Write(buf, binary.LittleEndian, m.imgH)
 		if ifd.description != "" {
-			// ImageDescription (270, ASCII, count=len(descBytes))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(270))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(2))
-			_ = binary.Write(buf, binary.LittleEndian, uint64(len(descBytes[i])))
-			if len(descBytes[i]) <= 8 {
-				var inline [8]byte
-				copy(inline[:], descBytes[i])
-				buf.Write(inline[:])
-			} else {
-				_ = binary.Write(buf, binary.LittleEndian, descOffsets[i])
-			}
+			_ = binary.Write(buf, binary.LittleEndian, uint64(len(m.descBytes)))
+			writeInlineOrOffset(buf, m.descBytes, descOffsets[i])
 		}
 		if ifd.xmp != nil {
-			// XMP (700, UNDEFINED, count=len(xmp))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(700))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(7))
 			_ = binary.Write(buf, binary.LittleEndian, uint64(len(ifd.xmp)))
-			if len(ifd.xmp) <= 8 {
-				var inline [8]byte
-				copy(inline[:], ifd.xmp)
-				buf.Write(inline[:])
+			writeInlineOrOffset(buf, ifd.xmp, xmpOffsets[i])
+		}
+		if ifd.tileWidth > 0 {
+			n := m.gridW * m.gridH
+			tileSize := uint64(len(m.tileBytes)) / n
+			// TileWidth (322, LONG, count=1)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(322))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, m.tw)
+			// TileLength (323, LONG, count=1)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(323))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, m.th)
+			// TileOffsets (324, LONG8 type 16, count=n)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(324))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(16))
+			_ = binary.Write(buf, binary.LittleEndian, n)
+			if n == 1 {
+				_ = binary.Write(buf, binary.LittleEndian, tileDataOffsets[i])
 			} else {
-				_ = binary.Write(buf, binary.LittleEndian, xmpOffsets[i])
+				_ = binary.Write(buf, binary.LittleEndian, tileOffArrayOffsets[i])
+			}
+			// TileByteCounts (325, LONG8, count=n)
+			_ = binary.Write(buf, binary.LittleEndian, uint16(325))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(16))
+			_ = binary.Write(buf, binary.LittleEndian, n)
+			if n == 1 {
+				_ = binary.Write(buf, binary.LittleEndian, tileSize)
+			} else {
+				_ = binary.Write(buf, binary.LittleEndian, tileCntArrayOffsets[i])
 			}
 		}
-		// Next IFD pointer (or 0 for last IFD).
 		nextIFD := uint64(0)
 		if i+1 < len(ifds) {
 			nextIFD = ifdOffsets[i+1]
@@ -247,17 +323,45 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		_ = binary.Write(buf, binary.LittleEndian, nextIFD)
 	}
 
-	// Out-of-line payload area: XMP first, then ImageDescription, in
-	// the same per-IFD interleaved order assigned during pass 1.
+	// Pass 4: emit out-of-line payloads in offset-assignment order.
 	for i, ifd := range ifds {
+		m := &metas[i]
 		if ifd.xmp != nil && len(ifd.xmp) > 8 {
 			buf.Write(ifd.xmp)
 		}
-		if len(descBytes[i]) > 8 {
-			buf.Write(descBytes[i])
+		if len(m.descBytes) > 8 {
+			buf.Write(m.descBytes)
+		}
+		if ifd.tileWidth > 0 {
+			n := m.gridW * m.gridH
+			tileSize := uint64(len(m.tileBytes)) / n
+			if n > 1 {
+				// TileOffsets array
+				for k := uint64(0); k < n; k++ {
+					_ = binary.Write(buf, binary.LittleEndian, tileDataOffsets[i]+k*tileSize)
+				}
+				// TileByteCounts array
+				for k := uint64(0); k < n; k++ {
+					_ = binary.Write(buf, binary.LittleEndian, tileSize)
+				}
+			}
+			buf.Write(m.tileBytes)
 		}
 	}
 	return buf.Bytes()
+}
+
+// writeInlineOrOffset writes payload directly into the 8-byte
+// value/offset cell when len(payload) <= 8, padding with zeros;
+// otherwise writes the 8-byte offset to the out-of-line area.
+func writeInlineOrOffset(buf *bytes.Buffer, payload []byte, offsetIfOOL uint64) {
+	if len(payload) <= 8 {
+		var inline [8]byte
+		copy(inline[:], payload)
+		buf.Write(inline[:])
+		return
+	}
+	_ = binary.Write(buf, binary.LittleEndian, offsetIfOOL)
 }
 
 // buildClassicTIFFWithXMP builds a classic TIFF (32-bit offsets) with

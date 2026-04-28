@@ -52,12 +52,17 @@ type Tiler struct {
 	file *tiff.File
 	cfg  *opentile.Config
 
-	gen   Generation    // routing decision (T11)
-	iscan *bifxml.IScan // parsed IFD-0 metadata block; non-nil after Open
+	gen        Generation         // routing decision (T11)
+	iscan      *bifxml.IScan      // parsed IFD-0 metadata block; non-nil after Open
+	encodeInfo *bifxml.EncodeInfo // parsed level-0 IFD's XMP; nil if absent / parse failed
 
 	// IFD inventory (T12); built once at Open time.
-	levels        []classifiedIFD // pyramid IFDs sorted by parsed level=N
+	levelIFDs     []classifiedIFD // pyramid IFDs sorted by parsed level=N
 	associatedIFD []classifiedIFD // label / probability / thumbnail IFDs
+
+	// Constructed Level objects, one per levelIFDs entry. Populated
+	// at Open time (T13); held in a SingleImage for Tiler.Images().
+	image *opentile.SingleImage
 }
 
 // Open constructs a BIF Tiler from a parsed TIFF file. v0.7 Batch C
@@ -71,18 +76,49 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	if err != nil {
 		return nil, err
 	}
-	levels, associated, _, err := inventory(file)
+	levelIFDs, associated, _, err := inventory(file)
 	if err != nil {
 		return nil, err
+	}
+	encodeInfo := loadEncodeInfo(levelIFDs)
+	levels := make([]opentile.Level, 0, len(levelIFDs))
+	for i, c := range levelIFDs {
+		l, err := newLevelImpl(i, c, iscan.ScanRes, encodeInfo, file.ReaderAt())
+		if err != nil {
+			return nil, err
+		}
+		levels = append(levels, l)
 	}
 	return &Tiler{
 		file:          file,
 		cfg:           cfg,
 		iscan:         iscan,
 		gen:           classifyGeneration(iscan),
-		levels:        levels,
+		encodeInfo:    encodeInfo,
+		levelIFDs:     levelIFDs,
 		associatedIFD: associated,
+		image:         opentile.NewSingleImage(levels),
 	}, nil
+}
+
+// loadEncodeInfo parses the level-0 IFD's XMP into an EncodeInfo
+// struct. The level-0 IFD is the first entry in levels (sorted
+// ascending). Returns nil if the IFD has no XMP or parsing fails —
+// non-spec-compliant slides may omit it; downstream code (TileOverlap)
+// treats nil as "no overlap data".
+func loadEncodeInfo(levels []classifiedIFD) *bifxml.EncodeInfo {
+	if len(levels) == 0 {
+		return nil
+	}
+	xmp, ok := levels[0].Page.XMP()
+	if !ok {
+		return nil
+	}
+	ei, err := bifxml.ParseEncodeInfo(xmp)
+	if err != nil {
+		return nil
+	}
+	return ei
 }
 
 // loadIScan locates the IFD whose XMP carries the `<iScan>` element
@@ -112,15 +148,17 @@ func loadIScan(file *tiff.File) (*bifxml.IScan, error) {
 // Format reports the BIF format identifier.
 func (t *Tiler) Format() opentile.Format { return opentile.FormatBIF }
 
-// Images returns the main pyramids carried by this file. v0.7 BIF is
-// a single-image format (one pyramid per slide); populated in T12.
-func (t *Tiler) Images() []opentile.Image { return nil }
+// Images returns the main pyramids carried by this file. BIF is a
+// single-image format — always one Image regardless of AOI count.
+func (t *Tiler) Images() []opentile.Image {
+	return []opentile.Image{t.image}
+}
 
-// Levels is a shortcut for Images()[0].Levels(). Populated in T12.
-func (t *Tiler) Levels() []opentile.Level { return nil }
+// Levels is a shortcut for Images()[0].Levels().
+func (t *Tiler) Levels() []opentile.Level { return t.image.Levels() }
 
-// Level is a shortcut for Images()[0].Level(i). Populated in T12.
-func (t *Tiler) Level(i int) (opentile.Level, error) { return nil, opentile.ErrLevelOutOfRange }
+// Level is a shortcut for Images()[0].Level(i).
+func (t *Tiler) Level(i int) (opentile.Level, error) { return t.image.Level(i) }
 
 // Associated returns label / probability / thumbnail images. Populated in T16.
 func (t *Tiler) Associated() []opentile.AssociatedImage { return nil }

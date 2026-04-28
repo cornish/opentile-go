@@ -59,7 +59,7 @@ func TestGenerationString(t *testing.T) {
 func TestOpenClassifiesSpecCompliant(t *testing.T) {
 	data := buildBIFLikeBigTIFF(t, []iFDSpec{
 		{xmp: []byte(`<iScan ScannerModel="VENTANA DP 200"/>`), description: "Label_Image"},
-		{description: "level=0 mag=40 quality=95"},
+		{description: "level=0 mag=40 quality=95", imageWidth: 256, imageLength: 256, tileWidth: 256, tileLength: 256},
 	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -87,7 +87,7 @@ func TestOpenClassifiesSpecCompliant(t *testing.T) {
 func TestOpenClassifiesLegacy(t *testing.T) {
 	data := buildBIFLikeBigTIFF(t, []iFDSpec{
 		{xmp: []byte(`<iScan Magnification="40"/>`), description: "Label Image"},
-		{description: "level=0 mag=40 quality=90"},
+		{description: "level=0 mag=40 quality=90", imageWidth: 256, imageLength: 256, tileWidth: 256, tileLength: 256},
 	})
 	f, err := tiff.Open(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
