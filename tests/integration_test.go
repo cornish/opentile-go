@@ -33,6 +33,8 @@ var slideCandidates = []string{
 	"Philips-4.tiff",
 	"Leica-1.ome.tiff",
 	"Leica-2.ome.tiff",
+	"Ventana-1.bif",
+	"OS-1.bif",
 }
 
 // resolveSlide looks up name in dir, dir/svs, dir/ndpi, dir/phillips-tiff,
@@ -42,7 +44,7 @@ var slideCandidates = []string{
 // "phillips-tiff" (typo preserved from the original sample_files
 // layout).
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff", "ventana-bif"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
@@ -272,6 +274,8 @@ func fixtureJSONFor(slideFilename string) string {
 		return stem + ".ndpi.json"
 	case ".tiff", ".tif":
 		return stem + ".tiff.json"
+	case ".bif":
+		return stem + ".bif.json"
 	}
 	return stem + ".json"
 }

@@ -32,6 +32,10 @@ func sampledByDefault(slide string) bool {
 		return true
 	case "Leica-1.ome.tiff", "Leica-2.ome.tiff":
 		return true
+	// BIF fixtures: Ventana-1 is 227 MB and OS-1 is 3.6 GB —
+	// both qualify under the >100 MB sampled-by-default policy.
+	case "Ventana-1.bif", "OS-1.bif":
+		return true
 	}
 	return false
 }
