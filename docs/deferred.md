@@ -503,7 +503,7 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 #### Task 5 — ScanWhitePoint extraction gate
 
 - **Date:** 2026-04-27
-- **Outcome:** Both fixtures probe successfully for the `ScanWhitePoint` XMP attribute. Ventana-1.bif carries `ScanWhitePoint="235"` (spec-compliant iScan, DP 200 scanner); OS-1.bif returns missing (legacy iScan, no ScannerModel attribute). Matches the design assumption exactly. When `ScanWhitePoint` is absent, the blank-tile filler (Task 9, invoked by Task 14) defaults to RGB 255 (true white). This aligns with typical TIFF and openslide conventions for unspecified fill colour. Connection to implementation: Task 9's `makeBlankTile` generator will check for the attribute in IFD0 XMP via regex `ScanWhitePoint="(\d+)"`, extract the value, fall back to 255 if missing, and use that RGB value (same for R, G, B) to set the luma DC coefficient for all MCUs in the blank-tile JPEG.
+- **Outcome:** Both fixtures probe successfully for the `ScanWhitePoint` XMP attribute. Ventana-1.bif carries `ScanWhitePoint="235"` (spec-compliant iScan, DP 200 scanner); OS-1.bif returns missing (legacy iScan, no ScannerModel attribute). Matches the design assumption exactly. When `ScanWhitePoint` is absent, the blank-tile filler (Task 9, invoked by Task 14) defaults to RGB 255 (true white). This aligns with typical TIFF and openslide conventions for unspecified fill colour. Forward reference: Tasks 9 (blank-tile generator) and 14 (empty-tile path) will read this value to fill empty tiles; the precise extraction and JPEG-encoding details are specified when those tasks execute.
 
 ### v0.6 gates
 
