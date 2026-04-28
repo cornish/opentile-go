@@ -17,7 +17,11 @@
 package bif
 
 import (
+	"bytes"
+	"fmt"
+
 	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/bifxml"
 	"github.com/cornish/opentile-go/internal/tiff"
 )
 
@@ -47,6 +51,9 @@ func (f *Factory) Supports(file *tiff.File) bool {
 type Tiler struct {
 	file *tiff.File
 	cfg  *opentile.Config
+
+	gen   Generation     // routing decision (T11)
+	iscan *bifxml.IScan  // parsed IFD-0 metadata block; non-nil after Open
 }
 
 // Open constructs a BIF Tiler from a parsed TIFF file. v0.7 Batch C
@@ -56,7 +63,40 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	if !Detect(file) {
 		return nil, opentile.ErrUnsupportedFormat
 	}
-	return &Tiler{file: file, cfg: cfg}, nil
+	iscan, err := loadIScan(file)
+	if err != nil {
+		return nil, err
+	}
+	return &Tiler{
+		file:  file,
+		cfg:   cfg,
+		iscan: iscan,
+		gen:   classifyGeneration(iscan),
+	}, nil
+}
+
+// loadIScan locates the IFD whose XMP carries the `<iScan>` element
+// and parses it. Both spec-compliant and legacy iScan slides put the
+// `<iScan>` block in IFD 0's XMP, so we walk pages in order and
+// parse the first match. Returns a nil *IScan only if no IFD's XMP
+// contains the marker — Detect guarantees at least one does.
+func loadIScan(file *tiff.File) (*bifxml.IScan, error) {
+	marker := []byte(iScanMarker)
+	for _, p := range file.Pages() {
+		xmp, ok := p.XMP()
+		if !ok {
+			continue
+		}
+		if !bytes.Contains(xmp, marker) {
+			continue
+		}
+		iscan, err := bifxml.ParseIScan(xmp)
+		if err != nil {
+			return nil, fmt.Errorf("bif: parse iScan XMP: %w", err)
+		}
+		return iscan, nil
+	}
+	return nil, fmt.Errorf("bif: no IFD carries an `%s` XMP block (Detect should have rejected)", iScanMarker)
 }
 
 // Format reports the BIF format identifier.
