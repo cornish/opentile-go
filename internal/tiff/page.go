@@ -29,6 +29,7 @@ const (
 	TagSubIFDs           uint16 = 330
 	TagJPEGTables        uint16 = 347
 	TagYCbCrSubSampling  uint16 = 530
+	TagImageDepth        uint16 = 32997
 	TagInterColorProfile uint16 = 34675
 )
 
@@ -84,6 +85,16 @@ func (p *Page) Photometric() (uint32, bool)      { return p.scalarU32(TagPhotome
 func (p *Page) SamplesPerPixel() (uint32, bool)  { return p.scalarU32(TagSamplesPerPixel) }
 func (p *Page) BitsPerSample() (uint32, bool)    { return p.scalarU32(TagBitsPerSample) }
 func (p *Page) ResolutionUnit() (uint32, bool)   { return p.scalarU32(TagResolutionUnit) }
+
+// ImageDepth returns the ImageDepth tag (32997, SGI private) used by
+// Ventana BIF to store Z-stack depth, or (1, false) if absent or zero.
+func (p *Page) ImageDepth() (int, bool) {
+	val, ok := p.scalarU32(TagImageDepth)
+	if !ok || val < 1 {
+		return 1, false
+	}
+	return int(val), true
+}
 
 // ASCII returns an ASCII-typed tag's string value (NUL-stripped), or
 // ("", false) if missing.
