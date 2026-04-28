@@ -10,6 +10,7 @@ import (
 
 	opentile "github.com/cornish/opentile-go"
 	"github.com/cornish/opentile-go/internal/bifxml"
+	"github.com/cornish/opentile-go/internal/jpeg"
 	"github.com/cornish/opentile-go/internal/tiff"
 )
 
@@ -41,6 +42,14 @@ type levelImpl struct {
 
 	offsets []uint64 // TileOffsets, in serpentine storage order
 	counts  []uint64 // TileByteCounts, in serpentine storage order
+
+	// jpegTables is TIFF tag 347 (JPEGTables) if present. Older
+	// BIFs embed full JPEG headers in each tile (jpegTables nil);
+	// newer BIFs (and OS-1) carry shared tables here that must be
+	// spliced into each abbreviated tile scan via jpeg.InsertTables
+	// before the bytes can decode. BIF is YCbCr — no APP14 RGB
+	// colorspace-fix marker needed (unlike SVS).
+	jpegTables []byte
 
 	// scanWhitePoint is the white-fill luminance for empty (unscanned)
 	// tiles per spec §"AOI Positions". 0..255. Spec-compliant slides
@@ -99,6 +108,17 @@ func newLevelImpl(
 	comp, _ := p.Compression()
 	ocomp := tiffCompressionToOpentile(comp)
 
+	// Tag 347 (JPEGTables): optional per spec. Newer BIFs share
+	// DQT/DHT here so abbreviated per-tile scans can decode; older
+	// BIFs embed everything per-tile. Both arrangements are valid
+	// within the spec and both must be supported.
+	var jpegTables []byte
+	if ocomp == opentile.CompressionJPEG {
+		if tb, ok := p.JPEGTables(); ok {
+			jpegTables = tb
+		}
+	}
+
 	// Per-level MPP: base ScanRes (microns/pixel at level 0) doubled
 	// per pyramid step. SizeMm is in millimeters.
 	levelMPPMicrons := baseMPP * float64(int(1)<<c.Level)
@@ -125,6 +145,7 @@ func newLevelImpl(
 		tileOverlap:    tileOverlap,
 		offsets:        offsets,
 		counts:         counts,
+		jpegTables:     jpegTables,
 		scanWhitePoint: scanWhitePoint,
 		reader:         reader,
 	}, nil
@@ -181,14 +202,20 @@ func (l *levelImpl) indexOf(col, row int) (int, error) {
 }
 
 // Tile returns the compressed tile bytes at (col, row) in
-// image-space. Internally remapped to TileOffsets storage order via
-// imageToSerpentine.
+// image-space — a standalone valid JPEG (or, for theoretical
+// non-JPEG BIF dialects, the raw codestream). Internally remapped
+// to TileOffsets storage order via imageToSerpentine.
 //
-// Empty tiles (`TileOffsets[i] == 0 && TileByteCounts[i] == 0`,
-// per BIF whitepaper §"AOI Positions") are returned as a synthesised
-// JPEG filled with the slide's `ScanWhitePoint` luminance — see
-// blankTile. JPEGTables splice for non-empty tiles is deferred to
-// T15.
+//   - Empty tiles (`TileOffsets[i] == 0 && TileByteCounts[i] == 0`,
+//     per BIF whitepaper §"AOI Positions") return a synthesised JPEG
+//     filled with the slide's `ScanWhitePoint` luminance — see
+//     blankTile.
+//   - When the IFD carries shared JPEGTables (tag 347), the per-tile
+//     abbreviated scan bytes have DQT/DHT spliced before SOS via
+//     jpeg.InsertTables so the result decodes standalone. BIF is
+//     YCbCr — no APP14 RGB colorspace-fix is needed (unlike SVS).
+//   - When JPEGTables is absent, the tile bytes carry their own
+//     SOI/DQT/DHT/SOF and are returned verbatim.
 func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 	idx, err := l.indexOf(col, row)
 	if err != nil {
@@ -207,14 +234,25 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
 		return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
 	}
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		out, err := jpeg.InsertTables(buf, l.jpegTables)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return out, nil
+	}
 	return buf, nil
 }
 
 // TileReader returns a streaming reader over the tile at (col, row).
-// For non-empty entries this is a zero-copy io.SectionReader; for
-// empty entries it is a bytes.Reader over the cached blank tile.
-// Once T15 splices JPEGTables, the SectionReader path may fall back
-// to a buffer for some IFDs — see Tile.
+//
+//   - Empty entries: a bytes.Reader over the cached blank tile.
+//   - JPEG entries with shared tables: the splice produces a buffer
+//     that doesn't correspond to a contiguous file region, so we
+//     return a bytes.Reader over the spliced output. Streaming
+//     buys nothing here.
+//   - Other JPEG entries: a zero-copy io.SectionReader over the
+//     source TIFF.
 func (l *levelImpl) TileReader(col, row int) (io.ReadCloser, error) {
 	idx, err := l.indexOf(col, row)
 	if err != nil {
@@ -224,6 +262,13 @@ func (l *levelImpl) TileReader(col, row int) (io.ReadCloser, error) {
 		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
 		if err != nil {
 			return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return io.NopCloser(bytesReader(b)), nil
+	}
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		b, err := l.Tile(col, row)
+		if err != nil {
+			return nil, err
 		}
 		return io.NopCloser(bytesReader(b)), nil
 	}
