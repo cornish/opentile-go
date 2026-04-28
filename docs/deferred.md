@@ -500,6 +500,11 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
   **Implication for Task 14:** Both fixtures are single-AOI scans with complete tile coverage — no real empty tiles to validate the blank-fill path. Task 14 (empty-tile synthesis testing) must include a synthetic BIF-XMP test fixture with explicit empty tiles. The spec's encoding is confirmed as sufficient discriminator; the implementation path (fill with `ScanWhitePoint`-coloured JPEG) has no in-fixture validation opportunity.
 
+#### Task 5 — ScanWhitePoint extraction gate
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures probe successfully for the `ScanWhitePoint` XMP attribute. Ventana-1.bif carries `ScanWhitePoint="235"` (spec-compliant iScan, DP 200 scanner); OS-1.bif returns missing (legacy iScan, no ScannerModel attribute). Matches the design assumption exactly. When `ScanWhitePoint` is absent, the blank-tile filler (Task 9, invoked by Task 14) defaults to RGB 255 (true white). This aligns with typical TIFF and openslide conventions for unspecified fill colour. Connection to implementation: Task 9's `makeBlankTile` generator will check for the attribute in IFD0 XMP via regex `ScanWhitePoint="(\d+)"`, extract the value, fall back to 255 if missing, and use that RGB value (same for R, G, B) to set the luma DC coefficient for all MCUs in the blank-tile JPEG.
+
 ### v0.6 gates
 
 #### Task 5 — tifffile splice-replication harness
