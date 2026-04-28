@@ -468,6 +468,38 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
   **Discriminator coverage:** The five discriminator patterns from spec §5.3 (`Label_Image`, `Label Image`, `Probability_Image`, `Thumbnail`, `level=N mag=M quality=Q`) account for 100% of observed IFDs. Ventana-1.bif spans the spec-compliant path (DP 200 with probability map); OS-1.bif exercises the legacy-iScan path (label as space-delimited, no probability, thumbnail instead). Both confirm that **classification by ImageDescription content is sufficient** — no need to index into IFD order, validating spec §5.3's core recommendation despite OS-1's non-standard IFD layout (IFD 0 = label, IFD 1 = thumbnail, IFD 2+ = pyramid, unlike the whitepaper's IFD 0/1/2/3+ layout).
 
+#### Task 4 — Empty-tile gate (offset-zero / bytecount-zero marker)
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures carry zero empty tiles across all pyramid levels. Whitepaper spec (§3, "AOI Positions") confirms empty-tile encoding: `TileOffsets[i] == 0` AND `TileByteCounts[i] == 0` for unscanned tiles. Probe verified: zero mismatches (no partial-empty case where one field is 0 and the other is non-zero).
+
+  **Per-fixture, per-IFD tile inventory:**
+
+  | Fixture | IFD | Role | Total tiles | Empty tiles | Notes |
+  |---------|-----|------|-------------|-------------|-------|
+  | Ventana-1.bif | 2 | L0 | 504 | 0 | main pyramid base |
+  | Ventana-1.bif | 3 | L1 | 132 | 0 | |
+  | Ventana-1.bif | 4 | L2 | 36 | 0 | |
+  | Ventana-1.bif | 5 | L3 | 9 | 0 | |
+  | Ventana-1.bif | 6 | L4 | 4 | 0 | |
+  | Ventana-1.bif | 7 | L5 | 1 | 0 | |
+  | Ventana-1.bif | 8 | L6 | 1 | 0 | |
+  | Ventana-1.bif | 9 | L7 | 1 | 0 | |
+  | OS-1.bif | 0 | overview | 1 | 0 | associated image |
+  | OS-1.bif | 1 | thumbnail | 1 | 0 | associated image |
+  | OS-1.bif | 2 | L0 | 8700 | 0 | main pyramid base |
+  | OS-1.bif | 3 | L1 | 2204 | 0 | |
+  | OS-1.bif | 4 | L2 | 551 | 0 | |
+  | OS-1.bif | 5 | L3 | 150 | 0 | |
+  | OS-1.bif | 6 | L4 | 40 | 0 | |
+  | OS-1.bif | 7 | L5 | 12 | 0 | |
+  | OS-1.bif | 8 | L6 | 4 | 0 | |
+  | OS-1.bif | 9 | L7 | 1 | 0 | |
+  | OS-1.bif | 10 | L8 | 1 | 0 | |
+  | OS-1.bif | 11 | L9 | 1 | 0 | |
+
+  **Implication for Task 14:** Both fixtures are single-AOI scans with complete tile coverage — no real empty tiles to validate the blank-fill path. Task 14 (empty-tile synthesis testing) must include a synthetic OME-XMP test fixture with explicit empty tiles. The spec's encoding is confirmed as sufficient discriminator; the implementation path (fill with `ScanWhitePoint`-coloured JPEG) has no in-fixture validation opportunity.
+
 ### v0.6 gates
 
 #### Task 5 — tifffile splice-replication harness
