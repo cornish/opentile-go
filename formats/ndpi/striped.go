@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"sync"
@@ -127,6 +128,7 @@ func (l *stripedImage) Grid() opentile.Size               { return l.grid }
 func (l *stripedImage) Compression() opentile.Compression { return l.compression }
 func (l *stripedImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *stripedImage) FocalPlane() float64               { return 0 }
+func (l *stripedImage) TileOverlap() image.Point          { return image.Point{} }
 
 func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {

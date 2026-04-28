@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"math"
@@ -129,6 +130,7 @@ func (l *tiledImage) Grid() opentile.Size               { return l.grid }
 func (l *tiledImage) Compression() opentile.Compression { return l.compression }
 func (l *tiledImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *tiledImage) FocalPlane() float64               { return 0 }
+func (l *tiledImage) TileOverlap() image.Point          { return image.Point{} }
 
 // indexOf computes the row-major tile index for (x, y) and validates the
 // tile entry's byte count. Out-of-grid coords yield ErrTileOutOfBounds;

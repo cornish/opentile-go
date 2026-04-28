@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"sync"
@@ -133,6 +134,7 @@ func (l *Image) Grid() opentile.Size               { return l.grid }
 func (l *Image) Compression() opentile.Compression { return l.compression }
 func (l *Image) MPP() opentile.SizeMm              { return l.mpp }
 func (l *Image) FocalPlane() float64               { return 0 }
+func (l *Image) TileOverlap() image.Point          { return image.Point{} }
 
 // Tile returns the JPEG bytes for the tile at (x, y). Out-of-bounds
 // coordinates yield ErrTileOutOfBounds (wrapped in opentile.TileError).

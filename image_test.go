@@ -3,6 +3,7 @@ package opentile
 import (
 	"context"
 	"errors"
+	"image"
 	"io"
 	"iter"
 	"testing"
@@ -76,6 +77,7 @@ func (f *fakeLevel) Grid() Size                                                 
 func (f *fakeLevel) Compression() Compression                                   { return CompressionUnknown }
 func (f *fakeLevel) MPP() SizeMm                                                { return f.mpp }
 func (f *fakeLevel) FocalPlane() float64                                        { return 0 }
+func (f *fakeLevel) TileOverlap() image.Point                                   { return image.Point{} }
 func (f *fakeLevel) Tile(x, y int) ([]byte, error)                              { return nil, nil }
 func (f *fakeLevel) TileReader(x, y int) (io.ReadCloser, error)                 { return nil, nil }
 func (f *fakeLevel) Tiles(ctx context.Context) iter.Seq2[TilePos, TileResult]   { return nil }

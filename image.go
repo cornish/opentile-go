@@ -2,6 +2,7 @@ package opentile
 
 import (
 	"context"
+	"image"
 	"io"
 	"iter"
 )
@@ -17,6 +18,16 @@ type Level interface {
 	Size() Size
 	TileSize() Size
 	Grid() Size
+
+	// TileOverlap returns the pixel overlap between adjacent tiles at this level.
+	// Tile (c, r) is positioned in image-space at
+	//   (c · (TileSize().X - TileOverlap().X),
+	//    r · (TileSize().Y - TileOverlap().Y)).
+	// In the overlap region, tiles further along the row/column overwrite earlier
+	// tiles (no blending). Returns image.Point{} for non-overlapping levels and
+	// non-BIF formats.
+	TileOverlap() image.Point
+
 	Compression() Compression
 	MPP() SizeMm
 	FocalPlane() float64
