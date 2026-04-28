@@ -98,7 +98,7 @@ Files modified:
 
 # Batch A — JIT verification gates
 
-Five gate tasks. Run all five before sinking any port work. Outcomes recorded under `docs/deferred.md §8` paralleling v0.5 / v0.6 gate-outcomes structure. Each gate is a probe + a recorded "this is what we found" entry; if a gate fails, escalate before proceeding.
+Five gate tasks. Run all five before sinking any port work. Outcomes recorded under `docs/deferred.md §9` paralleling v0.5 / v0.6 gate-outcomes structure. Each gate is a probe + a recorded "this is what we found" entry; if a gate fails, escalate before proceeding.
 
 ## Task 1: Detection gate — `<iScan` substring matches both fixtures, zero false positives
 
@@ -144,7 +144,7 @@ for p in sorted(Path("sample_files").rglob("*.svs")) + \
 PY
 ```
 
-- [ ] **Step 2: Record outcome.** Add an entry under `docs/deferred.md §8` with the 13-fixture matrix. Expected: 2 BIF hits (Ventana-1, OS-1), 0 false positives across 11 non-BIF fixtures. If non-zero false positives, the detection rule needs strengthening before continuing.
+- [ ] **Step 2: Record outcome.** Add an entry under `docs/deferred.md §9` with the 13-fixture matrix. Expected: 2 BIF hits (Ventana-1, OS-1), 0 false positives across 11 non-BIF fixtures. If non-zero false positives, the detection rule needs strengthening before continuing.
 
 ## Task 2: ScannerModel prefix gate — both fixtures classify as planned
 
