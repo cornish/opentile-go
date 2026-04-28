@@ -450,6 +450,24 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 - **Date:** 2026-04-27
 - **Outcome:** Both fixtures probe as expected per spec §4 and §5.2. Ventana-1.bif reports `ScannerModel="VENTANA DP 200"` (matches prefix `"VENTANA DP"`) → routes to spec-compliant path. OS-1.bif has no ScannerModel attribute in the XMP (`<iScan>` element; attribute missing) → routes to legacy-iScan path. The `strings.HasPrefix(scannerModel, "VENTANA DP")` classification rule is confirmed as sufficient and specific to distinguish Ventana (spec-compliant) from legacy iScan (non-Ventana) scanners. Aligns with openslide's branching logic and the v0.7 design's §4 scope. No spec revision needed; gate passes.
 
+#### Task 3 — IFD-classification-by-description gate
+
+- **Date:** 2026-04-27
+- **Outcome:** All IFD ImageDescription values across both BIF fixtures match the spec §5.3 discriminator rule exactly. No unexpected values; no case/whitespace variants requiring special handling.
+
+  **Per-fixture IFD inventory:**
+
+  | Fixture | IFD | ImageDescription | Role | Notes |
+  |---------|-----|------------------|------|-------|
+  | Ventana-1.bif | 0 | `'Label_Image'` | associated, kind="overview" | spec-compliant (DP 200) |
+  | Ventana-1.bif | 1 | `'Probability_Image'` | associated, kind="probability" | spec-compliant |
+  | Ventana-1.bif | 2–9 | `level=N mag=M quality=95` | pyramid levels 0–7 | 8 levels total |
+  | OS-1.bif | 0 | `'Label Image'` | associated, kind="overview" | legacy (space separator) |
+  | OS-1.bif | 1 | `'Thumbnail'` | associated, kind="thumbnail" | legacy variant |
+  | OS-1.bif | 2–11 | `level=N mag=M quality=90` | pyramid levels 0–9 | 10 levels total (OS-1 has deeper pyramid) |
+
+  **Discriminator coverage:** The five discriminator patterns from spec §5.3 (`Label_Image`, `Label Image`, `Probability_Image`, `Thumbnail`, `level=N mag=M quality=Q`) account for 100% of observed IFDs. Ventana-1.bif spans the spec-compliant path (DP 200 with probability map); OS-1.bif exercises the legacy-iScan path (label as space-delimited, no probability, thumbnail instead). Both confirm that **classification by ImageDescription content is sufficient** — no need to index into IFD order, validating spec §5.3's core recommendation despite OS-1's non-standard IFD layout (IFD 0 = label, IFD 1 = thumbnail, IFD 2+ = pyramid, unlike the whitepaper's IFD 0/1/2/3+ layout).
+
 ### v0.6 gates
 
 #### Task 5 — tifffile splice-replication harness
