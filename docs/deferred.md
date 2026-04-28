@@ -498,7 +498,7 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
   | OS-1.bif | 10 | L8 | 1 | 0 | |
   | OS-1.bif | 11 | L9 | 1 | 0 | |
 
-  **Implication for Task 14:** Both fixtures are single-AOI scans with complete tile coverage — no real empty tiles to validate the blank-fill path. Task 14 (empty-tile synthesis testing) must include a synthetic OME-XMP test fixture with explicit empty tiles. The spec's encoding is confirmed as sufficient discriminator; the implementation path (fill with `ScanWhitePoint`-coloured JPEG) has no in-fixture validation opportunity.
+  **Implication for Task 14:** Both fixtures are single-AOI scans with complete tile coverage — no real empty tiles to validate the blank-fill path. Task 14 (empty-tile synthesis testing) must include a synthetic BIF-XMP test fixture with explicit empty tiles. The spec's encoding is confirmed as sufficient discriminator; the implementation path (fill with `ScanWhitePoint`-coloured JPEG) has no in-fixture validation opportunity.
 
 ### v0.6 gates
 
