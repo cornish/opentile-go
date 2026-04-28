@@ -157,6 +157,13 @@ type iFDSpec struct {
 	// plumbing in level.go.
 	tileWidth, tileLength int
 	tileFill              byte // arbitrary fill byte, default 0
+
+	// emptyTileIndices marks specific positions in the TileOffsets
+	// array (storage-order, i.e. serpentine for spec-compliant BIF)
+	// as empty: their TileOffsets[k] = 0 and TileByteCounts[k] = 0.
+	// Used to exercise the BIF empty-tile path without needing real
+	// AOI gaps.
+	emptyTileIndices []int
 }
 
 // buildBIFLikeBigTIFF builds a BigTIFF (little-endian) carrying len(ifds)
@@ -335,14 +342,26 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		if ifd.tileWidth > 0 {
 			n := m.gridW * m.gridH
 			tileSize := uint64(len(m.tileBytes)) / n
+			emptySet := make(map[int]struct{}, len(ifd.emptyTileIndices))
+			for _, k := range ifd.emptyTileIndices {
+				emptySet[k] = struct{}{}
+			}
 			if n > 1 {
-				// TileOffsets array
+				// TileOffsets array — empty entries written as 0.
 				for k := uint64(0); k < n; k++ {
-					_ = binary.Write(buf, binary.LittleEndian, tileDataOffsets[i]+k*tileSize)
+					if _, isEmpty := emptySet[int(k)]; isEmpty {
+						_ = binary.Write(buf, binary.LittleEndian, uint64(0))
+					} else {
+						_ = binary.Write(buf, binary.LittleEndian, tileDataOffsets[i]+k*tileSize)
+					}
 				}
-				// TileByteCounts array
+				// TileByteCounts array — empty entries written as 0.
 				for k := uint64(0); k < n; k++ {
-					_ = binary.Write(buf, binary.LittleEndian, tileSize)
+					if _, isEmpty := emptySet[int(k)]; isEmpty {
+						_ = binary.Write(buf, binary.LittleEndian, uint64(0))
+					} else {
+						_ = binary.Write(buf, binary.LittleEndian, tileSize)
+					}
 				}
 			}
 			buf.Write(m.tileBytes)

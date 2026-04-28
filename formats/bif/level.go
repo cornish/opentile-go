@@ -1,6 +1,7 @@
 package bif
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
@@ -11,6 +12,11 @@ import (
 	"github.com/cornish/opentile-go/internal/bifxml"
 	"github.com/cornish/opentile-go/internal/tiff"
 )
+
+// bytesReader is a small adapter so blank-tile TileReader can return
+// a bytes.Reader-backed io.Reader without allocating per-call when
+// the same blank-tile cache entry is requested repeatedly.
+func bytesReader(b []byte) io.Reader { return bytes.NewReader(b) }
 
 // levelImpl is the BIF Level implementation. One per pyramid IFD.
 //
@@ -36,6 +42,12 @@ type levelImpl struct {
 	offsets []uint64 // TileOffsets, in serpentine storage order
 	counts  []uint64 // TileByteCounts, in serpentine storage order
 
+	// scanWhitePoint is the white-fill luminance for empty (unscanned)
+	// tiles per spec §"AOI Positions". 0..255. Spec-compliant slides
+	// inherit this from <iScan>/@ScanWhitePoint; legacy iScan and any
+	// slide where the attribute is absent fall back to 255 (true white).
+	scanWhitePoint uint8
+
 	reader io.ReaderAt // for SectionReader-based streaming
 }
 
@@ -47,6 +59,7 @@ func newLevelImpl(
 	index int,
 	c classifiedIFD,
 	baseMPP float64,
+	scanWhitePoint uint8,
 	encodeInfo *bifxml.EncodeInfo,
 	reader io.ReaderAt,
 ) (*levelImpl, error) {
@@ -102,17 +115,18 @@ func newLevelImpl(
 	}
 
 	return &levelImpl{
-		index:       index,
-		pyrIndex:    c.Level,
-		size:        opentile.Size{W: int(iw), H: int(il)},
-		tileSize:    opentile.Size{W: int(tw), H: int(tl)},
-		grid:        opentile.Size{W: cols, H: rows},
-		compression: ocomp,
-		mpp:         mpp,
-		tileOverlap: tileOverlap,
-		offsets:     offsets,
-		counts:      counts,
-		reader:      reader,
+		index:          index,
+		pyrIndex:       c.Level,
+		size:           opentile.Size{W: int(iw), H: int(il)},
+		tileSize:       opentile.Size{W: int(tw), H: int(tl)},
+		grid:           opentile.Size{W: cols, H: rows},
+		compression:    ocomp,
+		mpp:            mpp,
+		tileOverlap:    tileOverlap,
+		offsets:        offsets,
+		counts:         counts,
+		scanWhitePoint: scanWhitePoint,
+		reader:         reader,
 	}, nil
 }
 
@@ -166,23 +180,28 @@ func (l *levelImpl) indexOf(col, row int) (int, error) {
 	return idx, nil
 }
 
-// Tile returns the raw compressed tile bytes at (col, row) in
+// Tile returns the compressed tile bytes at (col, row) in
 // image-space. Internally remapped to TileOffsets storage order via
 // imageToSerpentine.
 //
-// v0.7 returns the source TIFF bytes verbatim — no JPEGTables splice
-// (T15) and no blank-tile fill on empty entries (T14). A
-// `TileByteCounts[i] == 0` entry currently yields ErrCorruptTile;
-// T14 will swap that branch for blankTile().
+// Empty tiles (`TileOffsets[i] == 0 && TileByteCounts[i] == 0`,
+// per BIF whitepaper §"AOI Positions") are returned as a synthesised
+// JPEG filled with the slide's `ScanWhitePoint` luminance — see
+// blankTile. JPEGTables splice for non-empty tiles is deferred to
+// T15.
 func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 	idx, err := l.indexOf(col, row)
 	if err != nil {
 		return nil, err
 	}
-	length := l.counts[idx]
-	if length == 0 {
-		return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrCorruptTile}
+	if l.isEmpty(idx) {
+		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return b, nil
 	}
+	length := l.counts[idx]
 	off := int64(l.offsets[idx])
 	buf := make([]byte, length)
 	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
@@ -192,19 +211,31 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 }
 
 // TileReader returns a streaming reader over the tile at (col, row).
-// Until T15 splices JPEGTables, this is a straight io.SectionReader
-// over the TIFF — zero-copy.
+// For non-empty entries this is a zero-copy io.SectionReader; for
+// empty entries it is a bytes.Reader over the cached blank tile.
+// Once T15 splices JPEGTables, the SectionReader path may fall back
+// to a buffer for some IFDs — see Tile.
 func (l *levelImpl) TileReader(col, row int) (io.ReadCloser, error) {
 	idx, err := l.indexOf(col, row)
 	if err != nil {
 		return nil, err
 	}
-	length := l.counts[idx]
-	if length == 0 {
-		return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrCorruptTile}
+	if l.isEmpty(idx) {
+		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return io.NopCloser(bytesReader(b)), nil
 	}
+	length := l.counts[idx]
 	off := int64(l.offsets[idx])
 	return io.NopCloser(io.NewSectionReader(l.reader, off, int64(length))), nil
+}
+
+// isEmpty reports whether the tile at TileOffsets index idx is the
+// spec-defined empty marker (offset == 0 AND bytecount == 0).
+func (l *levelImpl) isEmpty(idx int) bool {
+	return l.offsets[idx] == 0 && l.counts[idx] == 0
 }
 
 // Tiles iterates every tile position in image-space row-major order.

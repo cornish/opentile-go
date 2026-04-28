@@ -81,9 +81,10 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		return nil, err
 	}
 	encodeInfo := loadEncodeInfo(levelIFDs)
+	scanWhite := scanWhitePointFor(iscan)
 	levels := make([]opentile.Level, 0, len(levelIFDs))
 	for i, c := range levelIFDs {
-		l, err := newLevelImpl(i, c, iscan.ScanRes, encodeInfo, file.ReaderAt())
+		l, err := newLevelImpl(i, c, iscan.ScanRes, scanWhite, encodeInfo, file.ReaderAt())
 		if err != nil {
 			return nil, err
 		}
@@ -99,6 +100,18 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		associatedIFD: associated,
 		image:         opentile.NewSingleImage(levels),
 	}, nil
+}
+
+// scanWhitePointFor returns the empty-tile fill value for this
+// slide. Per spec §"AOI Positions" empty tiles take the
+// `<iScan>/@ScanWhitePoint` luminance; if the attribute is absent
+// (every legacy iScan slide we've seen) we fall back to 255 (true
+// white), matching openslide's implicit default.
+func scanWhitePointFor(iscan *bifxml.IScan) uint8 {
+	if iscan != nil && iscan.ScanWhitePointPresent {
+		return iscan.ScanWhitePoint
+	}
+	return 255
 }
 
 // loadEncodeInfo parses the level-0 IFD's XMP into an EncodeInfo
