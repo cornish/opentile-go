@@ -29,6 +29,7 @@ const (
 	TagSubIFDs           uint16 = 330
 	TagJPEGTables        uint16 = 347
 	TagYCbCrSubSampling  uint16 = 530
+	TagXMP               uint16 = 700
 	TagImageDepth        uint16 = 32997
 	TagInterColorProfile uint16 = 34675
 )
@@ -152,6 +153,25 @@ func (p *Page) JPEGTables() ([]byte, bool) {
 		return nil, false
 	}
 	// Tables are UNDEFINED bytes; read the payload.
+	if e.fitsInline() {
+		return append([]byte(nil), e.valueBytes[:e.Count]...), true
+	}
+	buf, err := p.br.bytes(int64(e.valueOrOffset), int(e.Count))
+	if err != nil {
+		return nil, false
+	}
+	return buf, true
+}
+
+// XMP returns the XMP packet (tag 700) raw bytes if present, or
+// (nil, false) otherwise. Used by formats whose detection or metadata
+// surface depends on XMP content (Ventana BIF carries `<iScan>` and
+// `<EncodeInfo>` blocks here).
+func (p *Page) XMP() ([]byte, bool) {
+	e, ok := p.ifd.get(TagXMP)
+	if !ok {
+		return nil, false
+	}
 	if e.fitsInline() {
 		return append([]byte(nil), e.valueBytes[:e.Count]...), true
 	}
