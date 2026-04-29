@@ -28,12 +28,13 @@ tile, err := base.Tile(0, 0) // raw compressed JPEG / JP2K / etc. bytes
 | **Hamamatsu NDPI** | `.ndpi` | tiled (striped + OneFrame) | overview, synthesised label\*, Map\* | JPEG | byte-parity vs. Python opentile | [docs/formats/ndpi.md](./docs/formats/ndpi.md) |
 | **Philips TIFF** | `.tiff` | tiled, with sparse-tile fill | label, overview, thumbnail | JPEG | byte-parity vs. Python opentile | [docs/formats/philips.md](./docs/formats/philips.md) |
 | **OME-TIFF** | `.ome.tiff` | tiled (SubIFD) + OneFrame | macro, label, thumbnail | JPEG (uint8 RGB only) | byte-parity vs. Python opentile + tifffile | [docs/formats/ome.md](./docs/formats/ome.md) |
+| **Ventana BIF** | `.bif` | tiled, serpentine remap, with overlap metadata\* + ScanWhitePoint blank-tile fill | overview, probability\*, thumbnail | JPEG | tifffile (DP 200) + sampled-tile SHAs (both fixtures) | [docs/formats/bif.md](./docs/formats/bif.md) |
 
 \* Marks Go-side extensions beyond upstream Python opentile; see [Deviations](#deviations-from-upstream-python-opentile) below.
 
 **Detection** is automatic. `opentile.OpenFile` walks the registered factories and dispatches the first one that reports `Supports(file) == true`; format packages register at import time via `_ "github.com/cornish/opentile-go/formats/all"`.
 
-**Format coverage**: opentile-go ports the four formats Python opentile 0.20.0 supports for tile extraction. 3DHistech TIFF (the fifth) is parked at [#2](https://github.com/cornish/opentile-go/issues/2). Beyond upstream's coverage, Ventana BIF (Roche / iScan scanners) is planned for v0.7; Sakura SVSlide is parked at [#3](https://github.com/cornish/opentile-go/issues/3).
+**Format coverage**: opentile-go ports the four formats Python opentile 0.20.0 supports for tile extraction. 3DHistech TIFF (the fifth) is parked at [#2](https://github.com/cornish/opentile-go/issues/2). Ventana BIF — the first opentile-go format beyond upstream's coverage — landed in v0.7. Sakura SVSlide is parked at [#3](https://github.com/cornish/opentile-go/issues/3).
 
 ## Prerequisites
 
@@ -62,7 +63,7 @@ t, err := opentile.OpenFile("slide.tiff")
 if err != nil { /* ErrUnsupportedFormat or open error */ }
 defer t.Close()
 
-fmt.Println("format:", t.Format())                 // "svs", "ndpi", "philips", "ome"
+fmt.Println("format:", t.Format())                 // "svs", "ndpi", "philips", "ome", "bif"
 fmt.Println("levels:", len(t.Levels()))
 ```
 
@@ -186,6 +187,9 @@ opentile-go aims for byte-parity with Python opentile 0.20.0. A small number of 
 | Synthesised label | NDPI | v0.2 | `WithNDPISynthesizedLabel(false)` | Upstream doesn't surface NDPI labels at all; we crop the left 30% of the overview to provide an Aperio-style label affordance. |
 | Map pages exposed | NDPI | v0.4 | not opt-out-able (silent absence) | tifffile already classifies them as `series.name == 'Map'`; surfacing matches the underlying TIFF carrying. |
 | Multi-image OME pyramids | OME | v0.6 | use `Tiler.Levels()` instead of `Tiler.Images()` for first-image-only behaviour | Upstream's base Tiler loop silently drops 3 of 4 main pyramids in multi-image files via an unintentional last-wins assignment. We expose all of them via `Tiler.Images()`. |
+| Probability map exposed as `kind="probability"` | BIF | v0.7 | iterate `Associated()` and skip the kind | Upstream doesn't read BIF; openslide drops the probability map. We surface it for downstream tools that want it. |
+| `Level.TileOverlap() image.Point` interface evolution | BIF + all | v0.7 | non-BIF formats return `image.Point{}` (zero) — no caller change needed | BIF level-0 stores tiles with horizontal overlap; consumer needs the value to position raw tile bytes correctly. |
+| Non-strict `ScannerModel` acceptance | BIF | v0.7 | not opt-out-able | The BIF spec mandates rejecting any slide whose `ScannerModel != "VENTANA DP 200"`; we accept any iScan-tagged BigTIFF and route via `HasPrefix("VENTANA DP")` so legacy iScan slides aren't worse-than-openslide. |
 
 Full reasoning + per-deviation commit references are in [`docs/deferred.md`](./docs/deferred.md).
 
