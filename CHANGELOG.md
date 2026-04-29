@@ -11,9 +11,9 @@ upstream references, and retirement audit per milestone.
 
 ## [Unreleased]
 
-Active limitations after v0.6 are exclusively Permanent design choices
-(L4, L5, L14 in `docs/deferred.md` §2). Open work parked in tracked
-issues:
+Active limitations after v0.7: L4, L5, L14 (Permanent — carried over
+from v0.6) plus L19, L20, L21 (v0.7 work items deferred to v0.8+;
+see `docs/deferred.md` §2). Open work parked in tracked issues:
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
   SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
@@ -23,6 +23,90 @@ issues:
   the wild. Trigger-driven park.
 - **R15** ([#3](https://github.com/cornish/opentile-go/issues/3)) —
   Sakura SVSlide. Trigger-driven park.
+
+## [0.7.0] — 2026-04-28
+
+Ventana BIF (Roche / iScan) support — the first opentile-go format
+beyond upstream Python opentile's coverage. Two real fixtures
+(`Ventana-1.bif` spec-compliant DP 200 + `OS-1.bif` legacy iScan
+Coreo) round-trip through `opentile.OpenFile` cleanly. Correctness
+is anchored on **tifffile byte-equality** for the spec-compliant
+path + **committed sample-tile SHA256 hashes** for both fixtures via
+`TestSlideParity`.
+
+### Added
+
+- **Ventana BIF format** — `formats/bif/`. BigTIFF detection via
+  `<iScan` substring match in any IFD's XMP. Generation
+  classification by `strings.HasPrefix(scannerModel, "VENTANA DP")`
+  (DP 200, DP 600, future DP scanners → spec-compliant path; else
+  → legacy-iScan path). IFD classification by `ImageDescription`
+  content. Pyramid levels sorted by parsed `level=N`. Per-tile
+  serpentine remap (image-space (col, row) → physical-stage
+  TileOffsets index). Empty-tile path returns a cached blank JPEG
+  filled with `<iScan>/@ScanWhitePoint` luminance (default 255 when
+  the attribute is absent). Shared JPEGTables (tag 347) spliced via
+  `internal/jpeg.InsertTables` (no Adobe APP14 — BIF is YCbCr).
+- **`internal/bifxml/`** — stdlib `encoding/xml` walkers for
+  `<iScan>` and `<EncodeInfo>` XMP blocks. Lenient parsing; ordinal
+  `<AOI<N>>` iteration; out-of-range `ScanWhitePoint` clamped;
+  `<EncodeInfo>` Ver < 2 rejected per spec.
+- **`Level.TileOverlap() image.Point`** interface method (additive).
+  Returns the per-tile-step pixel overlap; non-zero only on BIF
+  level 0. Both real fixtures carry non-zero overlap on level 0
+  (Ventana-1=(2,0); OS-1=(18,26)) — contrary to the original v0.7
+  design spec §10's "fixture-untested" claim. Other formats return
+  `image.Point{}`.
+- **`bif.MetadataOf(opentile.Tiler) (*Metadata, bool)`** — exposes
+  Generation, ScanRes, ScanWhitePoint+Present, ZLayers,
+  ImageDescription, AOIs, AOIOrigins, EncodeInfoVer. Walks
+  `UnwrapTiler` chains.
+- **`opentile.FormatBIF`** constant.
+- **`internal/tiff.TagXMP`** (700) + `Page.XMP()`,
+  **`TagImageDepth`** (32997) + `Page.ImageDepth()`,
+  **`TagDateTime`** (306).
+- **AssociatedImage `kind="probability"`** — new kind value joining
+  the existing taxonomy. Spec-compliant DP 200 fixtures expose IFD 1
+  as the LZW-compressed tissue probability map.
+- **`formats/bif/blanktile.go`** — cached JPEG blank-tile generator.
+- **Three parity oracles**: `tests/parity/bif_geometry_test.go` (no
+  build tag, runs in `make test`); `TestTifffileParityBIF`
+  (Ventana-1, byte-equality); `TestOpenslideBIFParity`
+  (infrastructure-only in v0.7, `t.Skip`'d for v0.8 follow-up).
+- Sampled-tile fixtures for both BIF fixtures. `TestSlideParity` now
+  passes 16/16 slides (5 SVS + 3 NDPI + 4 Philips + 2 OME + 2 BIF).
+
+### Changed
+
+- **`Level` interface** gains `TileOverlap() image.Point` —
+  additive evolution; existing concrete level types grow
+  zero-returning impls. No caller change required for non-BIF
+  formats.
+
+### Deferred (v0.8+)
+
+- **L19** — openslide pixel-equivalence on BIF
+  (infrastructure-only in v0.7; coordinate-system gap between
+  opentile-go's padded TIFF grid and openslide's AOI-hull view).
+- **L20** — DP 600 (and other future "VENTANA DP *") behavioural
+  variance — unverified without a fixture.
+- **L21** — Volumetric Z-stacks. v0.7 reads only the nominal focus
+  plane; `IMAGE_DEPTH` is metadata-only.
+
+### Notes
+
+- The original v0.7 design spec (§7) framed openslide
+  pixel-equivalence as the primary correctness oracle.
+  Mid-implementation we found openslide rejects spec-compliant DP
+  200 BIFs (`Direction="LEFT"`) and uses an AOI-hull coordinate
+  system that doesn't match opentile-go's padded TIFF view.
+  Anecdotal community note: openslide is also believed to misread
+  modern BIF generally. The v0.7 correctness bar is therefore
+  tifffile + committed sample-tile SHAs, not openslide.
+- v0.7 surfaced two correctness bugs caught only by writing the
+  integration test (T19): `loadEncodeInfo` was silently swallowing
+  the Ver<2 rejection; `bif.MetadataOf` didn't unwrap the file-
+  closer Tiler. Both fixed in `49849a4`.
 
 ## [0.6.0] — 2026-04-27
 

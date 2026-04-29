@@ -2,16 +2,18 @@
 
 Direct Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB) with one cgo dependency (libjpeg-turbo, narrowly scoped to `internal/jpegturbo/`). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.6
+## Current milestone — v0.7
 
-- **Scope:** OME-TIFF support — the fourth format opentile-go handles, closing the upstream Python opentile 0.20.0 format set. New `formats/ome/` package; new `internal/tiff` SubIFD support (`Page.SubIFDOffsets` + `File.PageAtOffset`); new public `Image` interface + `Tiler.Images() []Image` for first-class multi-image exposure; shared `internal/oneframe/` package factored from NDPI. Output is byte-identical to Python opentile 0.20.0 + tifffile across every sampled tile and every associated image we expose, on both Leica fixtures.
-- **API extension:** `Tiler.Images()` is additive — single-image formats (SVS, NDPI, Philips) return a one-element slice; multi-image OME files (`Leica-2.ome.tiff` carries 4 main pyramids) expose them all. Legacy `Tiler.Levels()` and `Tiler.Level(i)` continue to work as documented shortcuts to `Images()[0]`.
-- **Active limitations:** Three Permanent design choices only — L4 (missing-MPP, slide-data dependent), L5 (NDPI sniff in `internal/tiff` is necessary), L14 (Go-side NDPI label synthesis with `WithNDPISynthesizedLabel(false)` opt-out). No open work-items for SVS, NDPI, Philips, or OME on existing fixtures.
-- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): NDPI synthesised label (v0.2), NDPI Map page surfacing (v0.4), multi-image OME pyramid exposure (v0.6), OME PlanarConfiguration=2 plane-0-only indexing (v0.6), OME first-strip-only on multi-strip OneFrame (v0.6).
-- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R6 (3DHistech TIFF) parked at [#2](https://github.com/cornish/opentile-go/issues/2); R15 (Sakura SVSlide) parked at [#3](https://github.com/cornish/opentile-go/issues/3). Ventana BIF (R14) is the next milestone (v0.7) — first format beyond upstream's coverage; methodology shifts from byte-parity-with-Python to pixel-equivalence-with-openslide on decoded tiles.
-- **Design:** `docs/superpowers/specs/2026-04-26-opentile-go-v06-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-26-opentile-go-v06.md`
-- **Work branch:** `feat/v0.6`
+- **Scope:** Ventana BIF (Roche / iScan) support — the fifth format opentile-go handles and **the first beyond upstream Python opentile's coverage**. New `formats/bif/` package; new `internal/bifxml/` XML walker; new `Level.TileOverlap() image.Point` interface method (additive evolution); new `formats/bif/blanktile.go` empty-tile generator; new tests/parity/ package + bif_geometry_test; openslide + tifffile parity oracle infrastructure under `tests/oracle/`. Two real fixtures (Ventana-1 spec-compliant DP 200 + OS-1 legacy iScan Coreo) round-trip through `opentile.OpenFile` cleanly.
+- **API extension:** `Level.TileOverlap() image.Point` returns the per-tile-step pixel overlap; non-zero only on BIF level 0 (the only level with `<TileJointInfo>` overlap entries per spec). Existing format levels return `image.Point{}` — no caller change required.
+- **Active limitations:** L4, L5, L14 (Permanent — carried over from v0.6) plus three v0.7 work items deferred to v0.8+ (`docs/deferred.md §2`): L19 (openslide pixel-equivalence on BIF — coordinate-system gap, infrastructure-only ships in v0.7), L20 (DP 600 unverified — fixture-dependent), L21 (Volumetric Z-stacks deferred).
+- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): NDPI synthesised label (v0.2), NDPI Map page surfacing (v0.4), multi-image OME pyramid exposure (v0.6), OME PlanarConfiguration=2 plane-0-only indexing (v0.6), OME first-strip-only on multi-strip OneFrame (v0.6), BIF probability map exposure (v0.7), BIF `Level.TileOverlap()` (v0.7), BIF non-strict `ScannerModel` acceptance (v0.7).
+- **Correctness bar revision:** the v0.7 design spec §7 originally framed openslide pixel-equivalence as the primary BIF oracle. Mid-implementation we found openslide rejects spec-compliant DP 200 BIFs (`Direction="LEFT"`) and uses an AOI-hull coordinate system that doesn't match opentile-go's padded TIFF view. Anecdotal community note: openslide is also believed to misread modern BIF generally. v0.7's actual correctness bar is **tifffile byte-equality on Ventana-1** + **committed sample-tile SHA256 hashes via `TestSlideParity`** for both fixtures. openslide-pixel-equivalence is a v0.8 follow-up (L19).
+- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R6 (3DHistech TIFF) parked at [#2](https://github.com/cornish/opentile-go/issues/2); R15 (Sakura SVSlide) parked at [#3](https://github.com/cornish/opentile-go/issues/3). v0.8 will likely tackle L19 + L20 + Leica SCN (R16) — TBD based on real-slide demand.
+- **Design:** `docs/superpowers/specs/2026-04-27-opentile-go-v07-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-27-opentile-go-v07.md`
+- **Research notes:** `docs/superpowers/notes/2026-04-27-bif-research.md`
+- **Work branch:** `feat/v0.7`
 
 ## Invariants
 
