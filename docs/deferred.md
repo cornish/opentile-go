@@ -53,7 +53,7 @@ real slide motivates the work.
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
 | R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
-| R14 | Ventana BIF (Roche / iScan) | v0.7 | first format beyond upstream opentile's coverage. BigTIFF-based; openslide has a reader (LGPL 2.1, read-for-understanding only). Local fixtures already present in `sample_files/ventana-bif/`. Correctness bar: pixel-equivalence with openslide on decoded tiles (no byte-stable Python reference). |
+| R14 | Ventana BIF (Roche / iScan) | v0.7 | ✅ landed (commit range `b2e7f53..f602b20`). New `formats/bif/` package, new `internal/bifxml/` XML walker, `Level.TileOverlap()` interface evolution, blank-tile generator, ScanWhitePoint-filled empty-tile path, JPEGTables splice for legacy iScan. Two parity oracles: tifffile byte-equality on Ventana-1 (DP 200 path), openslide infrastructure shipped + assertion gated to v0.8 (see L19 below). Sampled-tile fixtures committed for both fixtures via `TestSlideParity`. Correctness bar revised mid-implementation: openslide rejects spec-compliant DP 200 BIFs (`Direction="LEFT"`) and may interpret legacy iScan differently, so byte-stable references are tifffile + our own committed sample-tile SHAs rather than openslide pixel-equivalence. |
 | R15 | Sakura SVSlide | parked | parked behind GH issue (TBD). Rare format; openslide reads it. Trigger-driven deferral. |
 | R16 | Leica SCN | v0.8 (tentative) | BigTIFF-based; common in research microscopy. Openslide reader as reference. Decide based on real-slide demand. |
 | R17 | Generic Tiled TIFF | v0.8+ (tentative) | catch-all fallback for unknown vendors with standard TIFF tile layout. Decide based on real-slide demand and whether end users are hitting `ErrUnsupportedFormat` on standards-compliant slides. |
@@ -137,6 +137,58 @@ README.md and per-format docs link here.
   L2-L4, Leica-2 L2-L5).
 - **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
 
+### BIF: probability map exposure (since v0.7)
+
+- **Upstream:** Python opentile doesn't read BIF at all; v0.7 is the
+  first opentile-go format beyond upstream's coverage. openslide
+  exposes only `macro` and `thumbnail` from BIF — the IFD-1 tissue
+  probability map (LZW grayscale, spec-compliant DP 200 only) is
+  dropped.
+- **opentile-go:** surfaces the probability map as
+  `AssociatedImage.Kind() == "probability"`. Joins the existing
+  `overview` / `macro` / `thumbnail` / `label` / `map` kind taxonomy
+  via the new `kind="probability"` enum value.
+- **Reason:** the slide author embedded the probability map; throwing
+  it away is value loss. Consumers that don't recognise the kind
+  iterate-and-skip cleanly via the existing `Associated()` API.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md).
+
+### BIF: tile overlap exposed via `Level.TileOverlap()` (since v0.7)
+
+- **Upstream:** Python opentile doesn't read BIF; openslide exposes
+  per-pair `TileJointInfo` overlap as `tile_advance_x` /
+  `tile_advance_y` properties (level-0 only) and silently composes
+  overlapping tiles into the `read_region` output.
+- **opentile-go:** new `Level.TileOverlap() image.Point` method on
+  the public `Level` interface returns the per-tile-step pixel
+  overlap (count-weighted average of all `<TileJointInfo>` entries on
+  level 0; zero on pyramid IFDs 1+ which never overlap per spec).
+  Non-BIF formats return `image.Point{}` — additive evolution; no
+  caller change needed.
+- **Reason:** `Level.Tile(c, r)` continues to return raw compressed
+  bytes (preserving the byte-passthrough hot path), so the consumer
+  needs the overlap value to position tiles correctly. Surface as
+  metadata, not as a pixel-space crop.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md).
+
+### BIF: non-strict `ScannerModel` acceptance (since v0.7)
+
+- **Upstream:** the Roche BIF whitepaper explicitly mandates
+  rejecting any slide whose IFD-0 `<iScan>/@ScannerModel` is not
+  `"VENTANA DP 200"` ("Stop processing the BIF-file if the string
+  does not match model name").
+- **opentile-go:** accepts any iScan-tagged BigTIFF and routes
+  internally based on `strings.HasPrefix(scannerModel, "VENTANA DP")`:
+  spec-compliant path (DP 200, DP 600, future DP scanners) vs.
+  legacy-iScan path (missing attribute, iScan Coreo, iScan HT).
+- **Reason:** rejecting legacy iScan slides leaves users with a
+  worse-than-openslide experience for that population. Both fixtures
+  in our suite pass through Open cleanly with the prefix-match rule.
+  DP 600 is not yet validated against a fixture but the prefix
+  future-proofs against new DP scanners.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md); spec §4
+  of the v0.7 design doc.
+
 ---
 
 ## 2. Active limitations (open after v0.3)
@@ -177,6 +229,45 @@ completeness milestone). Items closed during v0.3 are listed in §5.
   *How to fix if we decide it's unwanted:* drop the `newLabelImage` call
   in `formats/ndpi/ndpi.go` Open() so NDPI associated is overview-only.
   Or keep it and add a README note calling it out.
+
+### L19 — BIF: openslide pixel-parity oracle gated, infrastructure shipped (since v0.7)
+- **Source:** Batch E execution (T20)
+- **Severity:** v0.8 — work item, not permanent. The runner / session
+  / protocol all work; the test currently `t.Skip`s with a clear gap
+  description. Resolving requires either an opentile-go-side
+  AOI-cropped Tile variant or a clearer story about which view is
+  authoritative.
+- **Detail:** opentile-go's `Tile(col, row)` at level N references
+  the **padded TIFF grid** (e.g. OS-1 L5 = 3712×3192) — what the
+  TIFF tags actually cover. openslide's `read_region` references the
+  **AOI hull** (OS-1 L5 = 3307×2936) — cropped per the spec's
+  "padding to top and right" clause. Their `(0, 0)` tiles map to
+  different physical regions, so any pixel comparison diverges by
+  construction. Anecdotal note from a community reader: openslide is
+  also believed to misread *modern* (DP 200+) BIF — Ventana-1's
+  `Direction="LEFT"` rejection is one example, and OS-1 readback may
+  have its own quirks. Net effect: openslide pixel-equivalence isn't
+  load-bearing for v0.7 correctness; tifffile (Ventana-1) +
+  committed sample-tile SHAs (both fixtures) are the references that
+  matter.
+
+### L20 — BIF: DP 600 and other future "VENTANA DP *" scanners unverified (since v0.7)
+- **Source:** v0.7 design spec §10
+- **Severity:** v0.8+ — input-data-dependent. The
+  `strings.HasPrefix(scannerModel, "VENTANA DP")` rule lands future
+  DP scanners on the spec-compliant path automatically; if a real
+  DP 600 (or later) fixture surfaces a behavioural difference (Z-stack
+  default, varying overlap distribution, new XMP attributes), it'll
+  be a deviation to fold into §1a above.
+
+### L21 — BIF: volumetric Z-stacks deferred to v0.8+ (since v0.7)
+- **Source:** v0.7 design spec §10
+- **Severity:** v0.8+ — feature gap. v0.7 surfaces only the nominal
+  focus plane (first M×N tiles per IFD per BIF whitepaper §"Whole
+  slide imaging process") even when `IMAGE_DEPTH > 1`. Multi-plane
+  exposure would require a new `Z` axis on the `Image` interface or
+  a per-plane Image enumeration; defer until a real Z-stack consumer
+  surfaces.
 
 ---
 
@@ -350,6 +441,75 @@ that locks the change in.
   duplicate DQT/DHT segments in the sparse-tile output — JPEG
   decoders accept this. Cross-check against Python at Philips-4 L0
   (0,0) caught our initial single-splice version.
+
+---
+
+## 8a. Retired in v0.7
+
+Items closed during the v0.7 Ventana BIF milestone. The branch
+spans `b2e7f53..f602b20` (30 commits across Batches A through F).
+
+**Roadmap items (R-prefix):**
+
+- **R14** — Ventana BIF support landed end-to-end. New
+  `formats/bif/` package (detection, generation classification by
+  `strings.HasPrefix(scannerModel, "VENTANA DP")`, IFD
+  classification by ImageDescription content, serpentine remap,
+  empty-tile blank fill, JPEGTables splice), new
+  `internal/bifxml/` package (XMP walker for `<iScan>` and
+  `<EncodeInfo>`), `Level.TileOverlap()` interface evolution.
+  Two real fixtures (Ventana-1 spec-compliant + OS-1 legacy iScan)
+  Open cleanly with full-tiler exposure: format, levels, associated
+  images, ICC, metadata, MetadataOf.
+
+**Active limitations (L-prefix):**
+
+None. v0.7 added L19 / L20 / L21 (openslide pixel-parity gap, DP 600
+unverified, Z-stacks deferred) but resolved no prior limitations.
+
+**Mid-task discoveries (where execution surfaced design surprises):**
+
+- **Both real fixtures have NON-ZERO TileOverlap on level 0**
+  (Ventana-1 L0=(2,0); OS-1 L0=(18,26)) — the design spec §10's
+  claim of "fixture-untested overlap path" was wrong. The notes file
+  §2 reported "all zero" based on a 1500-char XMP truncation; the
+  full XMP carries a sparse mix of zero and non-zero `<TileJointInfo>`
+  entries. The weighted-average path is therefore exercised by real
+  data, not just synthetic tests. Updated v0.7 spec §10 + this
+  retirement note.
+- **OS-1 has no ICC profile** (tag 34675 present with count=0) —
+  the notes file §2 claimed the tag was present on both fixtures.
+  T18 distinguishes "tag-absent" from "tag-present-with-zero-bytes"
+  and returns nil for both.
+- **OS-1 has no FrameInfo / Frame XMP elements** at all (predates
+  that XMP feature). T7's `internal/bifxml` parser handles this
+  gracefully via empty `Frames` slices; T13's serpentine algorithm
+  works without Frame data on this fixture.
+- **opentile-go's image extent ≠ openslide's image extent for OS-1**
+  (3712×3192 vs 3307×2936 at L5). opentile-go reports the padded
+  TIFF grid; openslide reports the AOI hull. Their `(0, 0)` tiles
+  reference different physical regions. Recorded as L19; resolution
+  deferred to v0.8.
+- **Two correctness bugs caught by writing the integration test
+  (T19), not by any synthetic unit test:**
+  (a) `loadEncodeInfo` was silently swallowing
+  `bifxml.ParseEncodeInfo`'s Ver<2 error, defeating the
+  spec-mandated rejection gate;
+  (b) `bif.MetadataOf` didn't unwrap the file-closer Tiler returned
+  by `opentile.OpenFile`, so `MetadataOf(opentile.OpenFile(slide))`
+  always returned `(nil, false)`.
+
+**Process notes:**
+
+- v0.7 was executed sequentially (no subagents) for Batches C/D/E/F
+  per user instruction — the user is on remote control and the
+  back-and-forth latency of subagent dispatch + dual-stage review
+  was a worse fit than direct execution. Subagents (haiku for
+  mechanical tasks, sonnet for design-aware tasks) were used for
+  Batches A and B only; review-cycle catches there were a count
+  typo (T1), an OME-XMP→BIF-XMP typo in the T4 outcome paragraph,
+  and an over-prescriptive sentence in T5. Useful but not
+  load-bearing.
 
 ---
 
