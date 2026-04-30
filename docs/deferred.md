@@ -598,6 +598,51 @@ that locks the change in.
 JIT verification gate outcomes from the v0.4, v0.5, v0.6, and v0.7 plans.
 Each gate decides a done-when bar or fix path for subsequent tasks.
 
+### v0.7 multi-dim gates
+
+#### Task 3 — BIF Z-spacing parsing gate
+
+- **Date:** 2026-04-29
+- **Outcome:** Both BIF fixtures carry `<iScan Z-layers="1"
+  Z-spacing="1" ...>`. `internal/bifxml.IScan` already exposes
+  `ZLayers int`; the parser already lists `"Z-layers"` in
+  `knownIScanAttrs` and writes it into `s.ZLayers`. **`Z-spacing`
+  is NOT yet a field on `IScan`** — the attribute is consumed by
+  the parser (so it doesn't fall into `RawAttributes`) but no
+  typed field receives it. T7 (Batch C) adds
+  `IScan.ZSpacing float64` and the per-attribute case in
+  `parseIScanAttrs`. Both fixture values (Z-spacing=1) are
+  meaningless for single-plane scans (ZLayers=1); the field is
+  load-bearing only when the synthetic multi-Z fixture builder in
+  T10 produces a Z-stacked test slide. Add the field + parse +
+  test in T7 before the BIF-side levelImpl wiring in T8.
+
+#### Task 2 — OME `<Pixels>` SizeZ/C/T extraction gate
+
+- **Date:** 2026-04-29
+- **Outcome:** Both Leica fixtures (Leica-1.ome.tiff: 2 Images;
+  Leica-2.ome.tiff: 5 Images) carry `<Pixels SizeZ="1" SizeC="3"
+  SizeT="1" DimensionOrder="XYCZT">` on every Image. **`<Pixels
+  SizeC=3>` describes RGB sample-count, NOT separately-stored
+  channels** — every Image has exactly one `<Channel>` element,
+  meaning the underlying tile bytes are a single composite RGB
+  JPEG (the standard brightfield pathology layout). The right
+  discriminator for `Image.SizeC()` (the new v0.7 multi-dim
+  accessor) is **`<Channel>` element count**, not `<Pixels SizeC>`.
+  T12 (Batch D) wires this through: `pyramidImage.SizeC()` reads
+  the `<Channel>` count rather than `<Pixels SizeC>`. The current
+  `omePixels` decode struct in `formats/ome/metadata.go` only
+  parses SizeX/SizeY; it must grow `SizeZ/SizeC/SizeT` fields and
+  the parser must additionally count `<Channel>` elements per
+  Image. With this rule, every existing Leica fixture reports
+  `SizeZ=SizeC=SizeT=1` — no false-positive multi-dim
+  reclassification of brightfield slides.
+
+#### Task 1 — IMAGE_DEPTH (32997) accessor gate
+
+- **Date:** 2026-04-29
+- **Outcome:** `internal/tiff.Page.ImageDepth()` returns `(1, false)` for every page on every fixture in the 17-fixture local set (5 SVS, 3 NDPI, 1 generic TIFF, 4 Philips TIFF, 2 OME-TIFF, 2 BIF — pages range from 2 (Leica-1) to 12 (OS-2.ndpi, OS-1.bif)). No fixture carries a volumetric Z-stack. Confirms (a) the accessor is fault-free on real data, (b) the BIF multi-Z code path **must be exercised exclusively via in-code synthetic fixtures** in `formats/bif/multiz_test.go` per the design spec Q5 sign-off. The choice to embed synthetic Z-stack fixtures in test source rather than committing binary testdata stands.
+
 ### v0.7 gates
 
 #### Task 1 — Detection gate (`<iScan` substring)
