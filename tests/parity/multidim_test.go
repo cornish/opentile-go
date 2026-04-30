@@ -87,33 +87,34 @@ func TestMultiDimCompat2D(t *testing.T) {
 					t.Errorf("image %d ZPlaneFocus(0): got %v, want 0 (nominal)", ii, got)
 				}
 
-				lvl, err := img.Level(0)
-				if err != nil {
-					t.Fatalf("image %d Level(0): %v", ii, err)
-				}
-				// Tile(0,0) and TileAt({X:0,Y:0}) byte-identical.
-				a, errA := lvl.Tile(0, 0)
-				b, errB := lvl.TileAt(opentile.TileCoord{X: 0, Y: 0})
-				if errA != nil || errB != nil {
-					t.Errorf("image %d L0: Tile err=%v, TileAt err=%v", ii, errA, errB)
-					continue
-				}
-				if !bytes.Equal(a, b) {
-					t.Errorf("image %d L0: Tile(0,0) and TileAt({X:0,Y:0}) bytes differ (lengths %d/%d)",
-						ii, len(a), len(b))
-				}
-				// Non-zero Z/C/T on a 2D Image: ErrDimensionUnavailable.
-				_, err = lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, Z: 1})
-				if !errors.Is(err, opentile.ErrDimensionUnavailable) {
-					t.Errorf("image %d TileAt(Z=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, err)
-				}
-				_, err = lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, C: 1})
-				if !errors.Is(err, opentile.ErrDimensionUnavailable) {
-					t.Errorf("image %d TileAt(C=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, err)
-				}
-				_, err = lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, T: 1})
-				if !errors.Is(err, opentile.ErrDimensionUnavailable) {
-					t.Errorf("image %d TileAt(T=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, err)
+				// Exercise every level of the image so the
+				// 2D-delegate Level.TileAt impl is covered for all
+				// concrete level types (OME OneFrame L2+, NDPI
+				// striped, Philips tiled, etc.) — not just L0.
+				for li, lvl := range img.Levels() {
+					a, errA := lvl.Tile(0, 0)
+					b, errB := lvl.TileAt(opentile.TileCoord{X: 0, Y: 0})
+					if errA != nil || errB != nil {
+						t.Errorf("image %d L%d: Tile err=%v, TileAt err=%v", ii, li, errA, errB)
+						continue
+					}
+					if !bytes.Equal(a, b) {
+						t.Errorf("image %d L%d: Tile(0,0) and TileAt({X:0,Y:0}) bytes differ (lengths %d/%d)",
+							ii, li, len(a), len(b))
+					}
+					// Non-zero Z/C/T on a 2D Image: ErrDimensionUnavailable.
+					_, err := lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, Z: 1})
+					if !errors.Is(err, opentile.ErrDimensionUnavailable) {
+						t.Errorf("image %d L%d TileAt(Z=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, li, err)
+					}
+					_, err = lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, C: 1})
+					if !errors.Is(err, opentile.ErrDimensionUnavailable) {
+						t.Errorf("image %d L%d TileAt(C=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, li, err)
+					}
+					_, err = lvl.TileAt(opentile.TileCoord{X: 0, Y: 0, T: 1})
+					if !errors.Is(err, opentile.ErrDimensionUnavailable) {
+						t.Errorf("image %d L%d TileAt(T=1): got %v, want errors.Is(ErrDimensionUnavailable)", ii, li, err)
+					}
 				}
 			}
 		})
