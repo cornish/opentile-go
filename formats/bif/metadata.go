@@ -38,10 +38,26 @@ type Metadata struct {
 	ScanWhitePoint        uint8
 	ScanWhitePointPresent bool
 
-	// ZLayers is `<iScan>/@Z-layers`. v0.7 only surfaces in-focus
-	// tiles even when ZLayers > 1; the value is exposed so consumers
-	// can detect volumetric slides and look elsewhere if needed.
+	// ZLayers is `<iScan>/@Z-layers`. As of v0.7 multi-dim closeout,
+	// volumetric BIF slides expose every Z plane via the public
+	// Image.SizeZ() / Level.TileAt(coord{Z: ...}) API; this field is
+	// kept on the format-specific metadata for parity with the XMP
+	// attribute name. Should equal the level-0 IFD's IMAGE_DEPTH tag.
 	ZLayers int
+
+	// ZSpacing is `<iScan>/@Z-spacing` in microns per focal plane
+	// step. 0 if absent. Used by computeZPlaneFocusTable to translate
+	// Z storage indices to physical focal offsets exposed via
+	// Image.ZPlaneFocus(z).
+	ZSpacing float64
+
+	// ZPlaneFoci is the per-Z focal offset (microns from nominal),
+	// matching what Image.ZPlaneFocus(z) returns. Index 0 is always
+	// the nominal plane (offset 0). Length == SizeZ() (= 1 on
+	// non-volumetric slides). Convenience: callers wanting to walk
+	// the entire stack can range over this slice instead of looping
+	// 0..SizeZ-1 + calling ZPlaneFocus.
+	ZPlaneFoci []float64
 
 	// ImageDescription mirrors the level-0 IFD's ImageDescription
 	// tag verbatim (e.g., "level=0 mag=40 quality=95"). Useful for
@@ -118,6 +134,7 @@ func (t *Tiler) metadata() *Metadata {
 		md.ScanWhitePoint = t.iscan.ScanWhitePoint
 		md.ScanWhitePointPresent = t.iscan.ScanWhitePointPresent
 		md.ZLayers = t.iscan.ZLayers
+		md.ZSpacing = t.iscan.ZSpacing
 		md.AOIs = append([]bifxml.AOI(nil), t.iscan.AOIs...)
 
 		// ScannerManufacturer: every iScan-tagged slide is from
@@ -155,6 +172,13 @@ func (t *Tiler) metadata() *Metadata {
 	if t.encodeInfo != nil {
 		md.EncodeInfoVer = t.encodeInfo.Ver
 		md.AOIOrigins = append([]bifxml.AoiOrigin(nil), t.encodeInfo.AoiOrigins...)
+	}
+
+	// ZPlaneFoci mirrors the bifImage's per-Z focal offset table
+	// — the same data Image.ZPlaneFocus(z) reads. Always at least
+	// length 1 (Z=0 nominal at offset 0) on every slide.
+	if t.image != nil {
+		md.ZPlaneFoci = append([]float64(nil), t.image.zPlaneFocus...)
 	}
 
 	t.cachedMetadata = md

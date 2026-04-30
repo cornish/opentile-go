@@ -123,6 +123,66 @@ func (nonBIFTiler) Close() error                          { return nil }
 // TestMetadataIsCachedNotRecomputed: two consecutive Metadata calls
 // return equal common-field structs; MetadataOf returns the same
 // pointer.
+// TestMetadataMultiZFields covers the v0.7 multi-dim closeout:
+// ZSpacing + ZPlaneFoci on bif.Metadata mirror the format-specific
+// XMP attribute and bifImage.zPlaneFocus respectively.
+func TestMetadataMultiZFields(t *testing.T) {
+	const tw, th = 32, 32
+	xmp := []byte(`<iScan ScannerModel="VENTANA DP 200" ScanRes="0.25" Z-layers="3" Z-spacing="1.5"/>`)
+	data := buildBIFLikeBigTIFF(t, []iFDSpec{
+		{xmp: xmp, description: "Label_Image"},
+		{
+			description: "level=0 mag=40 quality=95",
+			imageWidth:  tw, imageLength: th, tileWidth: tw, tileLength: th,
+			imageDepth: 3,
+		},
+	})
+	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	tiler, err := New().Open(f, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	bm, ok := MetadataOf(tiler)
+	if !ok {
+		t.Fatal("MetadataOf: not BIF tiler")
+	}
+	if bm.ZLayers != 3 {
+		t.Errorf("ZLayers: got %d, want 3", bm.ZLayers)
+	}
+	if bm.ZSpacing != 1.5 {
+		t.Errorf("ZSpacing: got %v, want 1.5", bm.ZSpacing)
+	}
+	wantFoci := []float64{0, -1.5, +1.5}
+	if len(bm.ZPlaneFoci) != len(wantFoci) {
+		t.Fatalf("ZPlaneFoci len: got %d, want %d", len(bm.ZPlaneFoci), len(wantFoci))
+	}
+	for i, want := range wantFoci {
+		if bm.ZPlaneFoci[i] != want {
+			t.Errorf("ZPlaneFoci[%d]: got %v, want %v", i, bm.ZPlaneFoci[i], want)
+		}
+	}
+}
+
+// TestMetadataSingleZFields: non-volumetric slide reports ZLayers=1,
+// ZSpacing=0, ZPlaneFoci=[0] — the single-element table for Z=0
+// nominal.
+func TestMetadataSingleZFields(t *testing.T) {
+	xmp := []byte(`<iScan ScannerModel="VENTANA DP 200"/>`)
+	data := buildBIFLikeBigTIFF(t, []iFDSpec{
+		{xmp: xmp, description: "Label_Image"},
+		{description: "level=0 mag=40 quality=95", imageWidth: 64, imageLength: 64, tileWidth: 64, tileLength: 64},
+	})
+	f, _ := tiff.Open(bytes.NewReader(data), int64(len(data)))
+	tiler, _ := New().Open(f, nil)
+	bm, _ := MetadataOf(tiler)
+	if len(bm.ZPlaneFoci) != 1 {
+		t.Errorf("ZPlaneFoci len: got %d, want 1 (Z=0 nominal only)", len(bm.ZPlaneFoci))
+	}
+	if len(bm.ZPlaneFoci) > 0 && bm.ZPlaneFoci[0] != 0 {
+		t.Errorf("ZPlaneFoci[0]: got %v, want 0 (nominal)", bm.ZPlaneFoci[0])
+	}
+}
+
 func TestMetadataIsCached(t *testing.T) {
 	xmp := []byte(`<iScan ScannerModel="VENTANA DP 200"/>`)
 	data := buildBIFLikeBigTIFF(t, []iFDSpec{
