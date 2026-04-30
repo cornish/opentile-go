@@ -190,6 +190,7 @@ opentile-go aims for byte-parity with Python opentile 0.20.0. A small number of 
 | Probability map exposed as `kind="probability"` | BIF | v0.7 | iterate `Associated()` and skip the kind | Upstream doesn't read BIF; openslide drops the probability map. We surface it for downstream tools that want it. |
 | `Level.TileOverlap() image.Point` interface evolution | BIF + all | v0.7 | non-BIF formats return `image.Point{}` (zero) — no caller change needed | BIF level-0 stores tiles with horizontal overlap; consumer needs the value to position raw tile bytes correctly. |
 | Non-strict `ScannerModel` acceptance | BIF | v0.7 | not opt-out-able | The BIF spec mandates rejecting any slide whose `ScannerModel != "VENTANA DP 200"`; we accept any iScan-tagged BigTIFF and route via `HasPrefix("VENTANA DP")` so legacy iScan slides aren't worse-than-openslide. |
+| Multi-dimensional WSI API addition (`TileCoord` + `Level.TileAt` + `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`) | All formats | v0.7 | additive — 2D-only formats inherit `SingleImage` defaults | Modern WSI consumers (fluorescence, focal-plane viewers, time series) need explicit multi-dim addressing. BIF reads multi-Z natively; OME surfaces dimensions honestly + defers `TileAt(z != 0)` to a future format-package milestone. |
 
 Full reasoning + per-deviation commit references are in [`docs/deferred.md`](./docs/deferred.md).
 

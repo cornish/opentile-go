@@ -12,8 +12,11 @@ upstream references, and retirement audit per milestone.
 ## [Unreleased]
 
 Active limitations after v0.7: L4, L5, L14 (Permanent — carried over
-from v0.6) plus L19, L20, L21 (v0.7 work items deferred to v0.8+;
-see `docs/deferred.md` §2). Open work parked in tracked issues:
+from v0.6) plus L19, L20 (v0.7 work items deferred to v0.8+; see
+`docs/deferred.md` §2). L21 (volumetric Z-stacks) was retired by the
+v0.7 multi-dim closeout — BIF reads multi-Z natively; OME surfaces
+honest dimensions and defers `TileAt(z != 0)` to a future format-
+package milestone. Open work parked in tracked issues:
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
   SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
@@ -75,13 +78,53 @@ path + **committed sample-tile SHA256 hashes** for both fixtures via
   (infrastructure-only in v0.7, `t.Skip`'d for v0.8 follow-up).
 - Sampled-tile fixtures for both BIF fixtures. `TestSlideParity` now
   passes 16/16 slides (5 SVS + 3 NDPI + 4 Philips + 2 OME + 2 BIF).
+- **Multi-dimensional addressing** —
+  `Level.TileAt(TileCoord{X, Y, Z, C, T})` plus
+  `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`. Additive;
+  2D formats inherit `SingleImage` defaults (`SizeZ/SizeC/SizeT == 1`)
+  and `Tile(x, y) == TileAt(TileCoord{X: x, Y: y})` byte-identically.
+  New `ErrDimensionUnavailable` sentinel discriminates "axis absent"
+  (`SizeZ == 1` + `Z != 0`) from "axis index past size"
+  (`ErrTileOutOfBounds`).
+- **BIF multi-Z reading** via the `IMAGE_DEPTH` (32997) tag. BIF
+  level 0 with `imageDepth > 1` exposes nominal + near + far focus
+  planes through `TileAt(TileCoord{Z: z})`; `Image.ZPlaneFocus(z)`
+  returns the per-plane Z-spacing offset (Z=0 nominal, Z=1..nNear
+  near = negative offsets, Z=nNear+1..N-1 far = positive offsets)
+  parsed from `<iScan>/@Z-spacing`. Synthetic fixture coverage in
+  `formats/bif/multiz_test.go`; no real volumetric BIF in
+  `sample_files/`.
+- **OME-TIFF honest dimension reporting** — `Image.SizeZ/SizeC/SizeT`
+  reflect `<Pixels SizeZ/SizeT>` and `<Channel>` element count
+  (intentionally NOT `<Pixels SizeC>`, which describes per-pixel
+  RGB sample count rather than separately-stored channels). Both
+  Leica fixtures still report `SizeZ/SizeC/SizeT == 1`.
+  `Level.TileAt(TileCoord{Z != 0})` returns
+  `ErrDimensionUnavailable` until the per-IFD reader lands as a
+  separate format-package milestone (sketched in
+  `docs/formats/ome.md`).
 
 ### Changed
 
-- **`Level` interface** gains `TileOverlap() image.Point` —
-  additive evolution; existing concrete level types grow
-  zero-returning impls. No caller change required for non-BIF
+- **`Level` interface** gains `TileOverlap() image.Point` and
+  `TileAt(TileCoord) ([]byte, error)` — additive evolution;
+  existing concrete level types grow zero-returning /
+  delegate-to-`Tile` impls. No caller change required for non-BIF
   formats.
+- **`Image` interface** gains `SizeZ/SizeC/SizeT/ChannelName/
+  ZPlaneFocus` — additive evolution; `SingleImage` provides
+  defaults so 2D formats compile without changes.
+
+### Deviations from upstream Python opentile
+
+One new deliberate divergence (see
+[`docs/deferred.md` §1a](docs/deferred.md) for full reasoning):
+
+- **Multi-dimensional WSI API addition** — `TileCoord` +
+  `Level.TileAt` + `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`.
+  Additive across all formats. Modern WSI consumers (fluorescence,
+  focal-plane viewers, time series) need explicit multi-dim
+  addressing; upstream Python opentile is 2D-only.
 
 ### Deferred (v0.8+)
 
@@ -90,8 +133,17 @@ path + **committed sample-tile SHA256 hashes** for both fixtures via
   opentile-go's padded TIFF grid and openslide's AOI-hull view).
 - **L20** — DP 600 (and other future "VENTANA DP *") behavioural
   variance — unverified without a fixture.
-- **L21** — Volumetric Z-stacks. v0.7 reads only the nominal focus
-  plane; `IMAGE_DEPTH` is metadata-only.
+
+### Retired (mid-v0.7)
+
+- **L21** — Volumetric Z-stacks. The v0.7 multi-dim closeout
+  introduced cross-format multi-dim addressing; BIF now reads
+  the entire `IMAGE_DEPTH` Z-stack natively (Z=0 nominal + nNear
+  near planes + nFar far planes). OME surfaces honest dimensions
+  via `Image.SizeZ/SizeC/SizeT` and defers `TileAt(z != 0)` to a
+  future format-package milestone — that work is not L21; it's
+  a fresh OME-package work item gated on a real multi-Z OME
+  fixture surfacing.
 
 ### Notes
 
