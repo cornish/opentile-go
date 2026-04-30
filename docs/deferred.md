@@ -189,6 +189,28 @@ README.md and per-format docs link here.
 - **Tracking:** see [`docs/formats/bif.md`](formats/bif.md); spec §4
   of the v0.7 design doc.
 
+### Multi-dimensional WSI API addition (since v0.7)
+
+- **Upstream:** Python opentile is 2D-only. Each format's pyramid is
+  exposed as a flat list of levels with no Z/C/T axis support.
+- **opentile-go:** adds cross-format multi-dim addressing —
+  `Level.TileAt(TileCoord)` plus
+  `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`. Backward
+  compatible: 2D-only formats (SVS / NDPI / Philips) inherit defaults
+  from `SingleImage` (returning 1 / 1 / 1 / "" / 0); BIF surfaces
+  `IMAGE_DEPTH`-driven multi-Z reads via the new API; OME honestly
+  reports `<Pixels SizeZ/SizeC/SizeT>` dimension counts and rejects
+  `TileAt(z != 0)` with `ErrDimensionUnavailable` until the per-IFD
+  multi-Z reader lands as a separate format-package milestone.
+- **Reason:** modern WSI consumers — fluorescence imaging, focal-
+  plane viewers, time-series microscopy — need explicit multi-dim
+  addressing. Designed cross-format-extensible so OME multi-Z,
+  fluorescence, and time-series support land additively without
+  re-shaping the API. Q1–Q6 sign-off captured in spec §13 of the
+  multi-dim design doc.
+- **Tracking:** see [`docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md`](superpowers/specs/2026-04-29-opentile-go-multidim-design.md)
+  + [`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`](superpowers/plans/2026-04-29-opentile-go-multidim.md).
+
 ---
 
 ## 2. Active limitations (open after v0.3)
@@ -260,14 +282,14 @@ completeness milestone). Items closed during v0.3 are listed in §5.
   default, varying overlap distribution, new XMP attributes), it'll
   be a deviation to fold into §1a above.
 
-### L21 — BIF: volumetric Z-stacks deferred to v0.8+ (since v0.7)
-- **Source:** v0.7 design spec §10
-- **Severity:** v0.8+ — feature gap. v0.7 surfaces only the nominal
-  focus plane (first M×N tiles per IFD per BIF whitepaper §"Whole
-  slide imaging process") even when `IMAGE_DEPTH > 1`. Multi-plane
-  exposure would require a new `Z` axis on the `Image` interface or
-  a per-plane Image enumeration; defer until a real Z-stack consumer
-  surfaces.
+~~### L21 — BIF: volumetric Z-stacks deferred to v0.8+ (since v0.7)~~
+**Closed in v0.7 multi-dim closeout (2026-04-29).** Volumetric BIF
+slides now expose every focal plane via the new public
+`Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})` API — see the
+multi-dim deviation in §1a + the multi-dim retirement subsection
+of §8a below. Synthetic-fixture coverage only (no real volumetric
+BIF in `sample_files/`). The work was executed sequentially on
+2026-04-29 across 19 plan tasks.
 
 ---
 
@@ -464,8 +486,13 @@ spans `b2e7f53..f602b20` (30 commits across Batches A through F).
 
 **Active limitations (L-prefix):**
 
-None. v0.7 added L19 / L20 / L21 (openslide pixel-parity gap, DP 600
-unverified, Z-stacks deferred) but resolved no prior limitations.
+- **L21** — BIF volumetric Z-stacks. **Closed in v0.7 multi-dim
+  closeout (2026-04-29).** Multi-Z BIF reads now exposed via
+  `Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})` — see the
+  multi-dim retirement subsection below.
+
+Carried forward to v0.8+: L19 (openslide pixel-parity gap,
+infrastructure-only), L20 (DP 600 unverified — fixture-dependent).
 
 **Mid-task discoveries (where execution surfaced design surprises):**
 
@@ -510,6 +537,83 @@ unverified, Z-stacks deferred) but resolved no prior limitations.
   typo (T1), an OME-XMP→BIF-XMP typo in the T4 outcome paragraph,
   and an over-prescriptive sentence in T5. Useful but not
   load-bearing.
+
+### v0.7 multi-dim closeout (2026-04-29)
+
+After the initial v0.7 BIF milestone landed (commits
+`b2e7f53..f602b20`), the user grew v0.7's scope to cover
+cross-format multi-dimensional WSI abstractions — driven by L21
+(BIF Z-stacks) plus the forward-looking goal of supporting OME
+multi-Z, fluorescence, and time-series WSI without re-shaping the
+public API again.
+
+Design + plan: `docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md` +
+`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`. 19
+plan tasks across 5 batches, executed sequentially.
+
+**Active limitations closed:**
+
+- **L21** — BIF volumetric Z-stacks. Multi-Z BIF reads now exposed
+  via `Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})`.
+  Synthetic-fixture coverage (no real volumetric BIF in
+  `sample_files/`).
+
+**API additions (cross-format infrastructure):**
+
+- `TileCoord{X, Y, Z, C, T}` struct + `ErrDimensionUnavailable`
+  error sentinel.
+- `Level.TileAt(TileCoord) ([]byte, error)` on the `Level`
+  interface — additive; existing `Tile(x, y)` unchanged.
+- `Image.SizeZ() / SizeC() / SizeT() / ChannelName(c) /
+  ZPlaneFocus(z)` on the `Image` interface — additive; defaults
+  on `SingleImage` return 1 / 1 / 1 / "" / 0.
+- `bif.Metadata.ZSpacing + ZPlaneFoci` for format-specific
+  consumers reaching through `bif.MetadataOf(tiler)`.
+
+**Format-specific additions:**
+
+- BIF: per-IFD `IMAGE_DEPTH` (32997) read at construction; tile
+  array stride `Z * (cols*rows) + serpIdx`; `<iScan>/@Z-spacing`
+  drives `ZPlaneFocus(z)` per BIF whitepaper §"Whole slide imaging
+  process" layout (Z=0 nominal, Z=1..nNear near focus,
+  Z=nNear+1..N-1 far focus).
+- OME: honest `<Pixels SizeZ/SizeT>` reporting; `<Channel>` element
+  count discriminates `SizeC()` from `<Pixels SizeC>` (= per-pixel
+  RGB sample count, not separately-stored channels — both Leica
+  fixtures correctly report `SizeC() == 1`).
+
+**Mid-task discoveries:**
+
+- T2 surfaced the `<Pixels SizeC>` vs `<Channel>`-count
+  discrimination question. Without it, every brightfield OME
+  fixture would have been misreported as 3-channel
+  multi-fluorescence.
+- T4 + T8: Distinguishing `ErrDimensionUnavailable` (axis doesn't
+  exist on this slide) vs `ErrTileOutOfBounds` (axis exists but
+  index past size) caught a subtle BIF check that initially
+  returned the wrong sentinel for `imageDepth=1` + `Z=1`.
+- T12: existing `formats/ome/metadata_test.go` golden assertions
+  needed updates because the parser previously dropped
+  SizeZ/C/T silently — exposing them honestly was a behavioural
+  change at the test surface.
+
+**OME deferral (carried forward):**
+
+- Multi-Z OME `TileAt(z != 0)` returns `ErrDimensionUnavailable`
+  until the per-IFD reader lands. The dimensions are surfaced
+  honestly so consumers can detect multi-Z OMEs and gracefully
+  fall back. Implementation strategy documented in
+  `docs/formats/ome.md`'s "Future implementation strategy"
+  subsection.
+
+**Test fixtures:**
+
+All 16 existing 2D fixtures pass `TestMultiDimCompat2D` (Tile and
+TileAt byte-identical at level-0 (0,0); SizeZ/C/T == 1; non-zero
+Z/C/T returns `ErrDimensionUnavailable`). BIF multi-Z synthetic
+fixtures cover 1, 3, 5 plane stacks plus edge cases (depth=0/1,
+depth=4 even, zero spacing). 11 multi-Z-specific tests in
+`formats/bif/multiz_test.go`.
 
 ---
 
