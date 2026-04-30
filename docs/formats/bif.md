@@ -35,15 +35,15 @@ The two fixtures are deliberately complementary — one tests the spec-compliant
 | Thumbnail exposure (legacy only) | ✅ | `AssociatedImage.Kind() == "thumbnail"` (single-tile JPEG) |
 | Label / overview exposure (every fixture) | ✅ | `AssociatedImage.Kind() == "overview"`. Ventana-1: multi-strip uncompressed RGB. OS-1: single-tile JPEG |
 | ICC profile passthrough | ✅ | `Tiler.ICCProfile()` returns level-0 IFD's tag 34675 (Ventana-1 has 1.8 MB; OS-1 has tag-with-zero-bytes → returns nil) |
-| Generation-aware metadata via `bif.MetadataOf` | ✅ | Generation, ScanRes, ScanWhitePoint+Present, ZLayers, AOIs, AOIOrigins, EncodeInfoVer |
+| Generation-aware metadata via `bif.MetadataOf` | ✅ | Generation, ScanRes, ScanWhitePoint+Present, ZLayers, ZSpacing, ZPlaneFoci, AOIs, AOIOrigins, EncodeInfoVer |
 | EncodeInfo Ver < 2 rejection | ✅ | spec mandates Ver≥2; `bifxml.ParseEncodeInfo` enforces; `Open` propagates the error |
 | Defensive Direction value tolerance | ✅ | All 4 spec values + any unknown string passes through verbatim into `bifxml.TileJoint.Direction` (no enum validation, unlike openslide) |
+| Volumetric Z-stack reading (since v0.7 multi-dim closeout) | ✅ | `IMAGE_DEPTH` (tag 32997) drives `Image.SizeZ()`; per-Z tile data read via `Level.TileAt(TileCoord{Z, X, Y})` with stride `Z * (cols*rows) + serpIdx` per BIF whitepaper §"Whole slide imaging process" storage layout. `<iScan>/@Z-spacing` drives `Image.ZPlaneFocus(z)`: Z=0 nominal, Z=1..nNear near focus, Z=nNear+1..N-1 far focus. Synthetic-fixture coverage only — both real fixtures have IMAGE_DEPTH=1 (verified via the multi-dim T1 gate) |
 
 ## What's not supported
 
 | Capability | Status | Why |
 |---|---|---|
-| Volumetric Z-stacks | ❌ — defer to v0.8+ | v0.7 surfaces only the nominal focus plane (first M×N tiles per IFD per spec §"Whole slide imaging process"). `IMAGE_DEPTH` (tag 32997) is read into metadata but not interpreted. Tracked as L21 |
 | openslide pixel-equivalence | ⚠️ — infrastructure-only in v0.7 | The runner / session / protocol are in `tests/oracle/openslide_*` but the assertion is gated. Resolution depends on whether opentile-go's padded-grid view or openslide's AOI-hull view is the right one to expose. Tracked as L19 |
 | DP 600 verification | ⚠️ — schedule-driven | The `HasPrefix("VENTANA DP")` rule lands DP 600 on the spec-compliant path; behavioural variance from DP 200 is unverified without a fixture. Tracked as L20 |
 | AOI-cropped Tile variant | ❌ — not designed yet | opentile-go's `Tile(col, row)` references the padded TIFF grid; an AOI-cropped variant would expose openslide's view. v0.8 work item |
@@ -74,13 +74,15 @@ Upstream Python opentile doesn't read BIF, so every v0.7 behaviour is technicall
 ## Implementation references
 
 - Our package: `formats/bif/`
-- Public API: `bif.New() opentile.FormatFactory` + the existing `Tiler` / `Image` / `Level` / `AssociatedImage` interfaces; new `Level.TileOverlap()` method.
-- Our metadata accessor: `bif.MetadataOf(opentile.Tiler) (*Metadata, bool)`.
+- Public API: `bif.New() opentile.FormatFactory` + the existing `Tiler` / `Image` / `Level` / `AssociatedImage` interfaces; v0.7 additions: `Level.TileOverlap()`, `Level.TileAt(TileCoord)`, `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`.
+- Our metadata accessor: `bif.MetadataOf(opentile.Tiler) (*Metadata, bool)` — exposes `ZSpacing` and `ZPlaneFoci` for multi-Z slides in addition to the v0.7-base fields.
 - BIF XMP walker: `internal/bifxml/`.
 - Blank-tile generator (empty-tile fill): `formats/bif/blanktile.go`.
 - Spec: [BIF whitepaper](https://www.roche.com/) v1.0, 2020, MC--06058 1120. Local copy at `sample_files/ventana-bif/Roche-Digital-Pathology-BIF-Whitepaper.pdf`.
-- v0.7 design: [`docs/superpowers/specs/2026-04-27-opentile-go-v07-design.md`](../superpowers/specs/2026-04-27-opentile-go-v07-design.md).
-- v0.7 plan: [`docs/superpowers/plans/2026-04-27-opentile-go-v07.md`](../superpowers/plans/2026-04-27-opentile-go-v07.md).
+- v0.7 BIF design: [`docs/superpowers/specs/2026-04-27-opentile-go-v07-design.md`](../superpowers/specs/2026-04-27-opentile-go-v07-design.md).
+- v0.7 BIF plan: [`docs/superpowers/plans/2026-04-27-opentile-go-v07.md`](../superpowers/plans/2026-04-27-opentile-go-v07.md).
+- v0.7 multi-dim closeout design: [`docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md`](../superpowers/specs/2026-04-29-opentile-go-multidim-design.md).
+- v0.7 multi-dim closeout plan: [`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`](../superpowers/plans/2026-04-29-opentile-go-multidim.md).
 - Research notes (whitepaper digest, fixture probes, openslide-source extraction): [`docs/superpowers/notes/2026-04-27-bif-research.md`](../superpowers/notes/2026-04-27-bif-research.md).
 - openslide reader (LGPL 2.1, read-for-understanding only): [`openslide/openslide`](https://github.com/openslide/openslide) — `src/openslide-vendor-ventana.c`.
 
