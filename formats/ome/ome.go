@@ -117,11 +117,25 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		if err != nil {
 			return nil, fmt.Errorf("ome: image %d: %w", omeIdx, err)
 		}
+		omeImg := md.Images[omeIdx]
+		// SizeC discriminator (per T2 gate outcome): use the count of
+		// <Channel> elements, NOT <Pixels SizeC>. <Pixels SizeC>
+		// describes per-pixel sample count (3 on RGB brightfield);
+		// <Channel> count describes separately-stored channels (1 on
+		// brightfield; > 1 only on fluorescence).
+		sizeC := omeImg.Channels
+		if sizeC < 1 {
+			sizeC = 1
+		}
 		images = append(images, &pyramidImage{
-			index:  k,
-			name:   md.Images[omeIdx].Name,
-			levels: levels,
-			mpp:    baseMPP,
+			index:        k,
+			name:         omeImg.Name,
+			levels:       levels,
+			mpp:          baseMPP,
+			sizeZ:        omeImg.SizeZ,
+			sizeC:        sizeC,
+			sizeT:        omeImg.SizeT,
+			channelNames: append([]string(nil), omeImg.ChannelNames...),
 		})
 	}
 

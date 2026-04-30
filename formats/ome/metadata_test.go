@@ -36,8 +36,8 @@ func TestParseOMEMetadataLeica1(t *testing.T) {
 		t.Fatalf("Images: got %d, want 2", len(md.Images))
 	}
 	want := []OMEImage{
-		{Name: "macro", PhysicalSizeX: 16.438446163366336, PhysicalSizeY: 16.438446015424162, PhysicalSizeXUnit: "µm", PhysicalSizeYUnit: "µm", SizeX: 1616, SizeY: 4668, Type: "uint8"},
-		{Name: "", PhysicalSizeX: 0.5, PhysicalSizeY: 0.5, PhysicalSizeXUnit: "µm", PhysicalSizeYUnit: "µm", SizeX: 36832, SizeY: 38432, Type: "uint8"},
+		{Name: "macro", PhysicalSizeX: 16.438446163366336, PhysicalSizeY: 16.438446015424162, PhysicalSizeXUnit: "µm", PhysicalSizeYUnit: "µm", SizeX: 1616, SizeY: 4668, SizeZ: 1, SizeC: 3, SizeT: 1, ChannelNames: []string{}, Type: "uint8"},
+		{Name: "", PhysicalSizeX: 0.5, PhysicalSizeY: 0.5, PhysicalSizeXUnit: "µm", PhysicalSizeYUnit: "µm", SizeX: 36832, SizeY: 38432, SizeZ: 1, SizeC: 3, SizeT: 1, ChannelNames: []string{}, Type: "uint8"},
 	}
 	if !reflect.DeepEqual(md.Images, want) {
 		t.Errorf("Images mismatch:\n  got  %+v\n  want %+v", md.Images, want)
