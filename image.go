@@ -33,8 +33,21 @@ type Level interface {
 	FocalPlane() float64
 
 	// Tile returns the raw compressed tile bytes at (x, y) as stored in the
-	// source TIFF.
+	// source TIFF. Equivalent to TileAt(TileCoord{X: x, Y: y}) — the
+	// nominal-plane / first-channel / T=0 tile.
 	Tile(x, y int) ([]byte, error)
+
+	// TileAt returns the raw compressed tile bytes at the multi-dimensional
+	// coord. Tile(x, y) is shorthand for TileAt(TileCoord{X: x, Y: y}).
+	//
+	// For 2D-only Levels (the parent Image's SizeZ/SizeC/SizeT all == 1),
+	// any non-zero Z, C, or T value yields *TileError wrapping
+	// ErrDimensionUnavailable. For multi-dim Levels (BIF level-0 with
+	// IMAGE_DEPTH > 1; future OME multi-Z), the multi-dim coord is
+	// resolved by the format's reader.
+	//
+	// Added in v0.7 alongside TileCoord and the Image dimension accessors.
+	TileAt(coord TileCoord) ([]byte, error)
 
 	// TileReader returns a streaming reader for the tile at (x, y). Callers
 	// should Close the returned ReadCloser.
@@ -42,6 +55,8 @@ type Level interface {
 
 	// Tiles iterates every tile position in row-major order. Callers that need
 	// parallelism goroutine on top of Tile(x, y); Tiles itself is serial.
+	// Z=C=T=0 only — multi-dim iteration is consumer-driven via nested
+	// loops over Image.SizeZ/SizeC/SizeT.
 	Tiles(ctx context.Context) iter.Seq2[TilePos, TileResult]
 }
 

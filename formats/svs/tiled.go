@@ -157,6 +157,16 @@ func (l *tiledImage) indexOf(x, y int) (int, error) {
 // Tile() splices tables[2:-2] and an Adobe APP14 RGB colorspace marker
 // before SOS so the returned bytes decode as a self-contained JPEG. The
 // output matches Python opentile's SvsTiledImage.get_tile byte-for-byte.
+// TileAt is the multi-dim entry point. SVS is 2D-only, so any
+// non-zero Z, C, or T yields ErrDimensionUnavailable; otherwise
+// delegates to Tile(x, y).
+func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
+
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	idx, err := l.indexOf(x, y)
 	if err != nil {

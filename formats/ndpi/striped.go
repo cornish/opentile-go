@@ -130,6 +130,14 @@ func (l *stripedImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *stripedImage) FocalPlane() float64               { return 0 }
 func (l *stripedImage) TileOverlap() image.Point          { return image.Point{} }
 
+// TileAt is the multi-dim entry point. NDPI is 2D-only.
+func (l *stripedImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
+
 func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}

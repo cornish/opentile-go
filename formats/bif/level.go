@@ -201,6 +201,18 @@ func (l *levelImpl) indexOf(col, row int) (int, error) {
 	return idx, nil
 }
 
+// TileAt is the multi-dim entry point. v0.7 BIF supports Z-stacks
+// (IMAGE_DEPTH-driven multi-Z) but no fluorescence (C) or time-
+// series (T). T8 will replace this delegating impl with the real
+// Z-aware version that does offsets[Z*M*N + serpIdx]; for now this
+// is a 2D delegate so the codebase compiles after T5.
+func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
+
 // Tile returns the compressed tile bytes at (col, row) in
 // image-space — a standalone valid JPEG (or, for theoretical
 // non-JPEG BIF dialects, the raw codestream). Internally remapped
