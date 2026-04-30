@@ -38,6 +38,18 @@ var (
 	// NDPI tile size to 512 rather than erroring. Predefined so exporting
 	// it later is not a breaking change.
 	ErrTileSizeRequired = errors.New("opentile: tile size not representable for this format")
+
+	// ErrDimensionUnavailable is returned (wrapped in TileError) when a
+	// caller asks for a non-zero Z, C, or T axis on a TileCoord but the
+	// underlying Image's SizeZ/SizeC/SizeT is 1 (the format / slide
+	// doesn't carry that dimension at all). Distinct from
+	// ErrTileOutOfBounds: that error means "this axis exists but the
+	// requested index is past its size"; this means "the axis itself
+	// doesn't exist on this slide / format / milestone."
+	//
+	// Added in v0.7 alongside Level.TileAt and the multi-dim Image
+	// dimension accessors.
+	ErrDimensionUnavailable = errors.New("opentile: dimension not supported on this format/image")
 )
 
 // TileError wraps a per-tile failure with the (level, x, y) that produced it.

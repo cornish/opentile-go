@@ -1,0 +1,191 @@
+package bif
+
+import (
+	"fmt"
+	"io"
+
+	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/jpeg"
+	"github.com/cornish/opentile-go/internal/tiff"
+)
+
+// associatedImage is the BIF AssociatedImage implementation. BIF
+// associated pages span three layouts across the two fixture
+// generations:
+//
+//	Spec-compliant (Ventana-1):
+//	  IFD 0 — Label_Image,         multi-strip, Compression=NONE   (RGB raw rows)
+//	  IFD 1 — Probability_Image,   multi-strip, Compression=LZW    (grayscale)
+//
+//	Legacy iScan (OS-1):
+//	  IFD 0 — "Label Image",       single-tile JPEG (Compression=JPEG)
+//	  IFD 1 — "Thumbnail",         single-tile JPEG
+//
+// Bytes() handles both layouts. Single-tile JPEG returns the JPEG
+// bytes (with JPEGTables splice if the IFD carries shared tables —
+// rare on associated pages but supported). Multi-strip pages return
+// the concatenated raw stored bytes; Compression() reports the
+// source compression so consumers can decode appropriately.
+//
+// Caveat: multi-strip LZW pages (Ventana-1's probability map) yield
+// a concatenation of independent per-strip LZW streams — not
+// directly decodable as one stream. Consumers needing pixel data
+// should decode each strip separately (boundaries available via the
+// IFD's StripByteCounts tag). This matches BIF's "metadata reader"
+// scope; if a real consumer surfaces, we can add a richer accessor.
+type associatedImage struct {
+	kind        string
+	size        opentile.Size
+	compression opentile.Compression
+
+	// Exactly one set is populated, depending on layout:
+	stripOffsets []uint64
+	stripCounts  []uint64
+	tileOffsets  []uint64
+	tileCounts   []uint64
+
+	jpegTables []byte // tag 347 if present (typically nil on associated pages)
+	reader     io.ReaderAt
+}
+
+func (a *associatedImage) Kind() string                      { return a.kind }
+func (a *associatedImage) Size() opentile.Size               { return a.size }
+func (a *associatedImage) Compression() opentile.Compression { return a.compression }
+
+func (a *associatedImage) Bytes() ([]byte, error) {
+	var buf []byte
+	switch {
+	case len(a.tileOffsets) == 1:
+		// Single-tile path (legacy iScan IFD 0/1).
+		b := make([]byte, a.tileCounts[0])
+		if err := tiff.ReadAtFull(a.reader, b, int64(a.tileOffsets[0])); err != nil {
+			return nil, fmt.Errorf("bif: read associated %s tile: %w", a.kind, err)
+		}
+		buf = b
+
+	case len(a.tileOffsets) > 1:
+		// Multi-tile associated page — not seen in our fixtures.
+		// Defensive: refuse rather than silently returning tile 0.
+		return nil, fmt.Errorf("bif: associated %s has %d tiles; multi-tile not supported on associated pages", a.kind, len(a.tileOffsets))
+
+	case len(a.stripOffsets) == 0:
+		return nil, fmt.Errorf("bif: associated %s has no strips or tiles", a.kind)
+
+	default:
+		// Multi-strip path (spec-compliant IFD 0/1). Concatenate
+		// every strip's raw bytes in order.
+		total := uint64(0)
+		for _, c := range a.stripCounts {
+			total += c
+		}
+		b := make([]byte, total)
+		cursor := uint64(0)
+		for i, off := range a.stripOffsets {
+			n := a.stripCounts[i]
+			if err := tiff.ReadAtFull(a.reader, b[cursor:cursor+n], int64(off)); err != nil {
+				return nil, fmt.Errorf("bif: read associated %s strip %d: %w", a.kind, i, err)
+			}
+			cursor += n
+		}
+		buf = b
+	}
+
+	// JPEGTables splice: only meaningful on JPEG-compressed bytes.
+	// Real BIF associated pages we've seen don't carry tag 347, but
+	// we apply the splice symmetrically with the level path.
+	if a.compression == opentile.CompressionJPEG && len(a.jpegTables) > 0 {
+		out, err := jpeg.InsertTables(buf, a.jpegTables)
+		if err != nil {
+			return nil, fmt.Errorf("bif: splice tables for associated %s: %w", a.kind, err)
+		}
+		return out, nil
+	}
+	return buf, nil
+}
+
+// newAssociatedImage builds the AssociatedImage from a classified
+// IFD. The kind label ("overview" / "probability" / "thumbnail") is
+// supplied by the caller per the IFD-classification table in spec
+// §5.3.
+func newAssociatedImage(kind string, p *tiff.Page, r io.ReaderAt) (*associatedImage, error) {
+	iw, ok := p.ImageWidth()
+	if !ok {
+		return nil, fmt.Errorf("bif: associated %s missing ImageWidth", kind)
+	}
+	il, ok := p.ImageLength()
+	if !ok {
+		return nil, fmt.Errorf("bif: associated %s missing ImageLength", kind)
+	}
+	comp, _ := p.Compression()
+	ocomp := tiffCompressionToOpentile(comp)
+
+	out := &associatedImage{
+		kind:        kind,
+		size:        opentile.Size{W: int(iw), H: int(il)},
+		compression: ocomp,
+		reader:      r,
+	}
+
+	// Tile-based vs strip-based discrimination by tag presence.
+	if _, hasTW := p.TileWidth(); hasTW {
+		toffs, err := p.TileOffsets64()
+		if err != nil {
+			return nil, fmt.Errorf("bif: associated %s TileOffsets: %w", kind, err)
+		}
+		tcnts, err := p.TileByteCounts64()
+		if err != nil {
+			return nil, fmt.Errorf("bif: associated %s TileByteCounts: %w", kind, err)
+		}
+		if len(toffs) != len(tcnts) {
+			return nil, fmt.Errorf("bif: associated %s tile table mismatch: offsets=%d counts=%d", kind, len(toffs), len(tcnts))
+		}
+		out.tileOffsets = toffs
+		out.tileCounts = tcnts
+	} else {
+		soffs, err := p.ScalarArrayU64(tiff.TagStripOffsets)
+		if err != nil {
+			return nil, fmt.Errorf("bif: associated %s StripOffsets: %w", kind, err)
+		}
+		scnts, err := p.ScalarArrayU64(tiff.TagStripByteCounts)
+		if err != nil {
+			return nil, fmt.Errorf("bif: associated %s StripByteCounts: %w", kind, err)
+		}
+		if len(soffs) != len(scnts) {
+			return nil, fmt.Errorf("bif: associated %s strip table mismatch: offsets=%d counts=%d", kind, len(soffs), len(scnts))
+		}
+		out.stripOffsets = soffs
+		out.stripCounts = scnts
+	}
+
+	// JPEGTables (tag 347) — defensive read; rarely populated on
+	// associated pages but follow the same shape as level.go.
+	if ocomp == opentile.CompressionJPEG {
+		if tb, ok := p.JPEGTables(); ok {
+			out.jpegTables = tb
+		}
+	}
+	return out, nil
+}
+
+// kindFromIFDRole maps the layout-classified role to the public
+// AssociatedImage.Kind() string. Per spec §5.3 + opentile-go's
+// existing kind taxonomy:
+//
+//	ifdRoleLabel       → "overview" (matches SVS / NDPI / Philips
+//	                     convention; BIF whitepaper calls it "label")
+//	ifdRoleProbability → "probability" (new in v0.7)
+//	ifdRoleThumbnail   → "thumbnail"
+//
+// Returns an empty string for any other role; the caller skips it.
+func kindFromIFDRole(role ifdRole) string {
+	switch role {
+	case ifdRoleLabel:
+		return "overview"
+	case ifdRoleProbability:
+		return "probability"
+	case ifdRoleThumbnail:
+		return "thumbnail"
+	default:
+		return ""
+	}
+}

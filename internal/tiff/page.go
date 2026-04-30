@@ -22,6 +22,7 @@ const (
 	TagYResolution       uint16 = 283
 	TagResolutionUnit    uint16 = 296
 	TagSoftware          uint16 = 305
+	TagDateTime          uint16 = 306
 	TagTileWidth         uint16 = 322
 	TagTileLength        uint16 = 323
 	TagTileOffsets       uint16 = 324
@@ -29,6 +30,8 @@ const (
 	TagSubIFDs           uint16 = 330
 	TagJPEGTables        uint16 = 347
 	TagYCbCrSubSampling  uint16 = 530
+	TagXMP               uint16 = 700
+	TagImageDepth        uint16 = 32997
 	TagInterColorProfile uint16 = 34675
 )
 
@@ -84,6 +87,16 @@ func (p *Page) Photometric() (uint32, bool)      { return p.scalarU32(TagPhotome
 func (p *Page) SamplesPerPixel() (uint32, bool)  { return p.scalarU32(TagSamplesPerPixel) }
 func (p *Page) BitsPerSample() (uint32, bool)    { return p.scalarU32(TagBitsPerSample) }
 func (p *Page) ResolutionUnit() (uint32, bool)   { return p.scalarU32(TagResolutionUnit) }
+
+// ImageDepth returns the ImageDepth tag (32997, SGI private) used by
+// Ventana BIF to store Z-stack depth, or (1, false) if absent or zero.
+func (p *Page) ImageDepth() (int, bool) {
+	val, ok := p.scalarU32(TagImageDepth)
+	if !ok || val < 1 {
+		return 1, false
+	}
+	return int(val), true
+}
 
 // ASCII returns an ASCII-typed tag's string value (NUL-stripped), or
 // ("", false) if missing.
@@ -141,6 +154,25 @@ func (p *Page) JPEGTables() ([]byte, bool) {
 		return nil, false
 	}
 	// Tables are UNDEFINED bytes; read the payload.
+	if e.fitsInline() {
+		return append([]byte(nil), e.valueBytes[:e.Count]...), true
+	}
+	buf, err := p.br.bytes(int64(e.valueOrOffset), int(e.Count))
+	if err != nil {
+		return nil, false
+	}
+	return buf, true
+}
+
+// XMP returns the XMP packet (tag 700) raw bytes if present, or
+// (nil, false) otherwise. Used by formats whose detection or metadata
+// surface depends on XMP content (Ventana BIF carries `<iScan>` and
+// `<EncodeInfo>` blocks here).
+func (p *Page) XMP() ([]byte, bool) {
+	e, ok := p.ifd.get(TagXMP)
+	if !ok {
+		return nil, false
+	}
 	if e.fitsInline() {
 		return append([]byte(nil), e.valueBytes[:e.Count]...), true
 	}

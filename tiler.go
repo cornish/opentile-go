@@ -8,6 +8,7 @@ const (
 	FormatNDPI    Format = "ndpi"
 	FormatPhilips Format = "philips"
 	FormatOME     Format = "ome"
+	FormatBIF     Format = "bif"
 )
 
 // Tiler is the top-level handle returned by Open. All accessors are

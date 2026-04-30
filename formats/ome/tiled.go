@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"math"
@@ -129,6 +130,7 @@ func (l *tiledImage) Grid() opentile.Size               { return l.grid }
 func (l *tiledImage) Compression() opentile.Compression { return l.compression }
 func (l *tiledImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *tiledImage) FocalPlane() float64               { return 0 }
+func (l *tiledImage) TileOverlap() image.Point          { return image.Point{} }
 
 // Tile returns the JPEG bytes for tile (x, y). Out-of-bounds → wrapped
 // ErrTileOutOfBounds. Zero-length tile entries (which would mean the
@@ -139,6 +141,19 @@ func (l *tiledImage) FocalPlane() float64               { return 0 }
 // the tables tag. Both Leica fixtures do not (verified in T5), so
 // most OME tile reads fall through with the raw bytes; the splice
 // path remains for correctness on OME files that DO carry tables.
+
+// TileAt is the multi-dim entry point. v0.7 OME is 2D-only on the
+// read path even when <Pixels SizeZ/SizeC/SizeT> > 1 — multi-Z
+// TileAt is deferred to a future format-package milestone (per
+// L19 in deferred.md). v0.7's path: surface SizeZ/C/T honestly
+// via Image accessors but error loudly here on non-zero coords.
+func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
+
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}

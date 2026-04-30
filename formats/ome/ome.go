@@ -117,11 +117,25 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		if err != nil {
 			return nil, fmt.Errorf("ome: image %d: %w", omeIdx, err)
 		}
+		omeImg := md.Images[omeIdx]
+		// SizeC discriminator (per T2 gate outcome): use the count of
+		// <Channel> elements, NOT <Pixels SizeC>. <Pixels SizeC>
+		// describes per-pixel sample count (3 on RGB brightfield);
+		// <Channel> count describes separately-stored channels (1 on
+		// brightfield; > 1 only on fluorescence).
+		sizeC := omeImg.Channels
+		if sizeC < 1 {
+			sizeC = 1
+		}
 		images = append(images, &pyramidImage{
-			index:  k,
-			name:   md.Images[omeIdx].Name,
-			levels: levels,
-			mpp:    baseMPP,
+			index:        k,
+			name:         omeImg.Name,
+			levels:       levels,
+			mpp:          baseMPP,
+			sizeZ:        omeImg.SizeZ,
+			sizeC:        sizeC,
+			sizeT:        omeImg.SizeT,
+			channelNames: append([]string(nil), omeImg.ChannelNames...),
 		})
 	}
 
@@ -269,15 +283,28 @@ func buildLevels(
 
 // pyramidImage is the OME-specific opentile.Image implementation.
 // Multi-image files expose multiple instances via Tiler.Images().
+//
+// Multi-dim accessors (added v0.7): every Leica fixture in our suite
+// has SizeZ=SizeC=SizeT=1 (verified via the T2 OME-XML probe). For
+// future multi-Z OME slides, these accessors get populated from
+// <Pixels>/<Channel> in T12; the actual TileAt(z != 0) read path
+// remains deferred (OME multi-Z reading is its own milestone).
 type pyramidImage struct {
 	index  int
 	name   string
 	levels []opentile.Level
 	mpp    opentile.SizeMm
+
+	// Multi-dim dimensions (v0.7). Populated by T12 from
+	// OME-XML <Pixels SizeZ/SizeC/SizeT> + <Channel> element count.
+	// All default to 1 for now (SingleImage-equivalent semantics);
+	// T12 wires real values.
+	sizeZ, sizeC, sizeT int
+	channelNames        []string
 }
 
-func (i *pyramidImage) Index() int     { return i.index }
-func (i *pyramidImage) Name() string   { return i.name }
+func (i *pyramidImage) Index() int           { return i.index }
+func (i *pyramidImage) Name() string         { return i.name }
 func (i *pyramidImage) MPP() opentile.SizeMm { return i.mpp }
 func (i *pyramidImage) Levels() []opentile.Level {
 	out := make([]opentile.Level, len(i.levels))
@@ -289,6 +316,32 @@ func (i *pyramidImage) Level(k int) (opentile.Level, error) {
 		return nil, opentile.ErrLevelOutOfRange
 	}
 	return i.levels[k], nil
+}
+func (i *pyramidImage) SizeZ() int { return max1(i.sizeZ) }
+func (i *pyramidImage) SizeC() int { return max1(i.sizeC) }
+func (i *pyramidImage) SizeT() int { return max1(i.sizeT) }
+func (i *pyramidImage) ChannelName(c int) string {
+	if c < 0 || c >= len(i.channelNames) {
+		return ""
+	}
+	return i.channelNames[c]
+}
+func (i *pyramidImage) ZPlaneFocus(z int) float64 {
+	// OME-XML <Plane PositionZ> exists but isn't parsed in v0.7;
+	// even a multi-Z OME would report 0 for every plane until
+	// the future multi-Z reader lands.
+	return 0
+}
+
+// max1 normalises a possibly-zero count (parser default before
+// T12) to 1 so legacy 2D OME callers get the SingleImage-equivalent
+// answer. Once T12 wires Size{Z,C,T} from the parser, the values
+// will be ≥ 1 by construction and this helper becomes a passthrough.
+func max1(n int) int {
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 // tiler is the OME implementation of opentile.Tiler.

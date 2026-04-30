@@ -256,6 +256,68 @@ func TestPageSubIFDOffsets(t *testing.T) {
 	}
 }
 
+// TestPageImageDepth confirms the ImageDepth accessor (TIFF tag 32997)
+// reads the SGI private tag used by Ventana BIF for Z-stack depth.
+func TestPageImageDepth(t *testing.T) {
+	// Test 1: ImageDepth = 3 → (3, true)
+	buf := new(bytes.Buffer)
+	buf.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0}) // header, first IFD at 8
+
+	const tImageDepth uint16 = 32997
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // 1 entry
+	_ = binary.Write(buf, binary.LittleEndian, tImageDepth)
+	_ = binary.Write(buf, binary.LittleEndian, uint16(DTShort))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1)) // count = 1
+	_ = binary.Write(buf, binary.LittleEndian, uint16(3))
+	_ = binary.Write(buf, binary.LittleEndian, uint16(0)) // padding
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0)) // next IFD
+
+	data := buf.Bytes()
+	f, err := Open(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got, ok := f.Pages()[0].ImageDepth()
+	if !ok {
+		t.Fatal("ImageDepth: expected ok=true")
+	}
+	if got != 3 {
+		t.Errorf("ImageDepth: got %d, want 3", got)
+	}
+
+	// Test 2: Page without the tag → (1, false)
+	data2 := buildPageTIFF(t)
+	f2, _ := Open(bytes.NewReader(data2), int64(len(data2)))
+	got2, ok2 := f2.Pages()[0].ImageDepth()
+	if ok2 {
+		t.Fatal("ImageDepth on missing tag: expected ok=false")
+	}
+	if got2 != 1 {
+		t.Errorf("ImageDepth on missing tag: got %d, want 1", got2)
+	}
+
+	// Test 3: ImageDepth = 0 → (1, false) (treated as missing)
+	buf3 := new(bytes.Buffer)
+	buf3.Write([]byte{'I', 'I', 42, 0, 0x08, 0, 0, 0})
+	_ = binary.Write(buf3, binary.LittleEndian, uint16(1))
+	_ = binary.Write(buf3, binary.LittleEndian, tImageDepth)
+	_ = binary.Write(buf3, binary.LittleEndian, uint16(DTShort))
+	_ = binary.Write(buf3, binary.LittleEndian, uint32(1)) // count = 1
+	_ = binary.Write(buf3, binary.LittleEndian, uint16(0)) // value = 0
+	_ = binary.Write(buf3, binary.LittleEndian, uint16(0)) // padding
+	_ = binary.Write(buf3, binary.LittleEndian, uint32(0)) // next IFD
+
+	data3 := buf3.Bytes()
+	f3, _ := Open(bytes.NewReader(data3), int64(len(data3)))
+	got3, ok3 := f3.Pages()[0].ImageDepth()
+	if ok3 {
+		t.Fatal("ImageDepth with zero value: expected ok=false")
+	}
+	if got3 != 1 {
+		t.Errorf("ImageDepth with zero value: got %d, want 1", got3)
+	}
+}
+
 func TestPageFloat32(t *testing.T) {
 	// Build a minimal TIFF with one FLOAT tag: tag=65421, type=11, count=1,
 	// value (inline) = 20.0 → IEEE 754 bits 0x41A00000.

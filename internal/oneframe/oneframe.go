@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"sync"
@@ -133,6 +134,16 @@ func (l *Image) Grid() opentile.Size               { return l.grid }
 func (l *Image) Compression() opentile.Compression { return l.compression }
 func (l *Image) MPP() opentile.SizeMm              { return l.mpp }
 func (l *Image) FocalPlane() float64               { return 0 }
+func (l *Image) TileOverlap() image.Point          { return image.Point{} }
+
+// TileAt is the multi-dim entry point. NDPI/OME OneFrame levels
+// are 2D-only; non-zero Z/C/T yields ErrDimensionUnavailable.
+func (l *Image) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
 
 // Tile returns the JPEG bytes for the tile at (x, y). Out-of-bounds
 // coordinates yield ErrTileOutOfBounds (wrapped in opentile.TileError).

@@ -73,6 +73,24 @@ func (s *TifffileSession) Tile(imageIdx, levelIdx, x, y int) ([]byte, error) {
 	return s.readBlob()
 }
 
+// TileBIF returns the raw tile bytes at BIF-pyramid level (col, row)
+// in image-space. The Python runner applies the serpentine remap
+// before reading dataoffsets. Pages are sorted by parsed
+// ImageDescription "level=N" — non-pyramid IFDs are excluded.
+//
+// Useful for spec-compliant BIF fixtures (Ventana-1) that don't carry
+// shared JPEGTables: opentile-go's Tile(col, row) returns the same raw
+// bytes verbatim, so byte-equality is the parity bar. Fixtures with
+// shared JPEGTables (OS-1) modify the bytes via jpeg.InsertTables; for
+// those, prefer the openslide oracle (T20) which compares decoded
+// pixels.
+func (s *TifffileSession) TileBIF(levelIdx, col, row int) ([]byte, error) {
+	if _, err := fmt.Fprintf(s.stdin, "tile_bif %d %d %d\n", levelIdx, col, row); err != nil {
+		return nil, fmt.Errorf("tifffile-oracle: send tile_bif request: %w", err)
+	}
+	return s.readBlob()
+}
+
 // Close sends "quit" to the runner and waits for the subprocess to
 // exit.
 func (s *TifffileSession) Close() error {

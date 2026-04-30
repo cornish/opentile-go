@@ -30,7 +30,66 @@ The Open Microscopy Environment's TIFF dialect, written by Bio-Formats and most 
 | Non-uint8 pixel types | ❌ errored | Our fixtures all use uint8. Higher bit-depth and float pixel types are valid OME-XML but beyond opentile-go's tile-passthrough scope |
 | Non-RGB photometric / non-JPEG compression | ❌ errored | The spec allows them; our fixtures don't exercise them |
 | Per-image pyramid for macro/label | ❌ ignored | Macro pages have their own SubIFDs (the macro pyramid). We expose only macro L0 as the AssociatedImage, matching upstream |
-| Multi-Z / multi-T / multi-C OME stacks | ❌ — opentile-go targets 2D pathology slides only |
+| Multi-Z / multi-T / multi-C OME `TileAt(z != 0)` | ⚠️ deferred — half-supported (since v0.7 multi-dim) | `Image.SizeZ()/SizeC()/SizeT()` reflect the OME-XML's `<Pixels SizeZ/SizeT>` + `<Channel>` count (per the T2 gate outcome); but `Level.TileAt(coord{Z != 0, ...})` returns `ErrDimensionUnavailable` because the per-IFD addressing logic isn't wired yet. See "Active limitations" below. |
+
+## Multi-dimensional reading (since v0.7)
+
+opentile-go's v0.7 multi-dim closeout introduced cross-format
+`Level.TileAt(TileCoord)` + `Image.SizeZ/SizeC/SizeT/ChannelName/
+ZPlaneFocus`. OME's read-path implementation is partial:
+
+- **`Image.SizeZ()`** reads `<Pixels SizeZ>` from the OME-XML — every Leica
+  fixture reports `SizeZ() == 1` (no Z-stacks). A multi-Z OME slide
+  would honestly surface `SizeZ() > 1` here.
+- **`Image.SizeC()`** uses **`<Channel>` element count** as the
+  discriminator (NOT `<Pixels SizeC>`). The latter describes
+  per-pixel sample count (3 on RGB brightfield) — the wrong axis.
+  Both Leica fixtures have `<Pixels SizeC=3>` but exactly one
+  `<Channel>` element per `<Image>` → `SizeC() == 1` (single
+  composite RGB channel per tile, the brightfield convention).
+- **`Image.SizeT()`** reads `<Pixels SizeT>`; every Leica fixture is 1.
+- **`Image.ChannelName(c)`** reads each `<Channel Name>` attribute.
+  Every Leica fixture has empty channel names → `ChannelName(0) == ""`.
+- **`Image.ZPlaneFocus(z)`** returns 0 for now (no `<Plane PositionZ>`
+  parsing). When OME multi-Z reading lands, this hooks into the
+  `<Plane>` element's PositionZ attribute.
+- **`Level.TileAt(coord{Z, C, or T != 0})`** returns
+  `ErrDimensionUnavailable` until the per-IFD reader is implemented.
+
+### Future implementation strategy for multi-Z OME `TileAt`
+
+A future format-package milestone implements the actual multi-Z
+`TileAt` read path. The plan, sketched here so the future implementer
+has a reference:
+
+1. **Per-Image IFD ordering.** OME stores each (Z, C, T) plane as
+   its own top-level IFD (or, for SubIFD-pyramid OMEs, as its own
+   SubIFD). The IFD index for a given `(Z, C, T)` tuple is computed
+   from the `<Pixels DimensionOrder>` attribute. The standard
+   orderings are XYZCT / XYZTC / XYCZT / XYCTZ / XYTZC / XYTCZ; for
+   the most common (XYZCT):
+
+   ```
+   ifdIndex = T * (SizeC * SizeZ) + C * SizeZ + Z
+   ```
+
+2. **Resolve via SubIFD chain.** For SubIFD-pyramid OMEs (the
+   common case), the multi-Z planes live as SubIFDs of each
+   pyramid IFD, indexed identically. For top-level-IFD OMEs, walk
+   `tf.Pages()` directly.
+
+3. **`Level.TileAt(coord)`** drops the current
+   `ErrDimensionUnavailable` branch; instead computes the IFD index,
+   resolves the page (existing `tiff.Page.SubIFDOffsets` plumbing
+   from v0.6 makes this cheap), and reads the tile.
+
+4. **`Image.ZPlaneFocus(z)`** parses each `<Plane PositionZ>` from
+   the OME-XML and returns the relative offset from `Plane[0]`
+   (or, with metadata work, from the in-focus plane).
+
+Coverage: real multi-Z OME fixtures from Leica / Hamamatsu / 3DHistech
+research scanners. None in our local set; gated on a real fixture
+surfacing.
 
 ## Parity
 

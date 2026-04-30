@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tifffile-based parity oracle for OME-TIFF.
+"""tifffile-based parity oracle for OME-TIFF and Ventana BIF.
 
 Started by the Go side once per slide. Drives tifffile directly to read raw
 tile bytes from any TIFF page — useful for multi-image OME files where
@@ -8,7 +8,14 @@ a different reference to byte-validate our exposed pyramids.
 
 Stdin protocol — one line per request:
     tile <imageIdx> <levelIdx> <x> <y>     emit raw tile bytes for a
-                                            tiled-level position
+                                            tiled-level position (OME view:
+                                            series-indexed, plane 0)
+    tile_bif <levelIdx> <col> <row>        emit raw tile bytes for a BIF
+                                            pyramid position. Pages are
+                                            sorted by ImageDescription
+                                            "level=N"; (col, row) is in
+                                            image-space and serpentine-
+                                            remapped before lookup
     quit                                    exit cleanly
 
 Stdout protocol — one response per request:
@@ -79,6 +86,64 @@ def _tile_raw_bytes(tf, file_handle, image_idx: int, level_idx: int,
     return file_handle.read(page.databytecounts[idx])
 
 
+def _bif_pyramid_pages(tf):
+    """Return tf.pages (top-level), sorted ascending by parsed
+    ImageDescription `level=N` value. Non-pyramid IFDs (Label_Image,
+    Probability_Image, Thumbnail) are excluded. Mirrors opentile-go
+    formats/bif/layout.go::inventory."""
+    out = []
+    for p in tf.pages:
+        desc = p.tags.get("ImageDescription")
+        if desc is None:
+            continue
+        v = desc.value.strip()
+        if not v.startswith("level="):
+            continue
+        # Parse "level=N mag=M quality=Q" — first token's = value.
+        try:
+            n = int(v.split()[0].split("=")[1])
+        except (ValueError, IndexError):
+            continue
+        out.append((n, p))
+    out.sort(key=lambda t: t[0])
+    return [p for _, p in out]
+
+
+def _bif_serpentine_index(col: int, row: int, cols: int, rows: int) -> int:
+    """imageToSerpentine port from formats/bif/serpentine.go.
+
+    Stage rows count up from bottom; even stage rows go left-to-right,
+    odd go right-to-left. Image (col, row) → serpentine TileOffsets index.
+    """
+    if col < 0 or row < 0 or col >= cols or row >= rows:
+        raise IndexError(f"({col},{row}) out of grid {cols}x{rows}")
+    stage_row = rows - 1 - row
+    stage_col = col
+    if stage_row % 2 == 1:
+        stage_col = cols - 1 - col
+    return stage_row * cols + stage_col
+
+
+def _tile_raw_bytes_bif(tf, file_handle, level_idx: int,
+                        col: int, row: int) -> bytes:
+    """Read raw tile bytes for BIF level_idx tile at image-space (col, row).
+    Applies the serpentine remap before reading dataoffsets — matches
+    opentile-go's storage layout."""
+    pages = _bif_pyramid_pages(tf)
+    if level_idx < 0 or level_idx >= len(pages):
+        raise IndexError(f"level index {level_idx} out of range (have {len(pages)})")
+    page = pages[level_idx]
+    if not page.tilewidth:
+        raise _NotTiledLevel()
+    grid_w = (page.imagewidth + page.tilewidth - 1) // page.tilewidth
+    grid_h = (page.imagelength + page.tilelength - 1) // page.tilelength
+    idx = _bif_serpentine_index(col, row, grid_w, grid_h)
+    if idx >= len(page.dataoffsets):
+        raise IndexError(f"serpentine index {idx} >= dataoffsets length {len(page.dataoffsets)}")
+    file_handle.seek(page.dataoffsets[idx])
+    return file_handle.read(page.databytecounts[idx])
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: tifffile_runner.py <slide>", file=sys.stderr)
@@ -102,6 +167,11 @@ def main() -> int:
                     x = int(parts[3])
                     y = int(parts[4])
                     data = _tile_raw_bytes(tf, file_handle, ii, li, x, y)
+                elif parts[0] == "tile_bif":
+                    li = int(parts[1])
+                    col = int(parts[2])
+                    row = int(parts[3])
+                    data = _tile_raw_bytes_bif(tf, file_handle, li, col, row)
                 else:
                     raise ValueError(f"unknown command: {parts[0]!r}")
             except _NotTiledLevel:

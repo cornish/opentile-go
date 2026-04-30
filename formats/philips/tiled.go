@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"iter"
 	"math"
@@ -155,6 +156,7 @@ func (l *tiledImage) Grid() opentile.Size               { return l.grid }
 func (l *tiledImage) Compression() opentile.Compression { return l.compression }
 func (l *tiledImage) MPP() opentile.SizeMm              { return l.mpp }
 func (l *tiledImage) FocalPlane() float64               { return 0 }
+func (l *tiledImage) TileOverlap() image.Point          { return image.Point{} }
 
 // Tile returns the tile at (x, y) as a standalone valid JPEG. Drives
 // upstream's NativeTiledTiffImage.get_tile shape: the per-tile bytes
@@ -169,6 +171,15 @@ func (l *tiledImage) FocalPlane() float64               { return 0 }
 // NativeTiledTiffImage.get_tile splices them again unconditionally.
 // JPEG decoders accept duplicate tables; later definitions override
 // earlier ones.
+
+// TileAt is the multi-dim entry point. Philips is 2D-only.
+func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	return l.Tile(coord.X, coord.Y)
+}
+
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}

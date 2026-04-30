@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8' ?>
+<Metadata>
+  <iScan Mode="brightfield" Magnification="40" ScanRes="0.25"
+   UnitNumber="2000515" ScannerModel="VENTANA DP 200" Z-layers="1"
+   Z-spacing="1" UserName="Operator" BuildVersion="1.1.0.15854"
+   BuildDate="11/27/2019 11:6:28 AM" SlideAnnotation="" ShowLabel="1"
+   LabelBoundary="0" Barcode1D="" Barcode2D="" FocusMode="0" FocusQuality="1"
+   ScanMode="1" ScanWhitePoint="235" Anonymization="0">
+    <AOI0 Left="297" Top="2323" Right="574" Bottom="2069"/>
+  </iScan>
+  <ProcessingParameters>
+    <Registration Method="None" UseLinearEncoder="1" Radius="0"
+     OverlapMinMicrons="" OverlapMaxMicrons="" ShiftMaxMicrons="" OverlapMin=""
+     OverlapMax="" ShiftMax=""/>
+    <Color TwistRGB="1,0,0,0,1,0,0,0,1" Applied="0"/>
+  </ProcessingParameters>
+</Metadata>

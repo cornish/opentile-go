@@ -53,7 +53,7 @@ real slide motivates the work.
 | R11 | Python parity oracle under `//go:build parity` | v0.2 | ✅ landed (Task 25-26, Batch 7) |
 | R12 | CLI wrapper | out-of-scope for v1 | permanent |
 | R13 | NDPI Map (`mag == -2.0`) pages exposed as associated images | v0.4 | ✅ landed (commit `7ac3f88`, paired with L6). `Tiler.Associated()` now exposes `Kind() == "map"` entries on slides that carry them. |
-| R14 | Ventana BIF (Roche / iScan) | v0.7 | first format beyond upstream opentile's coverage. BigTIFF-based; openslide has a reader (LGPL 2.1, read-for-understanding only). Local fixtures already present in `sample_files/ventana-bif/`. Correctness bar: pixel-equivalence with openslide on decoded tiles (no byte-stable Python reference). |
+| R14 | Ventana BIF (Roche / iScan) | v0.7 | ✅ landed (commit range `b2e7f53..f602b20`). New `formats/bif/` package, new `internal/bifxml/` XML walker, `Level.TileOverlap()` interface evolution, blank-tile generator, ScanWhitePoint-filled empty-tile path, JPEGTables splice for legacy iScan. Two parity oracles: tifffile byte-equality on Ventana-1 (DP 200 path), openslide infrastructure shipped + assertion gated to v0.8 (see L19 below). Sampled-tile fixtures committed for both fixtures via `TestSlideParity`. Correctness bar revised mid-implementation: openslide rejects spec-compliant DP 200 BIFs (`Direction="LEFT"`) and may interpret legacy iScan differently, so byte-stable references are tifffile + our own committed sample-tile SHAs rather than openslide pixel-equivalence. |
 | R15 | Sakura SVSlide | parked | parked behind GH issue (TBD). Rare format; openslide reads it. Trigger-driven deferral. |
 | R16 | Leica SCN | v0.8 (tentative) | BigTIFF-based; common in research microscopy. Openslide reader as reference. Decide based on real-slide demand. |
 | R17 | Generic Tiled TIFF | v0.8+ (tentative) | catch-all fallback for unknown vendors with standard TIFF tile layout. Decide based on real-slide demand and whether end users are hitting `ErrUnsupportedFormat` on standards-compliant slides. |
@@ -137,6 +137,80 @@ README.md and per-format docs link here.
   L2-L4, Leica-2 L2-L5).
 - **Tracking:** see [`docs/formats/ome.md`](formats/ome.md).
 
+### BIF: probability map exposure (since v0.7)
+
+- **Upstream:** Python opentile doesn't read BIF at all; v0.7 is the
+  first opentile-go format beyond upstream's coverage. openslide
+  exposes only `macro` and `thumbnail` from BIF — the IFD-1 tissue
+  probability map (LZW grayscale, spec-compliant DP 200 only) is
+  dropped.
+- **opentile-go:** surfaces the probability map as
+  `AssociatedImage.Kind() == "probability"`. Joins the existing
+  `overview` / `macro` / `thumbnail` / `label` / `map` kind taxonomy
+  via the new `kind="probability"` enum value.
+- **Reason:** the slide author embedded the probability map; throwing
+  it away is value loss. Consumers that don't recognise the kind
+  iterate-and-skip cleanly via the existing `Associated()` API.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md).
+
+### BIF: tile overlap exposed via `Level.TileOverlap()` (since v0.7)
+
+- **Upstream:** Python opentile doesn't read BIF; openslide exposes
+  per-pair `TileJointInfo` overlap as `tile_advance_x` /
+  `tile_advance_y` properties (level-0 only) and silently composes
+  overlapping tiles into the `read_region` output.
+- **opentile-go:** new `Level.TileOverlap() image.Point` method on
+  the public `Level` interface returns the per-tile-step pixel
+  overlap (count-weighted average of all `<TileJointInfo>` entries on
+  level 0; zero on pyramid IFDs 1+ which never overlap per spec).
+  Non-BIF formats return `image.Point{}` — additive evolution; no
+  caller change needed.
+- **Reason:** `Level.Tile(c, r)` continues to return raw compressed
+  bytes (preserving the byte-passthrough hot path), so the consumer
+  needs the overlap value to position tiles correctly. Surface as
+  metadata, not as a pixel-space crop.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md).
+
+### BIF: non-strict `ScannerModel` acceptance (since v0.7)
+
+- **Upstream:** the Roche BIF whitepaper explicitly mandates
+  rejecting any slide whose IFD-0 `<iScan>/@ScannerModel` is not
+  `"VENTANA DP 200"` ("Stop processing the BIF-file if the string
+  does not match model name").
+- **opentile-go:** accepts any iScan-tagged BigTIFF and routes
+  internally based on `strings.HasPrefix(scannerModel, "VENTANA DP")`:
+  spec-compliant path (DP 200, DP 600, future DP scanners) vs.
+  legacy-iScan path (missing attribute, iScan Coreo, iScan HT).
+- **Reason:** rejecting legacy iScan slides leaves users with a
+  worse-than-openslide experience for that population. Both fixtures
+  in our suite pass through Open cleanly with the prefix-match rule.
+  DP 600 is not yet validated against a fixture but the prefix
+  future-proofs against new DP scanners.
+- **Tracking:** see [`docs/formats/bif.md`](formats/bif.md); spec §4
+  of the v0.7 design doc.
+
+### Multi-dimensional WSI API addition (since v0.7)
+
+- **Upstream:** Python opentile is 2D-only. Each format's pyramid is
+  exposed as a flat list of levels with no Z/C/T axis support.
+- **opentile-go:** adds cross-format multi-dim addressing —
+  `Level.TileAt(TileCoord)` plus
+  `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`. Backward
+  compatible: 2D-only formats (SVS / NDPI / Philips) inherit defaults
+  from `SingleImage` (returning 1 / 1 / 1 / "" / 0); BIF surfaces
+  `IMAGE_DEPTH`-driven multi-Z reads via the new API; OME honestly
+  reports `<Pixels SizeZ/SizeC/SizeT>` dimension counts and rejects
+  `TileAt(z != 0)` with `ErrDimensionUnavailable` until the per-IFD
+  multi-Z reader lands as a separate format-package milestone.
+- **Reason:** modern WSI consumers — fluorescence imaging, focal-
+  plane viewers, time-series microscopy — need explicit multi-dim
+  addressing. Designed cross-format-extensible so OME multi-Z,
+  fluorescence, and time-series support land additively without
+  re-shaping the API. Q1–Q6 sign-off captured in spec §13 of the
+  multi-dim design doc.
+- **Tracking:** see [`docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md`](superpowers/specs/2026-04-29-opentile-go-multidim-design.md)
+  + [`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`](superpowers/plans/2026-04-29-opentile-go-multidim.md).
+
 ---
 
 ## 2. Active limitations (open after v0.3)
@@ -177,6 +251,45 @@ completeness milestone). Items closed during v0.3 are listed in §5.
   *How to fix if we decide it's unwanted:* drop the `newLabelImage` call
   in `formats/ndpi/ndpi.go` Open() so NDPI associated is overview-only.
   Or keep it and add a README note calling it out.
+
+### L19 — BIF: openslide pixel-parity oracle gated, infrastructure shipped (since v0.7)
+- **Source:** Batch E execution (T20)
+- **Severity:** v0.8 — work item, not permanent. The runner / session
+  / protocol all work; the test currently `t.Skip`s with a clear gap
+  description. Resolving requires either an opentile-go-side
+  AOI-cropped Tile variant or a clearer story about which view is
+  authoritative.
+- **Detail:** opentile-go's `Tile(col, row)` at level N references
+  the **padded TIFF grid** (e.g. OS-1 L5 = 3712×3192) — what the
+  TIFF tags actually cover. openslide's `read_region` references the
+  **AOI hull** (OS-1 L5 = 3307×2936) — cropped per the spec's
+  "padding to top and right" clause. Their `(0, 0)` tiles map to
+  different physical regions, so any pixel comparison diverges by
+  construction. Anecdotal note from a community reader: openslide is
+  also believed to misread *modern* (DP 200+) BIF — Ventana-1's
+  `Direction="LEFT"` rejection is one example, and OS-1 readback may
+  have its own quirks. Net effect: openslide pixel-equivalence isn't
+  load-bearing for v0.7 correctness; tifffile (Ventana-1) +
+  committed sample-tile SHAs (both fixtures) are the references that
+  matter.
+
+### L20 — BIF: DP 600 and other future "VENTANA DP *" scanners unverified (since v0.7)
+- **Source:** v0.7 design spec §10
+- **Severity:** v0.8+ — input-data-dependent. The
+  `strings.HasPrefix(scannerModel, "VENTANA DP")` rule lands future
+  DP scanners on the spec-compliant path automatically; if a real
+  DP 600 (or later) fixture surfaces a behavioural difference (Z-stack
+  default, varying overlap distribution, new XMP attributes), it'll
+  be a deviation to fold into §1a above.
+
+~~### L21 — BIF: volumetric Z-stacks deferred to v0.8+ (since v0.7)~~
+**Closed in v0.7 multi-dim closeout (2026-04-29).** Volumetric BIF
+slides now expose every focal plane via the new public
+`Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})` API — see the
+multi-dim deviation in §1a + the multi-dim retirement subsection
+of §8a below. Synthetic-fixture coverage only (no real volumetric
+BIF in `sample_files/`). The work was executed sequentially on
+2026-04-29 across 19 plan tasks.
 
 ---
 
@@ -353,6 +466,157 @@ that locks the change in.
 
 ---
 
+## 8a. Retired in v0.7
+
+Items closed during the v0.7 Ventana BIF milestone. The branch
+spans `b2e7f53..f602b20` (30 commits across Batches A through F).
+
+**Roadmap items (R-prefix):**
+
+- **R14** — Ventana BIF support landed end-to-end. New
+  `formats/bif/` package (detection, generation classification by
+  `strings.HasPrefix(scannerModel, "VENTANA DP")`, IFD
+  classification by ImageDescription content, serpentine remap,
+  empty-tile blank fill, JPEGTables splice), new
+  `internal/bifxml/` package (XMP walker for `<iScan>` and
+  `<EncodeInfo>`), `Level.TileOverlap()` interface evolution.
+  Two real fixtures (Ventana-1 spec-compliant + OS-1 legacy iScan)
+  Open cleanly with full-tiler exposure: format, levels, associated
+  images, ICC, metadata, MetadataOf.
+
+**Active limitations (L-prefix):**
+
+- **L21** — BIF volumetric Z-stacks. **Closed in v0.7 multi-dim
+  closeout (2026-04-29).** Multi-Z BIF reads now exposed via
+  `Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})` — see the
+  multi-dim retirement subsection below.
+
+Carried forward to v0.8+: L19 (openslide pixel-parity gap,
+infrastructure-only), L20 (DP 600 unverified — fixture-dependent).
+
+**Mid-task discoveries (where execution surfaced design surprises):**
+
+- **Both real fixtures have NON-ZERO TileOverlap on level 0**
+  (Ventana-1 L0=(2,0); OS-1 L0=(18,26)) — the design spec §10's
+  claim of "fixture-untested overlap path" was wrong. The notes file
+  §2 reported "all zero" based on a 1500-char XMP truncation; the
+  full XMP carries a sparse mix of zero and non-zero `<TileJointInfo>`
+  entries. The weighted-average path is therefore exercised by real
+  data, not just synthetic tests. Updated v0.7 spec §10 + this
+  retirement note.
+- **OS-1 has no ICC profile** (tag 34675 present with count=0) —
+  the notes file §2 claimed the tag was present on both fixtures.
+  T18 distinguishes "tag-absent" from "tag-present-with-zero-bytes"
+  and returns nil for both.
+- **OS-1 has no FrameInfo / Frame XMP elements** at all (predates
+  that XMP feature). T7's `internal/bifxml` parser handles this
+  gracefully via empty `Frames` slices; T13's serpentine algorithm
+  works without Frame data on this fixture.
+- **opentile-go's image extent ≠ openslide's image extent for OS-1**
+  (3712×3192 vs 3307×2936 at L5). opentile-go reports the padded
+  TIFF grid; openslide reports the AOI hull. Their `(0, 0)` tiles
+  reference different physical regions. Recorded as L19; resolution
+  deferred to v0.8.
+- **Two correctness bugs caught by writing the integration test
+  (T19), not by any synthetic unit test:**
+  (a) `loadEncodeInfo` was silently swallowing
+  `bifxml.ParseEncodeInfo`'s Ver<2 error, defeating the
+  spec-mandated rejection gate;
+  (b) `bif.MetadataOf` didn't unwrap the file-closer Tiler returned
+  by `opentile.OpenFile`, so `MetadataOf(opentile.OpenFile(slide))`
+  always returned `(nil, false)`.
+
+**Process notes:**
+
+- v0.7 was executed sequentially (no subagents) for Batches C/D/E/F
+  per user instruction — the user is on remote control and the
+  back-and-forth latency of subagent dispatch + dual-stage review
+  was a worse fit than direct execution. Subagents (haiku for
+  mechanical tasks, sonnet for design-aware tasks) were used for
+  Batches A and B only; review-cycle catches there were a count
+  typo (T1), an OME-XMP→BIF-XMP typo in the T4 outcome paragraph,
+  and an over-prescriptive sentence in T5. Useful but not
+  load-bearing.
+
+### v0.7 multi-dim closeout (2026-04-29)
+
+After the initial v0.7 BIF milestone landed (commits
+`b2e7f53..f602b20`), the user grew v0.7's scope to cover
+cross-format multi-dimensional WSI abstractions — driven by L21
+(BIF Z-stacks) plus the forward-looking goal of supporting OME
+multi-Z, fluorescence, and time-series WSI without re-shaping the
+public API again.
+
+Design + plan: `docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md` +
+`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`. 19
+plan tasks across 5 batches, executed sequentially.
+
+**Active limitations closed:**
+
+- **L21** — BIF volumetric Z-stacks. Multi-Z BIF reads now exposed
+  via `Image.SizeZ()` + `Level.TileAt(TileCoord{Z, ...})`.
+  Synthetic-fixture coverage (no real volumetric BIF in
+  `sample_files/`).
+
+**API additions (cross-format infrastructure):**
+
+- `TileCoord{X, Y, Z, C, T}` struct + `ErrDimensionUnavailable`
+  error sentinel.
+- `Level.TileAt(TileCoord) ([]byte, error)` on the `Level`
+  interface — additive; existing `Tile(x, y)` unchanged.
+- `Image.SizeZ() / SizeC() / SizeT() / ChannelName(c) /
+  ZPlaneFocus(z)` on the `Image` interface — additive; defaults
+  on `SingleImage` return 1 / 1 / 1 / "" / 0.
+- `bif.Metadata.ZSpacing + ZPlaneFoci` for format-specific
+  consumers reaching through `bif.MetadataOf(tiler)`.
+
+**Format-specific additions:**
+
+- BIF: per-IFD `IMAGE_DEPTH` (32997) read at construction; tile
+  array stride `Z * (cols*rows) + serpIdx`; `<iScan>/@Z-spacing`
+  drives `ZPlaneFocus(z)` per BIF whitepaper §"Whole slide imaging
+  process" layout (Z=0 nominal, Z=1..nNear near focus,
+  Z=nNear+1..N-1 far focus).
+- OME: honest `<Pixels SizeZ/SizeT>` reporting; `<Channel>` element
+  count discriminates `SizeC()` from `<Pixels SizeC>` (= per-pixel
+  RGB sample count, not separately-stored channels — both Leica
+  fixtures correctly report `SizeC() == 1`).
+
+**Mid-task discoveries:**
+
+- T2 surfaced the `<Pixels SizeC>` vs `<Channel>`-count
+  discrimination question. Without it, every brightfield OME
+  fixture would have been misreported as 3-channel
+  multi-fluorescence.
+- T4 + T8: Distinguishing `ErrDimensionUnavailable` (axis doesn't
+  exist on this slide) vs `ErrTileOutOfBounds` (axis exists but
+  index past size) caught a subtle BIF check that initially
+  returned the wrong sentinel for `imageDepth=1` + `Z=1`.
+- T12: existing `formats/ome/metadata_test.go` golden assertions
+  needed updates because the parser previously dropped
+  SizeZ/C/T silently — exposing them honestly was a behavioural
+  change at the test surface.
+
+**OME deferral (carried forward):**
+
+- Multi-Z OME `TileAt(z != 0)` returns `ErrDimensionUnavailable`
+  until the per-IFD reader lands. The dimensions are surfaced
+  honestly so consumers can detect multi-Z OMEs and gracefully
+  fall back. Implementation strategy documented in
+  `docs/formats/ome.md`'s "Future implementation strategy"
+  subsection.
+
+**Test fixtures:**
+
+All 16 existing 2D fixtures pass `TestMultiDimCompat2D` (Tile and
+TileAt byte-identical at level-0 (0,0); SizeZ/C/T == 1; non-zero
+Z/C/T returns `ErrDimensionUnavailable`). BIF multi-Z synthetic
+fixtures cover 1, 3, 5 plane stacks plus edge cases (depth=0/1,
+depth=4 even, zero spacing). 11 multi-Z-specific tests in
+`formats/bif/multiz_test.go`.
+
+---
+
 ## 8. Retired in v0.6
 
 Items closed during the v0.6 OME TIFF milestone. One line per ID;
@@ -435,8 +699,120 @@ that locks the change in.
 
 ## 9. Gate outcomes (live)
 
-JIT verification gate outcomes from the v0.4, v0.5, and v0.6 plans.
+JIT verification gate outcomes from the v0.4, v0.5, v0.6, and v0.7 plans.
 Each gate decides a done-when bar or fix path for subsequent tasks.
+
+### v0.7 multi-dim gates
+
+#### Task 3 — BIF Z-spacing parsing gate
+
+- **Date:** 2026-04-29
+- **Outcome:** Both BIF fixtures carry `<iScan Z-layers="1"
+  Z-spacing="1" ...>`. `internal/bifxml.IScan` already exposes
+  `ZLayers int`; the parser already lists `"Z-layers"` in
+  `knownIScanAttrs` and writes it into `s.ZLayers`. **`Z-spacing`
+  is NOT yet a field on `IScan`** — the attribute is consumed by
+  the parser (so it doesn't fall into `RawAttributes`) but no
+  typed field receives it. T7 (Batch C) adds
+  `IScan.ZSpacing float64` and the per-attribute case in
+  `parseIScanAttrs`. Both fixture values (Z-spacing=1) are
+  meaningless for single-plane scans (ZLayers=1); the field is
+  load-bearing only when the synthetic multi-Z fixture builder in
+  T10 produces a Z-stacked test slide. Add the field + parse +
+  test in T7 before the BIF-side levelImpl wiring in T8.
+
+#### Task 2 — OME `<Pixels>` SizeZ/C/T extraction gate
+
+- **Date:** 2026-04-29
+- **Outcome:** Both Leica fixtures (Leica-1.ome.tiff: 2 Images;
+  Leica-2.ome.tiff: 5 Images) carry `<Pixels SizeZ="1" SizeC="3"
+  SizeT="1" DimensionOrder="XYCZT">` on every Image. **`<Pixels
+  SizeC=3>` describes RGB sample-count, NOT separately-stored
+  channels** — every Image has exactly one `<Channel>` element,
+  meaning the underlying tile bytes are a single composite RGB
+  JPEG (the standard brightfield pathology layout). The right
+  discriminator for `Image.SizeC()` (the new v0.7 multi-dim
+  accessor) is **`<Channel>` element count**, not `<Pixels SizeC>`.
+  T12 (Batch D) wires this through: `pyramidImage.SizeC()` reads
+  the `<Channel>` count rather than `<Pixels SizeC>`. The current
+  `omePixels` decode struct in `formats/ome/metadata.go` only
+  parses SizeX/SizeY; it must grow `SizeZ/SizeC/SizeT` fields and
+  the parser must additionally count `<Channel>` elements per
+  Image. With this rule, every existing Leica fixture reports
+  `SizeZ=SizeC=SizeT=1` — no false-positive multi-dim
+  reclassification of brightfield slides.
+
+#### Task 1 — IMAGE_DEPTH (32997) accessor gate
+
+- **Date:** 2026-04-29
+- **Outcome:** `internal/tiff.Page.ImageDepth()` returns `(1, false)` for every page on every fixture in the 17-fixture local set (5 SVS, 3 NDPI, 1 generic TIFF, 4 Philips TIFF, 2 OME-TIFF, 2 BIF — pages range from 2 (Leica-1) to 12 (OS-2.ndpi, OS-1.bif)). No fixture carries a volumetric Z-stack. Confirms (a) the accessor is fault-free on real data, (b) the BIF multi-Z code path **must be exercised exclusively via in-code synthetic fixtures** in `formats/bif/multiz_test.go` per the design spec Q5 sign-off. The choice to embed synthetic Z-stack fixtures in test source rather than committing binary testdata stands.
+
+### v0.7 gates
+
+#### Task 1 — Detection gate (`<iScan` substring)
+
+- **Date:** 2026-04-27
+- **Outcome:** 2 BIF fixtures matched (`<iScan` substring found in IFDs 0 and 2 on both Ventana-1.bif and OS-1.bif), 0 false positives across 15 non-BIF fixtures (5 SVS, 3 NDPI, 1 generic TIFF, 2 OME-TIFF, 4 Philips TIFF). All BIF fixtures are BigTIFF as expected. Confirms substring `<iScan` is sufficient and specific for detection — aligns with openslide's approach (line 328 of `src/openslide-vendor-ventana.c` checks `strstr(xml, INITIAL_XML_ISCAN)`). No detection-rule refinement needed; ready for format reader implementation.
+
+#### Task 2 — ScannerModel prefix gate
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures probe as expected per spec §4 and §5.2. Ventana-1.bif reports `ScannerModel="VENTANA DP 200"` (matches prefix `"VENTANA DP"`) → routes to spec-compliant path. OS-1.bif has no ScannerModel attribute in the XMP (`<iScan>` element; attribute missing) → routes to legacy-iScan path. The `strings.HasPrefix(scannerModel, "VENTANA DP")` classification rule is confirmed as sufficient and specific to distinguish Ventana (spec-compliant) from legacy iScan (non-Ventana) scanners. Aligns with openslide's branching logic and the v0.7 design's §4 scope. No spec revision needed; gate passes.
+
+#### Task 3 — IFD-classification-by-description gate
+
+- **Date:** 2026-04-27
+- **Outcome:** All IFD ImageDescription values across both BIF fixtures match the spec §5.3 discriminator rule exactly. No unexpected values; no case/whitespace variants requiring special handling.
+
+  **Per-fixture IFD inventory:**
+
+  | Fixture | IFD | ImageDescription | Role | Notes |
+  |---------|-----|------------------|------|-------|
+  | Ventana-1.bif | 0 | `'Label_Image'` | associated, kind="overview" | spec-compliant (DP 200) |
+  | Ventana-1.bif | 1 | `'Probability_Image'` | associated, kind="probability" | spec-compliant |
+  | Ventana-1.bif | 2–9 | `level=N mag=M quality=95` | pyramid levels 0–7 | 8 levels total |
+  | OS-1.bif | 0 | `'Label Image'` | associated, kind="overview" | legacy (space separator) |
+  | OS-1.bif | 1 | `'Thumbnail'` | associated, kind="thumbnail" | legacy variant |
+  | OS-1.bif | 2–11 | `level=N mag=M quality=90` | pyramid levels 0–9 | 10 levels total (OS-1 has deeper pyramid) |
+
+  **Discriminator coverage:** The five discriminator patterns from spec §5.3 (`Label_Image`, `Label Image`, `Probability_Image`, `Thumbnail`, `level=N mag=M quality=Q`) account for 100% of observed IFDs. Ventana-1.bif spans the spec-compliant path (DP 200 with probability map); OS-1.bif exercises the legacy-iScan path (label as space-delimited, no probability, thumbnail instead). Both confirm that **classification by ImageDescription content is sufficient** — no need to index into IFD order, validating spec §5.3's core recommendation despite OS-1's non-standard IFD layout (IFD 0 = label, IFD 1 = thumbnail, IFD 2+ = pyramid, unlike the whitepaper's IFD 0/1/2/3+ layout).
+
+#### Task 4 — Empty-tile gate (offset-zero / bytecount-zero marker)
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures carry zero empty tiles across all pyramid levels. Whitepaper spec (§3, "AOI Positions") confirms empty-tile encoding: `TileOffsets[i] == 0` AND `TileByteCounts[i] == 0` for unscanned tiles. Probe verified: zero mismatches (no partial-empty case where one field is 0 and the other is non-zero).
+
+  **Per-fixture, per-IFD tile inventory:**
+
+  | Fixture | IFD | Role | Total tiles | Empty tiles | Notes |
+  |---------|-----|------|-------------|-------------|-------|
+  | Ventana-1.bif | 2 | L0 | 504 | 0 | main pyramid base |
+  | Ventana-1.bif | 3 | L1 | 132 | 0 | |
+  | Ventana-1.bif | 4 | L2 | 36 | 0 | |
+  | Ventana-1.bif | 5 | L3 | 9 | 0 | |
+  | Ventana-1.bif | 6 | L4 | 4 | 0 | |
+  | Ventana-1.bif | 7 | L5 | 1 | 0 | |
+  | Ventana-1.bif | 8 | L6 | 1 | 0 | |
+  | Ventana-1.bif | 9 | L7 | 1 | 0 | |
+  | OS-1.bif | 0 | overview | 1 | 0 | associated image |
+  | OS-1.bif | 1 | thumbnail | 1 | 0 | associated image |
+  | OS-1.bif | 2 | L0 | 8700 | 0 | main pyramid base |
+  | OS-1.bif | 3 | L1 | 2204 | 0 | |
+  | OS-1.bif | 4 | L2 | 551 | 0 | |
+  | OS-1.bif | 5 | L3 | 150 | 0 | |
+  | OS-1.bif | 6 | L4 | 40 | 0 | |
+  | OS-1.bif | 7 | L5 | 12 | 0 | |
+  | OS-1.bif | 8 | L6 | 4 | 0 | |
+  | OS-1.bif | 9 | L7 | 1 | 0 | |
+  | OS-1.bif | 10 | L8 | 1 | 0 | |
+  | OS-1.bif | 11 | L9 | 1 | 0 | |
+
+  **Implication for Task 14:** Both fixtures are single-AOI scans with complete tile coverage — no real empty tiles to validate the blank-fill path. Task 14 (empty-tile synthesis testing) must include a synthetic BIF-XMP test fixture with explicit empty tiles. The spec's encoding is confirmed as sufficient discriminator; the implementation path (fill with `ScanWhitePoint`-coloured JPEG) has no in-fixture validation opportunity.
+
+#### Task 5 — ScanWhitePoint extraction gate
+
+- **Date:** 2026-04-27
+- **Outcome:** Both fixtures probe successfully for the `ScanWhitePoint` XMP attribute. Ventana-1.bif carries `ScanWhitePoint="235"` (spec-compliant iScan, DP 200 scanner); OS-1.bif returns missing (legacy iScan, no ScannerModel attribute). Matches the design assumption exactly. When `ScanWhitePoint` is absent, the blank-tile filler (Task 9, invoked by Task 14) defaults to RGB 255 (true white). This aligns with typical TIFF and openslide conventions for unspecified fill colour. Forward reference: Tasks 9 (blank-tile generator) and 14 (empty-tile path) will read this value to fill empty tiles; the precise extraction and JPEG-encoding details are specified when those tasks execute.
 
 ### v0.6 gates
 
