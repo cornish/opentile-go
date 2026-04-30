@@ -61,8 +61,10 @@ type Tiler struct {
 	associatedIFD []classifiedIFD // label / probability / thumbnail IFDs
 
 	// Constructed Level objects, one per levelIFDs entry. Populated
-	// at Open time (T13); held in a SingleImage for Tiler.Images().
-	image *opentile.SingleImage
+	// at Open time (T13); wrapped in a bifImage so Image.SizeZ() and
+	// ZPlaneFocus(z) can return BIF-specific values when the slide
+	// is volumetric (IMAGE_DEPTH > 1).
+	image *bifImage
 
 	// Associated images built from the associatedIFD inventory.
 	// Populated at Open time (T16); typically 2 entries (overview +
@@ -103,12 +105,19 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 	}
 	scanWhite := scanWhitePointFor(iscan)
 	levels := make([]opentile.Level, 0, len(levelIFDs))
+	var levelZeroDepth int
 	for i, c := range levelIFDs {
 		l, err := newLevelImpl(i, c, iscan.ScanRes, scanWhite, encodeInfo, file.ReaderAt())
 		if err != nil {
 			return nil, err
 		}
+		if i == 0 {
+			levelZeroDepth = l.imageDepth
+		}
 		levels = append(levels, l)
+	}
+	if levelZeroDepth < 1 {
+		levelZeroDepth = 1
 	}
 	associated := make([]opentile.AssociatedImage, 0, len(associatedIFDs))
 	for _, c := range associatedIFDs {
@@ -122,6 +131,10 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		}
 		associated = append(associated, a)
 	}
+	zSpacing := 0.0
+	if iscan != nil {
+		zSpacing = iscan.ZSpacing
+	}
 	return &Tiler{
 		file:          file,
 		cfg:           cfg,
@@ -130,9 +143,74 @@ func (f *Factory) Open(file *tiff.File, cfg *opentile.Config) (opentile.Tiler, e
 		encodeInfo:    encodeInfo,
 		levelIFDs:     levelIFDs,
 		associatedIFD: associatedIFDs,
-		image:         opentile.NewSingleImage(levels),
+		image:         newBifImage(levels, levelZeroDepth, zSpacing),
 		associated:    associated,
 	}, nil
+}
+
+// bifImage wraps opentile.SingleImage with BIF-specific multi-Z
+// accessors. SingleImage carries the level chain + Index/Name/MPP
+// defaults; bifImage overrides SizeZ() and ZPlaneFocus(z) when the
+// slide is volumetric (IMAGE_DEPTH > 1 on the level-0 IFD).
+//
+// SizeC + SizeT + ChannelName remain SingleImage's defaults (1 / 1 /
+// "") — BIF format has no fluorescence or time-series semantics.
+type bifImage struct {
+	*opentile.SingleImage
+	imageDepth  int
+	zPlaneFocus []float64 // index z → microns from nominal; len == imageDepth
+}
+
+func newBifImage(levels []opentile.Level, imageDepth int, zSpacing float64) *bifImage {
+	return &bifImage{
+		SingleImage: opentile.NewSingleImage(levels),
+		imageDepth:  imageDepth,
+		zPlaneFocus: computeZPlaneFocusTable(imageDepth, zSpacing),
+	}
+}
+
+func (i *bifImage) SizeZ() int { return i.imageDepth }
+
+func (i *bifImage) ZPlaneFocus(z int) float64 {
+	if z < 0 || z >= len(i.zPlaneFocus) {
+		return 0
+	}
+	return i.zPlaneFocus[z]
+}
+
+// computeZPlaneFocusTable maps a Z storage index (0..imageDepth-1)
+// to the corresponding focal offset in microns from the nominal
+// plane, following BIF whitepaper §"Whole slide imaging process":
+//
+//	Z=0                          → nominal (offset 0)
+//	Z=1..nNear                   → near focus  (offsets -1·spacing, -2·spacing, ..., -nNear·spacing)
+//	Z=nNear+1..nNear+nFar        → far focus   (offsets +1·spacing, +2·spacing, ..., +nFar·spacing)
+//
+// where nNear = (imageDepth - 1) / 2, nFar = imageDepth - 1 - nNear.
+// Spec mandates an odd imageDepth (so nNear == nFar always); we
+// tolerate even values defensively (one fewer near plane than far).
+//
+// imageDepth == 1 yields a single-element table {0}; zSpacing == 0
+// yields a table of zeros (every plane reports nominal, matching
+// the "no Z-spacing recorded" case).
+func computeZPlaneFocusTable(imageDepth int, zSpacing float64) []float64 {
+	if imageDepth < 1 {
+		imageDepth = 1
+	}
+	t := make([]float64, imageDepth)
+	if imageDepth == 1 {
+		return t
+	}
+	nNear := (imageDepth - 1) / 2
+	nFar := imageDepth - 1 - nNear
+	t[0] = 0
+	for i := 1; i <= nNear; i++ {
+		t[i] = -float64(i) * zSpacing
+	}
+	for i := 1; i <= nFar; i++ {
+		t[nNear+i] = float64(i) * zSpacing
+	}
+	return t
 }
 
 // scanWhitePointFor returns the empty-tile fill value for this
