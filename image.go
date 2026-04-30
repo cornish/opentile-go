@@ -100,6 +100,45 @@ type Image interface {
 	// MPP returns the base-level microns/pixel for this Image. Zero
 	// SizeMm when unknown.
 	MPP() SizeMm
+
+	// SizeZ returns the count of focal planes carried by this Image.
+	// Returns 1 for non-Z-stack slides (every existing 2D format,
+	// every BIF slide whose IMAGE_DEPTH tag is absent or 1, every
+	// 2D OME slide). Added in v0.7.
+	SizeZ() int
+
+	// SizeC returns the count of separately-stored fluorescence /
+	// spectral channels. Returns 1 for brightfield slides; > 1 for
+	// fluorescence imaging where each channel is its own grayscale
+	// image. Added in v0.7.
+	//
+	// IMPORTANT: this is the count of separately-stored channels,
+	// NOT the per-pixel sample count. A brightfield RGB slide has
+	// SizeC == 1 (one composite RGB tile per call), even though
+	// each pixel decodes to 3 colour samples.
+	SizeC() int
+
+	// SizeT returns the count of time points. Returns 1 for
+	// non-time-series slides. Added in v0.7.
+	SizeT() int
+
+	// ChannelName returns the human-readable name of channel c —
+	// e.g., "DAPI", "FITC", "TRITC" for fluorescence; "" for
+	// brightfield slides where the single channel is implicit RGB.
+	//
+	// c must be in [0, SizeC()); panics with index-out-of-range
+	// otherwise (matching slice-access conventions). Added in v0.7.
+	ChannelName(c int) string
+
+	// ZPlaneFocus returns the focal distance (microns) of plane z
+	// from the nominal focal plane. ZPlaneFocus(0) is always 0
+	// (Z=0 is by convention the nominal plane). Negative values
+	// indicate planes below the nominal plane (near focus); positive
+	// values indicate planes above (far focus).
+	//
+	// z must be in [0, SizeZ()); panics with index-out-of-range
+	// otherwise (matching slice-access conventions). Added in v0.7.
+	ZPlaneFocus(z int) float64
 }
 
 // SingleImage is the one-element Image wrapper used by single-pyramid
@@ -152,6 +191,30 @@ func (s *SingleImage) MPP() SizeMm {
 	}
 	return s.levels[0].MPP()
 }
+
+// SizeZ always returns 1 for SingleImage — no Z-stack support on
+// single-pyramid 2D formats. Multi-Z formats (BIF with IMAGE_DEPTH
+// > 1; future OME multi-Z) implement Image directly or wrap
+// SingleImage and override SizeZ.
+func (s *SingleImage) SizeZ() int { return 1 }
+
+// SizeC always returns 1 for SingleImage — no fluorescence /
+// multi-channel support on 2D pathology formats. Brightfield RGB
+// slides return 1 (single composite RGB channel per pixel).
+func (s *SingleImage) SizeC() int { return 1 }
+
+// SizeT always returns 1 for SingleImage — no time-series support
+// on pathology formats.
+func (s *SingleImage) SizeT() int { return 1 }
+
+// ChannelName always returns "" for SingleImage — the single
+// channel is implicit RGB on brightfield slides; consumers don't
+// need a name to interpret it.
+func (s *SingleImage) ChannelName(c int) string { return "" }
+
+// ZPlaneFocus always returns 0 for SingleImage — single Z-plane
+// at nominal focus. Multi-Z Image impls override.
+func (s *SingleImage) ZPlaneFocus(z int) float64 { return 0 }
 
 // TilePos is a (column, row) pair returned by Level.Tiles.
 type TilePos struct{ X, Y int }
