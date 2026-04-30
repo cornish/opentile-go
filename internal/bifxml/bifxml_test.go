@@ -47,6 +47,9 @@ func TestParseIScan_Ventana1(t *testing.T) {
 	if got.ZLayers != 1 {
 		t.Errorf("ZLayers = %d; want 1", got.ZLayers)
 	}
+	if got.ZSpacing != 1 {
+		t.Errorf("ZSpacing = %v; want 1 (per Ventana-1 fixture XMP)", got.ZSpacing)
+	}
 	if got.BuildVersion != "1.1.0.15854" {
 		t.Errorf("BuildVersion = %q; want %q", got.BuildVersion, "1.1.0.15854")
 	}
@@ -165,6 +168,35 @@ func TestParseIScan_ScanWhitePointPresentZero(t *testing.T) {
 	}
 	if got.ScanWhitePoint != 0 {
 		t.Errorf("ScanWhitePoint = %d; want 0", got.ScanWhitePoint)
+	}
+}
+
+// TestParseIScan_ZSpacing covers the Z-spacing attribute (microns per
+// focal plane step) added in v0.7 multi-dim T7. Lenient parsing —
+// missing/empty defaults to 0; valid floats round-trip.
+func TestParseIScan_ZSpacing(t *testing.T) {
+	cases := []struct {
+		name string
+		xml  string
+		want float64
+	}{
+		{"missing", `<iScan Magnification="40"/>`, 0},
+		{"zero", `<iScan Z-spacing="0"/>`, 0},
+		{"int", `<iScan Z-spacing="2"/>`, 2.0},
+		{"float", `<iScan Z-spacing="0.5"/>`, 0.5},
+		{"negative", `<iScan Z-spacing="-1.5"/>`, -1.5},
+		{"malformed", `<iScan Z-spacing="not-a-number"/>`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bifxml.ParseIScan([]byte(tc.xml))
+			if err != nil {
+				t.Fatalf("ParseIScan: %v", err)
+			}
+			if got.ZSpacing != tc.want {
+				t.Errorf("ZSpacing = %v; want %v", got.ZSpacing, tc.want)
+			}
+		})
 	}
 }
 

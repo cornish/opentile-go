@@ -31,7 +31,8 @@ type IScan struct {
 	ScanWhitePoint        uint8 // 0..255 when present; consult ScanWhitePointPresent to detect absence
 	ScanWhitePointPresent bool  // false when the attribute is absent entirely
 
-	ZLayers      int    // default 1
+	ZLayers      int     // default 1; 1 = single nominal focus plane (not volumetric)
+	ZSpacing     float64 // microns per Z-plane step (per <iScan>/@Z-spacing); 0 when absent
 	BuildVersion string
 	BuildDate    string
 	UnitNumber   string
@@ -168,8 +169,9 @@ func ParseIScan(xmp []byte) (*IScan, error) {
 func parseIScanAttrs(attrs []xml.Attr, s *IScan) {
 	knownAttrs := map[string]struct{}{
 		"ScannerModel": {}, "Magnification": {}, "ScanRes": {},
-		"ScanWhitePoint": {}, "Z-layers": {}, "BuildVersion": {},
-		"BuildDate": {}, "UnitNumber": {}, "UserName": {},
+		"ScanWhitePoint": {}, "Z-layers": {}, "Z-spacing": {},
+		"BuildVersion": {}, "BuildDate": {}, "UnitNumber": {},
+		"UserName": {},
 		"Mode": {}, // consumed but not typed
 	}
 	for _, a := range attrs {
@@ -193,6 +195,10 @@ func parseIScanAttrs(attrs []xml.Attr, s *IScan) {
 			if v := parseInt(val); v > 0 {
 				s.ZLayers = v
 			}
+		case "Z-spacing":
+			// Lenient: ParseFloat returns 0 on empty/malformed input,
+			// matching the ZLayers convention.
+			s.ZSpacing = parseFloat(val)
 		case "BuildVersion":
 			s.BuildVersion = val
 		case "BuildDate":
