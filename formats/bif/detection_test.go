@@ -179,6 +179,16 @@ type iFDSpec struct {
 	// JPEGTables-splice tests). Larger grids should keep using
 	// tileFill until a richer use case justifies extending.
 	tileBytesOverride []byte
+
+	// imageDepth, when > 1, makes this a volumetric pyramid IFD —
+	// the IFD writes IMAGE_DEPTH (32997) tag and the
+	// TileOffsets/TileByteCounts arrays grow by a factor of imageDepth
+	// (storage layout per BIF whitepaper §"Whole slide imaging
+	// process": [Z=0 plane × M*N][Z=1 plane × M*N]...). Each
+	// Z-plane's tile content is `byte(tileFill + zIndex)` so per-
+	// plane reads are distinguishable in tests. Default 0/1 = a
+	// non-volumetric IFD (no IMAGE_DEPTH tag emitted).
+	imageDepth int
 }
 
 // buildBIFLikeBigTIFF builds a BigTIFF (little-endian) carrying len(ifds)
@@ -210,6 +220,7 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		tw, th     uint64 // TileWidth/TileLength values; 0 = no tile tags
 		gridW      uint64
 		gridH      uint64
+		depth      uint64 // imageDepth (Z-stack count); 0 = no IMAGE_DEPTH tag emitted
 		tileBytes  []byte // concatenated raw tile bytes; nil if no tile tags
 	}
 	metas := make([]meta, len(ifds))
@@ -236,20 +247,41 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			m.th = uint64(ifd.tileLength)
 			m.gridW = (m.imgW + m.tw - 1) / m.tw
 			m.gridH = (m.imgH + m.th - 1) / m.th
-			n := m.gridW * m.gridH
+			depth := uint64(ifd.imageDepth)
+			if depth < 1 {
+				depth = 1
+			}
+			m.depth = depth
+			n := m.gridW * m.gridH * depth
 			if ifd.tileBytesOverride != nil {
 				if n != 1 {
-					t.Fatalf("ifd %d: tileBytesOverride only supported on 1x1 grids; got %dx%d", i, m.gridW, m.gridH)
+					t.Fatalf("ifd %d: tileBytesOverride only supported on 1x1 grids (with imageDepth=1); got %dx%d × depth %d", i, m.gridW, m.gridH, depth)
 				}
 				m.tileBytes = append([]byte(nil), ifd.tileBytesOverride...)
 			} else {
 				tileSize := m.tw * m.th
-				m.tileBytes = bytes.Repeat([]byte{ifd.tileFill}, int(n*tileSize))
+				if depth > 1 {
+					// Per-Z-plane fill: byte(tileFill + zIndex) so each
+					// plane's tile content differs and tests can verify
+					// they read the right plane. tileFill defaults to 0,
+					// so Z=0 → 0x00, Z=1 → 0x01, Z=2 → 0x02, ...
+					m.tileBytes = make([]byte, 0, int(n*tileSize))
+					for z := uint64(0); z < depth; z++ {
+						planeSize := int(m.gridW * m.gridH * tileSize)
+						m.tileBytes = append(m.tileBytes,
+							bytes.Repeat([]byte{byte(int(ifd.tileFill) + int(z))}, planeSize)...)
+					}
+				} else {
+					m.tileBytes = bytes.Repeat([]byte{ifd.tileFill}, int(n*tileSize))
+				}
 			}
 			// TileWidth + TileLength + TileOffsets + TileByteCounts +
 			// Compression (always JPEG=7 for synthetic tiled IFDs;
 			// matches every real BIF pyramid IFD).
 			m.entryCount += 5
+			if ifd.imageDepth > 1 {
+				m.entryCount++ // IMAGE_DEPTH (32997)
+			}
 		} else {
 			// Non-tiled IFD: emit single-strip metadata so the
 			// associated-image constructor (T16) can read these
@@ -295,7 +327,7 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			cursor += uint64(len(ifd.jpegTables))
 		}
 		if ifd.tileWidth > 0 {
-			n := m.gridW * m.gridH
+			n := m.gridW * m.gridH * m.depth
 			// TileOffsets array (LONG8 = 8 bytes/entry). Inline only when n == 1.
 			if n > 1 {
 				tileOffArrayOffsets[i] = cursor
@@ -358,7 +390,7 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 		}
 		// 322 TileWidth, 323 TileLength, 324 TileOffsets, 325 TileByteCounts
 		if ifd.tileWidth > 0 {
-			n := m.gridW * m.gridH
+			n := m.gridW * m.gridH * m.depth
 			tileSize := uint64(len(m.tileBytes)) / n
 			_ = binary.Write(buf, binary.LittleEndian, uint16(322))
 			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
@@ -399,6 +431,13 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			_ = binary.Write(buf, binary.LittleEndian, uint64(len(ifd.xmp)))
 			writeInlineOrOffset(buf, ifd.xmp, xmpOffsets[i])
 		}
+		// 32997 IMAGE_DEPTH (LONG, count=1) — only when imageDepth > 1.
+		if ifd.imageDepth > 1 {
+			_ = binary.Write(buf, binary.LittleEndian, uint16(32997))
+			_ = binary.Write(buf, binary.LittleEndian, uint16(4))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(1))
+			_ = binary.Write(buf, binary.LittleEndian, uint64(ifd.imageDepth))
+		}
 		nextIFD := uint64(0)
 		if i+1 < len(ifds) {
 			nextIFD = ifdOffsets[i+1]
@@ -419,7 +458,7 @@ func buildBIFLikeBigTIFF(t *testing.T, ifds []iFDSpec) []byte {
 			buf.Write(ifd.jpegTables)
 		}
 		if ifd.tileWidth > 0 {
-			n := m.gridW * m.gridH
+			n := m.gridW * m.gridH * m.depth
 			tileSize := uint64(len(m.tileBytes)) / n
 			emptySet := make(map[int]struct{}, len(ifd.emptyTileIndices))
 			for _, k := range ifd.emptyTileIndices {
