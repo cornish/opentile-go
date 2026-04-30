@@ -27,6 +27,43 @@ type SizeMm struct {
 
 func (s SizeMm) IsZero() bool { return s.W == 0 && s.H == 0 }
 
+// TileCoord identifies a tile by its position in the multi-
+// dimensional WSI space. X and Y are the existing 2D grid position;
+// Z, C, and T select among focal planes (Z), fluorescence /
+// spectral channels (C), and time points (T) respectively.
+//
+// Z, C, T default to zero — a TileCoord literal {X: x, Y: y}
+// addresses the same tile that Level.Tile(x, y) returns. Zero is
+// the "nominal" / "first" / "T=0" plane in every dimension.
+//
+// Valid ranges per axis:
+//
+//	0 <= X < Level.Grid().W
+//	0 <= Y < Level.Grid().H
+//	0 <= Z < Image.SizeZ()
+//	0 <= C < Image.SizeC()
+//	0 <= T < Image.SizeT()
+//
+// Out-of-range values yield *TileError wrapping
+// ErrDimensionUnavailable (axis is unsupported on this Image —
+// SizeZ/C/T == 1) or ErrTileOutOfBounds (axis exists but the index
+// is past its declared size).
+//
+// Added in v0.7 alongside Level.TileAt and Image.SizeZ/SizeC/SizeT.
+type TileCoord struct {
+	X, Y int
+	Z    int
+	C    int
+	T    int
+}
+
+func (t TileCoord) String() string {
+	if t.Z == 0 && t.C == 0 && t.T == 0 {
+		return fmt.Sprintf("(%d,%d)", t.X, t.Y)
+	}
+	return fmt.Sprintf("(%d,%d, Z=%d, C=%d, T=%d)", t.X, t.Y, t.Z, t.C, t.T)
+}
+
 // Region is an axis-aligned rectangle in pixel or tile units.
 type Region struct {
 	Origin Point
