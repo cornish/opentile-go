@@ -57,6 +57,14 @@ type levelImpl struct {
 	// slide where the attribute is absent fall back to 255 (true white).
 	scanWhitePoint uint8
 
+	// imageDepth is the IMAGE_DEPTH (32997) tag value: count of
+	// Z-planes stored in TileOffsets/TileByteCounts. 1 for non-
+	// volumetric IFDs (every fixture in the local sample set
+	// per the T1 gate). When > 1, TileOffsets is laid out
+	// [Z=0 plane × M*N tiles][Z=1 plane × M*N tiles]... per BIF
+	// whitepaper §"Whole slide imaging process".
+	imageDepth int
+
 	reader io.ReaderAt // for SectionReader-based streaming
 }
 
@@ -101,8 +109,14 @@ func newLevelImpl(
 	if err != nil {
 		return nil, fmt.Errorf("bif level=%d: TileByteCounts: %w", c.Level, err)
 	}
-	if len(offsets) != len(counts) || len(offsets) != cols*rows {
-		return nil, fmt.Errorf("bif level=%d: tile table length mismatch: offsets=%d counts=%d grid=%dx%d", c.Level, len(offsets), len(counts), cols, rows)
+	imageDepth, _ := p.ImageDepth() // (1, false) when tag absent
+	if imageDepth < 1 {
+		imageDepth = 1
+	}
+	expectedTiles := cols * rows * imageDepth
+	if len(offsets) != len(counts) || len(offsets) != expectedTiles {
+		return nil, fmt.Errorf("bif level=%d: tile table length mismatch: offsets=%d counts=%d expected=%d (= depth %d × grid %dx%d)",
+			c.Level, len(offsets), len(counts), expectedTiles, imageDepth, cols, rows)
 	}
 
 	comp, _ := p.Compression()
@@ -147,6 +161,7 @@ func newLevelImpl(
 		counts:         counts,
 		jpegTables:     jpegTables,
 		scanWhitePoint: scanWhitePoint,
+		imageDepth:     imageDepth,
 		reader:         reader,
 	}, nil
 }
@@ -187,52 +202,44 @@ func (l *levelImpl) MPP() opentile.SizeMm              { return l.mpp }
 func (l *levelImpl) FocalPlane() float64               { return 0 }
 func (l *levelImpl) TileOverlap() image.Point          { return l.tileOverlap }
 
-// indexOf validates (col, row) is within the tile grid and returns
-// the serpentine index into offsets/counts.
-func (l *levelImpl) indexOf(col, row int) (int, error) {
+// indexOf validates (z, col, row) and returns the storage index
+// into offsets/counts. For non-volumetric IFDs (imageDepth == 1)
+// only z=0 is valid; for volumetric IFDs the layout per spec
+// §"Whole slide imaging process" is [Z=0 plane × M*N][Z=1 plane × M*N]...
+// — so the Z-stride is `cols*rows`.
+//
+// Error discrimination per design spec §11 Q1:
+//   - imageDepth == 1 and z != 0 → ErrDimensionUnavailable
+//     (Z axis effectively absent on this slide).
+//   - imageDepth > 1 and z out of [0, imageDepth) → ErrTileOutOfBounds
+//     (axis exists but the index is past its size).
+//   - any (col, row) out of grid → ErrTileOutOfBounds.
+func (l *levelImpl) indexOf(z, col, row int) (int, error) {
+	if z != 0 && l.imageDepth == 1 {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrDimensionUnavailable}
+	}
+	if z < 0 || z >= l.imageDepth {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrTileOutOfBounds}
+	}
 	if col < 0 || row < 0 || col >= l.grid.W || row >= l.grid.H {
 		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrTileOutOfBounds}
 	}
-	idx := imageToSerpentine(col, row, l.grid.W, l.grid.H)
-	if idx < 0 || idx >= len(l.offsets) {
+	serp := imageToSerpentine(col, row, l.grid.W, l.grid.H)
+	if serp < 0 {
 		// Defensive — imageToSerpentine should never return -1 for in-bounds (col, row).
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrTileOutOfBounds}
+	}
+	idx := z*(l.grid.W*l.grid.H) + serp
+	if idx < 0 || idx >= len(l.offsets) {
 		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: opentile.ErrTileOutOfBounds}
 	}
 	return idx, nil
 }
 
-// TileAt is the multi-dim entry point. v0.7 BIF supports Z-stacks
-// (IMAGE_DEPTH-driven multi-Z) but no fluorescence (C) or time-
-// series (T). T8 will replace this delegating impl with the real
-// Z-aware version that does offsets[Z*M*N + serpIdx]; for now this
-// is a 2D delegate so the codebase compiles after T5.
-func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
-	if coord.Z != 0 || coord.C != 0 || coord.T != 0 {
-		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
-	}
-	return l.Tile(coord.X, coord.Y)
-}
-
-// Tile returns the compressed tile bytes at (col, row) in
-// image-space — a standalone valid JPEG (or, for theoretical
-// non-JPEG BIF dialects, the raw codestream). Internally remapped
-// to TileOffsets storage order via imageToSerpentine.
-//
-//   - Empty tiles (`TileOffsets[i] == 0 && TileByteCounts[i] == 0`,
-//     per BIF whitepaper §"AOI Positions") return a synthesised JPEG
-//     filled with the slide's `ScanWhitePoint` luminance — see
-//     blankTile.
-//   - When the IFD carries shared JPEGTables (tag 347), the per-tile
-//     abbreviated scan bytes have DQT/DHT spliced before SOS via
-//     jpeg.InsertTables so the result decodes standalone. BIF is
-//     YCbCr — no APP14 RGB colorspace-fix is needed (unlike SVS).
-//   - When JPEGTables is absent, the tile bytes carry their own
-//     SOI/DQT/DHT/SOF and are returned verbatim.
-func (l *levelImpl) Tile(col, row int) ([]byte, error) {
-	idx, err := l.indexOf(col, row)
-	if err != nil {
-		return nil, err
-	}
+// readTileAtIdx is the canonical tile read: empty-tile blank fill,
+// JPEGTables splice, or raw passthrough. Shared between Tile() and
+// TileAt() so both paths are byte-identical.
+func (l *levelImpl) readTileAtIdx(idx, col, row int) ([]byte, error) {
 	if l.isEmpty(idx) {
 		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
 		if err != nil {
@@ -256,6 +263,40 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 	return buf, nil
 }
 
+// TileAt is the multi-dim entry point for BIF. Supports Z-stacks
+// (IMAGE_DEPTH-driven multi-Z) but no fluorescence channels (C) or
+// time series (T) — those axes always 0, else ErrDimensionUnavailable.
+//
+// (col, row) is in image-space row-major; serpentine remapped
+// internally. Z is the storage-order index 0..imageDepth-1; Z=0 is
+// always the nominal focus plane per BIF whitepaper §"Whole slide
+// imaging process".
+func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
+	if coord.C != 0 || coord.T != 0 {
+		return nil, &opentile.TileError{Level: l.index, X: coord.X, Y: coord.Y, Err: opentile.ErrDimensionUnavailable}
+	}
+	idx, err := l.indexOf(coord.Z, coord.X, coord.Y)
+	if err != nil {
+		return nil, err
+	}
+	return l.readTileAtIdx(idx, coord.X, coord.Y)
+}
+
+// Tile returns the compressed tile bytes at (col, row) in
+// image-space at the nominal focal plane (Z=0) — a standalone valid
+// JPEG (or, for theoretical non-JPEG BIF dialects, the raw
+// codestream). Equivalent to TileAt(TileCoord{X: col, Y: row}).
+//
+// See readTileAtIdx for the empty-tile / JPEGTables-splice / raw
+// passthrough behaviour shared with TileAt.
+func (l *levelImpl) Tile(col, row int) ([]byte, error) {
+	idx, err := l.indexOf(0, col, row)
+	if err != nil {
+		return nil, err
+	}
+	return l.readTileAtIdx(idx, col, row)
+}
+
 // TileReader returns a streaming reader over the tile at (col, row).
 //
 //   - Empty entries: a bytes.Reader over the cached blank tile.
@@ -266,7 +307,7 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 //   - Other JPEG entries: a zero-copy io.SectionReader over the
 //     source TIFF.
 func (l *levelImpl) TileReader(col, row int) (io.ReadCloser, error) {
-	idx, err := l.indexOf(col, row)
+	idx, err := l.indexOf(0, col, row)
 	if err != nil {
 		return nil, err
 	}
