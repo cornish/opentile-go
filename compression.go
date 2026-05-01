@@ -17,7 +17,14 @@ const (
 	CompressionNone
 	CompressionJPEG
 	CompressionJP2K
-	CompressionLZW // TIFF tag 259 value 5 (Aperio SVS label is commonly LZW)
+	CompressionLZW  // TIFF tag 259 value 5 (Aperio SVS label is commonly LZW)
+	CompressionAVIF // tile bytes are an AVIF image; consumer decodes via libavif
+	// CompressionIRIS is the Iris-proprietary tile codec used by IFE files
+	// when written through Iris-Codec. opentile-go reports it but does not
+	// decode the bytes; consumers either embed an Iris codec or 501 the
+	// request. JPEG and AVIF tiles in IFE remain decodable by external
+	// codecs.
+	CompressionIRIS
 )
 
 func (c Compression) String() string {
@@ -32,6 +39,10 @@ func (c Compression) String() string {
 		return "jp2k"
 	case CompressionLZW:
 		return "lzw"
+	case CompressionAVIF:
+		return "avif"
+	case CompressionIRIS:
+		return "iris"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(c))
 	}
