@@ -2,7 +2,6 @@ package ife
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
 	opentile "github.com/cornish/opentile-go"
@@ -35,15 +34,13 @@ func TestSupportsRaw(t *testing.T) {
 	}
 }
 
-func TestOpenRawStub(t *testing.T) {
-	// Until T11 wires the Tiler, OpenRaw on a magic-bearing buffer
-	// returns errIFETilerUnimplemented. Pin the contract so removing
-	// the stub later doesn't accidentally regress to silent success.
+func TestOpenRawRejectsBadFile(t *testing.T) {
+	// OpenRaw on a magic-bearing-but-truncated buffer must fail with
+	// a parse error from openIFE, not silently succeed.
 	f := New()
 	good := append([]byte{0x73, 0x69, 0x72, 0x49}, make([]byte, 4)...)
-	_, err := f.OpenRaw(bytes.NewReader(good), int64(len(good)), &opentile.Config{})
-	if !errors.Is(err, errIFETilerUnimplemented) {
-		t.Errorf("OpenRaw stub: got %v, want errIFETilerUnimplemented", err)
+	if _, err := f.OpenRaw(bytes.NewReader(good), int64(len(good)), &opentile.Config{}); err == nil {
+		t.Error("OpenRaw on truncated buffer: got nil error")
 	}
 }
 

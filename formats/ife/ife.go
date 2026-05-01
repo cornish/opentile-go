@@ -2,17 +2,11 @@ package ife
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
 
 	opentile "github.com/cornish/opentile-go"
 	"github.com/cornish/opentile-go/internal/tiff"
 )
-
-// errIFETilerUnimplemented is the placeholder OpenRaw failure used in
-// T10 before the real Tiler lands in T11. Removed once openIFE in
-// tiler.go is wired up.
-var errIFETilerUnimplemented = errors.New("ife: Tiler not yet implemented (T11)")
 
 // Factory is the FormatFactory implementation for Iris IFE — the
 // first non-TIFF format in opentile-go. It overrides SupportsRaw +
@@ -41,11 +35,9 @@ func (f *Factory) SupportsRaw(r io.ReaderAt, size int64) bool {
 	return binary.LittleEndian.Uint32(buf[:]) == MagicBytes
 }
 
-// OpenRaw parses an IFE v1.0 file and returns a Tiler. The Tiler
-// implementation lands in T11; for now this stub returns a
-// not-implemented error so the factory wiring round-trips cleanly.
+// OpenRaw parses an IFE v1.0 file and returns a Tiler.
 func (f *Factory) OpenRaw(r io.ReaderAt, size int64, cfg *opentile.Config) (opentile.Tiler, error) {
-	return nil, errIFETilerUnimplemented
+	return openIFE(r, size, cfg)
 }
 
 // Supports is the TIFF-path entry point; IFE files are never TIFFs,
