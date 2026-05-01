@@ -14,8 +14,8 @@ import (
 	"github.com/cornish/opentile-go/tests"
 )
 
-// slideCandidates lists SVS, NDPI, Philips, and OME slides this
-// integration suite knows about. Each is tested only if both the
+// slideCandidates lists SVS, NDPI, Philips, OME, BIF, and IFE slides
+// this integration suite knows about. Each is tested only if both the
 // on-disk slide and the committed fixture JSON are present; otherwise
 // the slide is skipped.
 var slideCandidates = []string{
@@ -35,6 +35,7 @@ var slideCandidates = []string{
 	"Leica-2.ome.tiff",
 	"Ventana-1.bif",
 	"OS-1.bif",
+	"cervix_2x_jpeg.iris",
 }
 
 // resolveSlide looks up name in dir, dir/svs, dir/ndpi, dir/phillips-tiff,
@@ -44,7 +45,7 @@ var slideCandidates = []string{
 // "phillips-tiff" (typo preserved from the original sample_files
 // layout).
 func resolveSlide(dir, name string) (string, bool) {
-	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff", "ventana-bif"} {
+	for _, sub := range []string{"", "svs", "ndpi", "phillips-tiff", "ome-tiff", "ventana-bif", "ife"} {
 		p := filepath.Join(dir, sub, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
@@ -276,6 +277,8 @@ func fixtureJSONFor(slideFilename string) string {
 		return stem + ".tiff.json"
 	case ".bif":
 		return stem + ".bif.json"
+	case ".iris":
+		return stem + ".ife.json"
 	}
 	return stem + ".json"
 }
