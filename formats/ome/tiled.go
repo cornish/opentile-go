@@ -171,6 +171,17 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 
 func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
 
+// warm pre-faults the page-cache pages backing every tile on this
+// level.
+func (l *tiledImage) warm() error {
+	for i, off := range l.offsets {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(l.counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Tile keeps the v0.8-and-earlier fast path: read + splice (when
 // applicable) + return. TileInto is the pool-friendly variant.
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {

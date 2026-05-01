@@ -152,6 +152,35 @@ func (l *Image) TileAt(coord opentile.TileCoord) ([]byte, error) {
 // approach.
 func (l *Image) TileMaxSize() int { return l.tileSize.W * l.tileSize.H }
 
+// warm pre-faults the page-cache pages backing the page's strips.
+// OneFrame stores the level as a single (or per-channel) TIFF strip;
+// touching all bytes of every strip is what warmup means here.
+func (l *Image) warm() error {
+	offs, err := l.page.ScalarArrayU64(tiff.TagStripOffsets)
+	if err != nil {
+		return err
+	}
+	counts, err := l.page.ScalarArrayU64(tiff.TagStripByteCounts)
+	if err != nil {
+		return err
+	}
+	if len(offs) != len(counts) {
+		// Defensive — TIFF rules require parity but we don't want to
+		// panic during a hint operation.
+		n := len(offs)
+		if len(counts) < n {
+			n = len(counts)
+		}
+		offs, counts = offs[:n], counts[:n]
+	}
+	for i, off := range offs {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // TileInto writes the tile bytes into dst. The OneFrame internal
 // scratch (extended frame + libjpeg-turbo crop output) still
 // allocates; dst receives the final copy.

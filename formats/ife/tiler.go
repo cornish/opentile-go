@@ -7,6 +7,7 @@ import (
 	"iter"
 
 	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // openIFE is the real OpenRaw entry point. It parses every metadata
@@ -149,6 +150,15 @@ func (t *tiler) ICCProfile() []byte {
 	return out
 }
 func (t *tiler) Close() error { return nil }
+func (t *tiler) WarmLevel(i int) error {
+	if i < 0 || i >= len(t.levels) {
+		return opentile.ErrLevelOutOfRange
+	}
+	if w, ok := t.levels[i].(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 
 // levelImpl is the IFE implementation of opentile.Level. apiIndex
 // indexes layerExtentsAPI (0 = native, len-1 = coarsest); the
@@ -212,6 +222,26 @@ func (l *levelImpl) linearIndex(col, row int) (uint64, error) {
 }
 
 func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
+
+// warm pre-faults the page-cache pages backing every tile entry on
+// this level. Sparse entries (Offset == NullTile) carry no on-disk
+// bytes and are skipped. Called via Tiler.WarmLevel.
+func (l *levelImpl) warm() error {
+	fi := l.fileIndex()
+	ext := l.tiler.layerExtentsFile[fi]
+	base := l.tiler.layerCumulative[fi]
+	n := uint64(ext.XTiles) * uint64(ext.YTiles)
+	for k := uint64(0); k < n; k++ {
+		e := l.tiler.tileOffsets[base+k]
+		if e.Offset == NullTile || e.Size == 0 {
+			continue
+		}
+		if err := tiff.TouchPages(l.tiler.r, int64(e.Offset), int64(e.Size)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Tile allocates a fresh []byte sized exactly to the entry's Size
 // and reads tile bytes directly into it. High-RPS callers should

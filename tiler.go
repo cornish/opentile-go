@@ -33,5 +33,29 @@ type Tiler interface {
 	Associated() []AssociatedImage
 	Metadata() Metadata
 	ICCProfile() []byte
+
+	// WarmLevel pre-warms the page cache for level i by touching one
+	// byte per OS page covering this level's tile-data ranges. Under
+	// mmap-backed [OpenFile] (the v0.9 default), this forces the
+	// kernel to populate the page cache lazily on first call —
+	// subsequent [Level.Tile] / [Level.TileInto] reads on level i hit
+	// RAM at memory-bandwidth speed regardless of access pattern.
+	//
+	// Under [BackingPread], WarmLevel does effectively the same work
+	// via a pread(1) per page. Slower, but the warm-up effect
+	// (kernel page cache population) is the same.
+	//
+	// Returns [ErrLevelOutOfRange] if i is out of bounds. Returns
+	// the first non-EOF read error encountered while touching pages
+	// (typically I/O errors on the underlying file). nil on success.
+	//
+	// Best-effort: callers that want to ignore errors (it's a hint,
+	// after all) can discard the result. Concurrent calls on
+	// different levels are safe; concurrent calls on the same level
+	// are safe but redundant.
+	//
+	// Added in v0.9 alongside the mmap-default [OpenFile] change.
+	WarmLevel(i int) error
+
 	Close() error
 }

@@ -192,6 +192,17 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 
 func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
 
+// warm pre-faults the page-cache pages backing every tile on this
+// level. Called via Tiler.WarmLevel.
+func (l *tiledImage) warm() error {
+	for i, off := range l.offsets {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(l.counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Tile keeps the v0.8-and-earlier fast path: read tile bytes, splice
 // JPEGTables if needed, return the result. Allocates only the
 // final output (one alloc on no-splice; one read scratch + one

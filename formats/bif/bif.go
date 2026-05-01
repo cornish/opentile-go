@@ -290,6 +290,16 @@ func (t *Tiler) Levels() []opentile.Level { return t.image.Levels() }
 
 // Level is a shortcut for Images()[0].Level(i).
 func (t *Tiler) Level(i int) (opentile.Level, error) { return t.image.Level(i) }
+func (t *Tiler) WarmLevel(i int) error {
+	lvl, err := t.image.Level(i)
+	if err != nil {
+		return err
+	}
+	if w, ok := lvl.(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 
 // Associated returns the slide's associated images: every BIF has
 // an "overview" entry; spec-compliant slides additionally expose

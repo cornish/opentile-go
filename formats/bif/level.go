@@ -306,6 +306,18 @@ func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
 // output bytes on this level (since v0.9).
 func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
 
+// warm pre-faults the page-cache pages backing every tile on this
+// level. For volumetric IFDs (imageDepth > 1) the offsets array
+// already contains all Z-plane entries flat; one pass covers them.
+func (l *levelImpl) warm() error {
+	for i, off := range l.offsets {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(l.counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Tile returns the compressed tile bytes at (col, row) in
 // image-space at the nominal focal plane (Z=0). Allocates the
 // returned slice; high-RPS callers should switch to TileInto with

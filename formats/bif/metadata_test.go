@@ -119,6 +119,7 @@ func (nonBIFTiler) Associated() []opentile.AssociatedImage { return nil }
 func (nonBIFTiler) Metadata() opentile.Metadata           { return opentile.Metadata{} }
 func (nonBIFTiler) ICCProfile() []byte                    { return nil }
 func (nonBIFTiler) Close() error                          { return nil }
+func (nonBIFTiler) WarmLevel(int) error                   { return nil }
 
 // TestMetadataIsCachedNotRecomputed: two consecutive Metadata calls
 // return equal common-field structs; MetadataOf returns the same
