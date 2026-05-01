@@ -1258,3 +1258,37 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 ## 10. Triage process
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.
+
+## 11. Consolidated backlog (re-triage after v0.9)
+
+v0.9 is a sole-focus performance milestone (mmap default, `TileInto`,
+`TileMaxSize`, `WarmLevel`, splice template, concurrency-contract
+docs). Per owner instruction (2026-05-01), every other deferred work
+item is parked here as a single backlog list to be re-prioritised
+once v0.9 ships. This is **not** a re-classification of the items
+themselves — they retain their existing severity tags in §2 above —
+just a unified view that says "we'll decide what's next after v0.9
+lands."
+
+Each entry below cross-references the canonical §2 entry where the
+item's full reasoning + resolution path live. Permanent items
+(L4, L5, L14, L24) are not in this list because they're design
+decisions, not deferred work.
+
+| Item | Surface | Severity | Original milestone | Trigger to revisit |
+|---|---|---|---|---|
+| **L19** — openslide BIF pixel-equivalence | BIF | Research-driven | v0.7 | Investigation: is openslide-pixel-equivalence even the right correctness oracle for BIF? |
+| **L20** — DP 600 unverified | BIF | Fixture-driven | v0.7 | First DP 600 fixture surfaces |
+| **L23** — IFE cross-tool parity vs `tile_server_iris` | IFE | Trigger-driven | v0.8 | First downstream divergence story |
+| **L25** — IFE ANNOTATIONS block parsing | IFE | Fixture-driven | v0.8 | First annotated IFE fixture surfaces |
+| **R4** — SVS corrupt-edge reconstruct | SVS | Trigger-driven | parked at [#1](https://github.com/cornish/opentile-go/issues/1) | First corrupt-edge SVS in our slate |
+| **R9** — JPEG 2000 decode/encode | SVS | Trigger-driven | parked at [#1](https://github.com/cornish/opentile-go/issues/1) | Same as R4 |
+| **R6** — 3DHistech TIFF support | (new) | Trigger-driven | parked at [#2](https://github.com/cornish/opentile-go/issues/2) | First 3DHistech TIFF in the wild |
+| **R15** — Sakura SVSlide support | (new) | Trigger-driven | parked at [#3](https://github.com/cornish/opentile-go/issues/3) | First SVSlide in the wild |
+| **R16** — Leica SCN support | (new) | Trigger-driven | mentioned as v0.8 candidate, not picked up | First SCN in the wild or owner request |
+| **`Level.TilePrefix() []byte`** | A.3 follow-on | YAGNI | v0.9 | First §B consumer asks for it |
+| **Zero-copy `Level.TileBorrow(x, y) ([]byte, func(), error)`** | A.5 follow-on | YAGNI | v0.9 | Concrete consumer with measured zero-copy benefit |
+
+Re-triage at v0.9 ship: either pick the next milestone's scope from
+this list, or fold an item into a v0.9.x point release if the trigger
+fires sooner than expected.
