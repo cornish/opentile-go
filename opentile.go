@@ -13,11 +13,39 @@ import (
 
 // FormatFactory is implemented by format packages to register themselves with
 // the top-level opentile package. Factories are queried in registration order;
-// the first factory whose Supports() returns true is used.
+// the first factory whose Supports() (TIFF path) or SupportsRaw() (non-TIFF
+// path) returns true is used.
+//
+// SupportsRaw + OpenRaw provide a non-TIFF dispatch path. Open's reader
+// queries SupportsRaw first; if any factory takes the byte-level dispatch,
+// the input is never handed to tiff.Open. Format packages whose files are
+// classic/BigTIFF should embed [RawUnsupported] for the zero-value default
+// impls (SupportsRaw → false, OpenRaw → ErrUnsupportedFormat). The first
+// non-TIFF format to use this path is Iris IFE in v0.8.
 type FormatFactory interface {
 	Format() Format
+	SupportsRaw(r io.ReaderAt, size int64) bool
+	OpenRaw(r io.ReaderAt, size int64, cfg *Config) (Tiler, error)
 	Supports(file *tiff.File) bool
 	Open(file *tiff.File, cfg *Config) (Tiler, error)
+}
+
+// RawUnsupported is the zero-impl base for [FormatFactory.SupportsRaw] +
+// [FormatFactory.OpenRaw]. Format packages whose files are classic or
+// BigTIFF embed this struct in their Factory type to inherit the
+// "doesn't take the non-TIFF dispatch path" defaults. Non-TIFF format
+// packages (Iris IFE) override both methods on their own Factory.
+type RawUnsupported struct{}
+
+// SupportsRaw reports false: this format doesn't recognize raw byte streams,
+// so the dispatch loop continues to the TIFF path.
+func (RawUnsupported) SupportsRaw(io.ReaderAt, int64) bool { return false }
+
+// OpenRaw returns ErrUnsupportedFormat; the dispatch loop never reaches
+// this method on a TIFF-only factory because SupportsRaw returns false
+// first, but the explicit error keeps callers honest if they bypass Open.
+func (RawUnsupported) OpenRaw(io.ReaderAt, int64, *Config) (Tiler, error) {
+	return nil, ErrUnsupportedFormat
 }
 
 var (

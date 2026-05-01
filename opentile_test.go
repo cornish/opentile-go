@@ -13,15 +13,21 @@ import (
 
 // testFactory is a minimal FormatFactory used to inject identifiers into the
 // registry for introspection tests.
-type testFactory struct{ format Format }
+type testFactory struct {
+	RawUnsupported
+	format Format
+}
 
-func (t testFactory) Format() Format                              { return t.format }
-func (t testFactory) Supports(*tiff.File) bool                    { return false }
-func (t testFactory) Open(*tiff.File, *Config) (Tiler, error)     { return nil, ErrUnsupportedFormat }
+func (t testFactory) Format() Format                          { return t.format }
+func (t testFactory) Supports(*tiff.File) bool                { return false }
+func (t testFactory) Open(*tiff.File, *Config) (Tiler, error) { return nil, ErrUnsupportedFormat }
 
 // fakeFactory is a test double that reports support when the tag
 // ImageDescription begins with "FAKE".
-type fakeFactory struct{ openCalled bool }
+type fakeFactory struct {
+	RawUnsupported
+	openCalled bool
+}
 
 func (f *fakeFactory) Format() Format { return Format("fake") }
 func (f *fakeFactory) Supports(file *tiff.File) bool {
