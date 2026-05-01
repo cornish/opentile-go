@@ -35,7 +35,54 @@ type Level interface {
 	// Tile returns the raw compressed tile bytes at (x, y) as stored in the
 	// source TIFF. Equivalent to TileAt(TileCoord{X: x, Y: y}) — the
 	// nominal-plane / first-channel / T=0 tile.
+	//
+	// Allocates a fresh []byte for each call. For high-RPS callers,
+	// prefer [Level.TileInto] with a caller-provided buffer (typically
+	// from a [sync.Pool]).
 	Tile(x, y int) ([]byte, error)
+
+	// TileInto writes the raw compressed tile bytes at (x, y) into dst
+	// and returns the number of bytes written. Returns
+	// [io.ErrShortBuffer] if len(dst) < [Level.TileMaxSize] for this
+	// level (no I/O is performed in that case).
+	//
+	// Tile(x, y) is shorthand for:
+	//
+	//	buf := make([]byte, l.TileMaxSize())
+	//	n, err := l.TileInto(x, y, buf)
+	//	return buf[:n], err
+	//
+	// dst is caller-allocated and caller-owned; opentile-go writes into
+	// it and never reads it after return. Pool-friendly callers should
+	// keep a sync.Pool of []byte buffers sized at TileMaxSize() and
+	// reset to that capacity before each call.
+	//
+	// For 2D-only Levels: non-zero Z/C/T arguments to TileAt are not
+	// applicable here; use [Level.TileAt] directly when multi-dim
+	// addressing is needed. TileInto is the (x, y) hot path.
+	//
+	// Added in v0.9 as the pool-friendly tile-read entry point.
+	TileInto(x, y int, dst []byte) (int, error)
+
+	// TileMaxSize returns the maximum byte length any tile on this
+	// level may produce through [Level.Tile] or [Level.TileInto].
+	// Computed at level-open time and cached; safe to call repeatedly.
+	//
+	// For TIFF formats: max(TileByteCounts) + len(JPEGTables splice
+	// prefix), where the prefix is the (typically per-level) header
+	// inserted by the format reader. For IFE: max(TileEntry.Size).
+	// For NDPI striped + OME OneFrame: the assembled-frame tile size
+	// (always the level's TileSize().W * TileSize().H bytes for the
+	// uncompressed assembly path; the compressed output equals the
+	// decoded tile region).
+	//
+	// Sizing a sync.Pool bucket: round up to the next power-of-two of
+	// TileMaxSize() and reuse across many tiles on the same level.
+	// Adjacent levels typically have similar TileMaxSize values; one
+	// pool per Tiler (sized by max across levels) is usually enough.
+	//
+	// Added in v0.9 alongside [Level.TileInto].
+	TileMaxSize() int
 
 	// TileAt returns the raw compressed tile bytes at the multi-dimensional
 	// coord. Tile(x, y) is shorthand for TileAt(TileCoord{X: x, Y: y}).

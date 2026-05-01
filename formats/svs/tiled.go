@@ -36,6 +36,11 @@ type tiledImage struct {
 	jpegTables []byte // TIFF tag 347 payload (SOI..DQT/DHT..EOI); nil for non-JPEG pages
 	reader     io.ReaderAt
 
+	// maxTileSize is the cached upper bound for Tile/TileInto output:
+	//   max(counts) + JPEGTables splice overhead (when applicable).
+	// Computed once at level open in newTiledImage.
+	maxTileSize int
+
 	cfg *opentile.Config
 }
 
@@ -106,6 +111,23 @@ func newTiledImage(
 	}
 	mpp := opentile.SizeMm{W: baseMPP * scale / 1000.0, H: baseMPP * scale / 1000.0}
 
+	// Cache the upper-bound output size for Tile/TileInto. For JPEG
+	// pages with shared JPEGTables, the splice prepends (SOI + APP14 +
+	// DQT + DHT) — InsertTablesAndAPP14 inserts at most
+	// len(jpegTables) + 16 bytes (the +16 covers the APP14 marker
+	// segment; see internal/jpeg.InsertTablesAndAPP14). For JP2K /
+	// other compressions the tile bytes are returned verbatim.
+	var maxCount uint64
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	maxTileSize := int(maxCount)
+	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
+		maxTileSize += len(jpegTables) + 16
+	}
+
 	return &tiledImage{
 		index:       index,
 		size:        opentile.Size{W: int(iw), H: int(il)},
@@ -118,6 +140,7 @@ func newTiledImage(
 		counts:      counts,
 		jpegTables:  jpegTables,
 		reader:      r,
+		maxTileSize: maxTileSize,
 		cfg:         cfg,
 	}, nil
 }
@@ -167,25 +190,51 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
+
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
-	idx, err := l.indexOf(x, y)
+	buf := make([]byte, l.maxTileSize)
+	n, err := l.TileInto(x, y, buf)
 	if err != nil {
 		return nil, err
 	}
-	length := l.counts[idx]
+	return buf[:n], nil
+}
+
+func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
+	idx, err := l.indexOf(x, y)
+	if err != nil {
+		return 0, err
+	}
+	length := int(l.counts[idx])
 	off := int64(l.offsets[idx])
-	buf := make([]byte, length)
-	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
-		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
-	}
-	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
-		out, err := jpeg.InsertTablesAndAPP14(buf, l.jpegTables)
-		if err != nil {
-			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	needsSplice := l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0
+	if !needsSplice {
+		if len(dst) < length {
+			return 0, io.ErrShortBuffer
 		}
-		return out, nil
+		if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		return length, nil
 	}
-	return buf, nil
+	// JPEG splice path — InsertTablesAndAPP14 returns a fresh []byte
+	// today; v0.9 keeps the read in dst (which is large enough since
+	// l.maxTileSize accounts for the splice overhead) but the splice
+	// itself still allocates an intermediate. T8 will replace this
+	// with a pre-built prefix template if pprof shows it as hot.
+	if len(dst) < l.maxTileSize {
+		return 0, io.ErrShortBuffer
+	}
+	tile := make([]byte, length)
+	if err := tiff.ReadAtFull(l.reader, tile, off); err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	out, err := jpeg.InsertTablesAndAPP14(tile, l.jpegTables)
+	if err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	return copy(dst, out), nil
 }
 
 // TileReader returns an io.ReadCloser carrying the same bytes as Tile.

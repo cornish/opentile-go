@@ -145,6 +145,27 @@ func (l *Image) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+// TileMaxSize returns a generous upper bound for compressed tile
+// output. OneFrame's libjpeg-turbo crop output size depends on
+// entropy coding; we return tileSize.W * tileSize.H as a worst-case
+// bound (one byte per pixel) consistent with NDPI striped's
+// approach.
+func (l *Image) TileMaxSize() int { return l.tileSize.W * l.tileSize.H }
+
+// TileInto writes the tile bytes into dst. The OneFrame internal
+// scratch (extended frame + libjpeg-turbo crop output) still
+// allocates; dst receives the final copy.
+func (l *Image) TileInto(x, y int, dst []byte) (int, error) {
+	b, err := l.Tile(x, y)
+	if err != nil {
+		return 0, err
+	}
+	if len(dst) < len(b) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(dst, b), nil
+}
+
 // Tile returns the JPEG bytes for the tile at (x, y). Out-of-bounds
 // coordinates yield ErrTileOutOfBounds (wrapped in opentile.TileError).
 // All in-bounds reads share the lazily-built extended frame; the

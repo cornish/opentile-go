@@ -78,7 +78,9 @@ func (f *fakeLevel) Compression() Compression                                   
 func (f *fakeLevel) MPP() SizeMm                                                { return f.mpp }
 func (f *fakeLevel) FocalPlane() float64                                        { return 0 }
 func (f *fakeLevel) TileOverlap() image.Point                                   { return image.Point{} }
-func (f *fakeLevel) Tile(x, y int) ([]byte, error)                              { return nil, nil }
-func (f *fakeLevel) TileAt(coord TileCoord) ([]byte, error)                     { return nil, nil }
-func (f *fakeLevel) TileReader(x, y int) (io.ReadCloser, error)                 { return nil, nil }
-func (f *fakeLevel) Tiles(ctx context.Context) iter.Seq2[TilePos, TileResult]   { return nil }
+func (f *fakeLevel) Tile(x, y int) ([]byte, error)                            { return nil, nil }
+func (f *fakeLevel) TileInto(x, y int, dst []byte) (int, error)               { return 0, nil }
+func (f *fakeLevel) TileMaxSize() int                                         { return 0 }
+func (f *fakeLevel) TileAt(coord TileCoord) ([]byte, error)                   { return nil, nil }
+func (f *fakeLevel) TileReader(x, y int) (io.ReadCloser, error)               { return nil, nil }
+func (f *fakeLevel) Tiles(ctx context.Context) iter.Seq2[TilePos, TileResult] { return nil }

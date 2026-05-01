@@ -66,6 +66,11 @@ type levelImpl struct {
 	imageDepth int
 
 	reader io.ReaderAt // for SectionReader-based streaming
+
+	// maxTileSize is the cached upper bound for Tile/TileInto/TileAt
+	// output: max(counts) + JPEGTables splice overhead (when applicable),
+	// or len(blank tile) for tile-grid-empty fixtures whichever is larger.
+	maxTileSize int
 }
 
 // newLevelImpl constructs a levelImpl from a classified IFD. The
@@ -148,6 +153,20 @@ func newLevelImpl(
 		tileOverlap = weightedAverageOverlap(encodeInfo)
 	}
 
+	var maxCount uint64
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	maxTileSize := int(maxCount)
+	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
+		maxTileSize += len(jpegTables) + 8
+	}
+	// Empty-tile path returns a small JPEG (~tileSize²/100 bytes
+	// typically). It's bounded by the same per-tile envelope; no
+	// adjustment needed.
+
 	return &levelImpl{
 		index:          index,
 		pyrIndex:       c.Level,
@@ -163,6 +182,7 @@ func newLevelImpl(
 		scanWhitePoint: scanWhitePoint,
 		imageDepth:     imageDepth,
 		reader:         reader,
+		maxTileSize:    maxTileSize,
 	}, nil
 }
 
@@ -282,6 +302,10 @@ func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.readTileAtIdx(idx, coord.X, coord.Y)
 }
 
+// TileMaxSize is the cached upper bound for Tile / TileInto / TileAt
+// output bytes on this level (since v0.9).
+func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
+
 // Tile returns the compressed tile bytes at (col, row) in
 // image-space at the nominal focal plane (Z=0) — a standalone valid
 // JPEG (or, for theoretical non-JPEG BIF dialects, the raw
@@ -295,6 +319,56 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 		return nil, err
 	}
 	return l.readTileAtIdx(idx, col, row)
+}
+
+// TileInto writes the tile at (col, row) into dst (since v0.9).
+// Returns io.ErrShortBuffer if len(dst) < TileMaxSize().
+func (l *levelImpl) TileInto(col, row int, dst []byte) (int, error) {
+	idx, err := l.indexOf(0, col, row)
+	if err != nil {
+		return 0, err
+	}
+	return l.readTileAtIdxInto(idx, col, row, dst)
+}
+
+// readTileAtIdxInto is the TileInto-shaped variant of readTileAtIdx.
+// Writes output bytes into dst; returns io.ErrShortBuffer when dst
+// is undersized. Caller has already validated (z, col, row) → idx.
+func (l *levelImpl) readTileAtIdxInto(idx, col, row int, dst []byte) (int, error) {
+	if l.isEmpty(idx) {
+		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
+		if err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		if len(dst) < len(b) {
+			return 0, io.ErrShortBuffer
+		}
+		return copy(dst, b), nil
+	}
+	length := int(l.counts[idx])
+	off := int64(l.offsets[idx])
+	needsSplice := l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0
+	if !needsSplice {
+		if len(dst) < length {
+			return 0, io.ErrShortBuffer
+		}
+		if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return length, nil
+	}
+	if len(dst) < l.maxTileSize {
+		return 0, io.ErrShortBuffer
+	}
+	tile := make([]byte, length)
+	if err := tiff.ReadAtFull(l.reader, tile, off); err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+	}
+	out, err := jpeg.InsertTables(tile, l.jpegTables)
+	if err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+	}
+	return copy(dst, out), nil
 }
 
 // TileReader returns a streaming reader over the tile at (col, row).

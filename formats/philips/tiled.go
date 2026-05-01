@@ -42,11 +42,12 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets    []uint64
-	counts     []uint64
-	jpegTables []byte
-	reader     io.ReaderAt
-	cfg        *opentile.Config
+	offsets     []uint64
+	counts      []uint64
+	jpegTables  []byte
+	reader      io.ReaderAt
+	cfg         *opentile.Config
+	maxTileSize int // upper bound for Tile/TileInto output
 
 	// Lazy-built blank tile for sparse positions. Computed once on the
 	// first sparse-tile read; subsequent reads return the cached bytes.
@@ -132,6 +133,22 @@ func newTiledImage(
 		H: baseMPP.H * scaleH,
 	}
 
+	var maxCount uint64
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	maxTileSize := int(maxCount)
+	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
+		// jpeg.InsertTables prepends the tables; +8 covers the
+		// per-segment marker overhead.
+		maxTileSize += len(jpegTables) + 8
+	}
+	// Sparse blank-tile path: blank-tile bytes are sized similarly
+	// (post-FillFrame they fit within a single tile envelope) so the
+	// max above already covers them.
+
 	return &tiledImage{
 		index:       index,
 		size:        correctedSize,
@@ -145,6 +162,7 @@ func newTiledImage(
 		jpegTables:  jpegTables,
 		reader:      r,
 		cfg:         cfg,
+		maxTileSize: maxTileSize,
 	}, nil
 }
 
@@ -180,9 +198,20 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
+
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
+	buf := make([]byte, l.maxTileSize)
+	n, err := l.TileInto(x, y, buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
+func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
-		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
 	}
 	idx := y*l.grid.W + x
 
@@ -190,27 +219,42 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	if l.counts[idx] == 0 {
 		b, err := l.blankTile()
 		if err != nil {
-			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 		}
-		raw = make([]byte, len(b))
-		copy(raw, b)
+		raw = b
 	} else {
-		length := l.counts[idx]
+		length := int(l.counts[idx])
 		off := int64(l.offsets[idx])
+		needsSplice := l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0
+		if !needsSplice {
+			if len(dst) < length {
+				return 0, io.ErrShortBuffer
+			}
+			if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
+				return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+			}
+			return length, nil
+		}
 		raw = make([]byte, length)
 		if err := tiff.ReadAtFull(l.reader, raw, off); err != nil {
-			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 		}
 	}
 
 	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		if len(dst) < l.maxTileSize {
+			return 0, io.ErrShortBuffer
+		}
 		out, err := jpeg.InsertTables(raw, l.jpegTables)
 		if err != nil {
-			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 		}
-		return out, nil
+		return copy(dst, out), nil
 	}
-	return raw, nil
+	if len(dst) < len(raw) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(dst, raw), nil
 }
 
 // TileReader returns an io.ReadCloser carrying the same bytes as Tile.

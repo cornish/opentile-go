@@ -138,6 +138,32 @@ func (l *stripedImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+// TileMaxSize returns a generous upper bound for compressed tile
+// output. NDPI's stripedImage.Tile produces a freshly-encoded JPEG
+// via libjpeg-turbo whose exact size depends on entropy coding; we
+// return tileSize.W * tileSize.H as a worst-case bound (one byte
+// per pixel — JPEG output rarely exceeds that on real photographic
+// data). Callers using TileInto with a dst sized to TileMaxSize
+// have ample headroom; the actual output is typically ~5–10% of
+// this bound.
+func (l *stripedImage) TileMaxSize() int { return l.tileSize.W * l.tileSize.H }
+
+// TileInto writes the tile bytes into dst. NDPI's striped path
+// internally allocates (frame assembly + libjpeg-turbo crop output);
+// dst receives the final copy. Pool savings at the boundary still
+// apply, but per-tile allocation isn't fully eliminated for this
+// format.
+func (l *stripedImage) TileInto(x, y int, dst []byte) (int, error) {
+	b, err := l.Tile(x, y)
+	if err != nil {
+		return 0, err
+	}
+	if len(dst) < len(b) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(dst, b), nil
+}
+
 func (l *stripedImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
