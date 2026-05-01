@@ -84,12 +84,14 @@ func (sb *synthBuilder) build() (data []byte, totalTiles uint32) {
 
 	out := make([]byte, totalSize)
 
-	// FILE_HEADER.
+	// FILE_HEADER. The original synth tests don't exercise metadata,
+	// so we NULL the metadata_offset rather than pointing at a stub
+	// block — the dedicated metadata_test.go covers that path.
 	binary.LittleEndian.PutUint32(out[0:4], MagicBytes)
 	binary.LittleEndian.PutUint64(out[6:14], totalSize)
 	binary.LittleEndian.PutUint16(out[14:16], 1) // ext_major
 	binary.LittleEndian.PutUint64(out[22:30], ttOff)
-	binary.LittleEndian.PutUint64(out[30:38], mdOff)
+	binary.LittleEndian.PutUint64(out[30:38], NullOffset)
 
 	// TILE_TABLE.
 	tt := out[ttOff : ttOff+tileTableSize]

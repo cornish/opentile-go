@@ -327,20 +327,36 @@ of §8a below. Synthetic-fixture coverage only (no real volumetric
 BIF in `sample_files/`). The work was executed sequentially on
 2026-04-29 across 19 plan tasks.
 
-### L22 — IFE: METADATA block parsing deferred (since v0.8)
-- **Source:** v0.8 IFE design spec §9.
-- **Severity:** v0.9+ work — fixture-driven; trigger when a consumer
-  needs slide-level vendor properties or associated images from an
-  IFE file.
-- The IFE v1.0 spec defines a METADATA block (pointed at by
-  `FILE_HEADER.metadata_offset`) carrying vendor-specific properties
-  and possibly associated images. v0.8 reads the offset but doesn't
-  parse the contents — `Tiler.Metadata()` returns the zero value
-  `opentile.Metadata{}`. The cervix fixture has a populated METADATA
-  block we don't surface.
-- **Resolution path:** parse the block per the upstream spec /
-  Iris-Headers C++ source. Likely lands as a separate format-package
-  task once a downstream consumer needs it.
+~~### L22 — IFE: METADATA block parsing deferred (since v0.8)~~
+**Closed in v0.8 metadata closeout (2026-05-01).** `formats/ife/`
+now parses METADATA + ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE (skips
+ANNOTATIONS). `Tiler.Metadata()` surfaces magnification from the
+header; `Tiler.ICCProfile()` returns the embedded color profile;
+`Tiler.Associated()` exposes the IMAGE_ARRAY entries with normalised
+kinds ("thumbnail" / "label" / "overview" / "macro" / "map" /
+"probability"; unknown titles surface lowercased). New
+`ife.MetadataOf(tiler)` accessor returns IFE-specific fields:
+`MicronsPerPixel`, `MagnificationFromHeader`, `CodecMajor/Minor/Build`,
+`AttributesFormat`, `Attributes map[string]string`. Cervix surfaces
+24 free-form attributes (every original "aperio.*" / "tiff.*" key
+the source SVS carried before the Iris re-encode) + a 6064-byte ICC
+profile + a 1920×1337 JPEG thumbnail. ANNOTATIONS parsing tracked as
+L25 below — fixture-driven; cervix has no annotations.
+
+### L25 — IFE: ANNOTATIONS block parsing deferred (since v0.8)
+- **Source:** v0.8 metadata closeout follow-on.
+- **Severity:** v0.9+ work — fixture-driven; trigger when a real
+  IFE file with annotations surfaces.
+- IFE v1.0 defines an ANNOTATIONS block carrying per-region polygon
+  / rectangle / ellipse / freehand annotations + grouping metadata.
+  The v0.8 reader skips the block (validates the offset is in-bounds
+  but doesn't parse contents). Cervix carries
+  `annotations_offset == NULL_OFFSET`.
+- **Resolution path:** add `ife.Annotation` types + a parse helper.
+  Likely a new exported field on `ife.Metadata` so the cross-format
+  `opentile.Tiler.Metadata()` stays simple. Estimate: a half day
+  given the nesting (ANNOTATION_ENTRY × N + ANNOTATION_BYTES +
+  ANNOTATION_GROUP_SIZES + ANNOTATION_GROUP_BYTES).
 
 ### L23 — IFE: cross-tool parity vs `tile_server_iris` deferred (since v0.8)
 - **Source:** v0.8 IFE design spec §7.
@@ -573,9 +589,17 @@ upstream comparison at all). Branch `feat/v0.8`.
   9 levels native-first, 256×256 tiles, JPEG SOI markers on every
   decoded tile.
 
-**Active limitations (L-prefix):** none retired. The v0.8-introduced
-limitations (L22 METADATA, L23 cross-tool parity, L24 AVIF/Iris
-decode) are tracked under §2 above.
+**Active limitations (L-prefix):**
+
+- **L22** — IFE METADATA block parsing. **Closed mid-v0.8
+  (2026-05-01).** `formats/ife/` gained a full metadata reader
+  covering METADATA + ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE.
+  `Tiler.Metadata() / ICCProfile() / Associated()` all populate
+  for IFE; new `ife.MetadataOf(tiler)` exposes the IFE-specific
+  bag (MPP, codec version, free-form attributes map).
+  ANNOTATIONS parsing carried forward as L25 — fixture-driven.
+- **L23** (cross-tool parity), **L24** (AVIF/Iris decode), and
+  the new **L25** (ANNOTATIONS) tracked in §2 above.
 
 **JIT verification gates (Batch A of the v0.8 plan):**
 

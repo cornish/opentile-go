@@ -152,6 +152,64 @@ func TestCervixEndToEnd(t *testing.T) {
 		t.Errorf("SizeT = %d, want 1", got)
 	}
 
+	// Metadata extraction (since v0.8 metadata closeout).
+	cm := tiler.Metadata()
+	if cm.Magnification == 0 {
+		t.Error("Metadata.Magnification = 0; cervix carries 0.625")
+	}
+	icc := tiler.ICCProfile()
+	if len(icc) != 6064 {
+		t.Errorf("ICCProfile size = %d, want 6064", len(icc))
+	}
+	assoc := tiler.Associated()
+	if len(assoc) != 1 {
+		t.Fatalf("Associated count = %d, want 1 (thumbnail)", len(assoc))
+	}
+	if assoc[0].Kind() != "thumbnail" {
+		t.Errorf("Associated[0].Kind = %q, want thumbnail", assoc[0].Kind())
+	}
+	if got := assoc[0].Size(); got.W != 1920 || got.H != 1337 {
+		t.Errorf("Associated[0].Size = %v, want 1920×1337", got)
+	}
+	if assoc[0].Compression() != opentile.CompressionJPEG {
+		t.Errorf("Associated[0].Compression = %v, want jpeg", assoc[0].Compression())
+	}
+	thumbBytes, err := assoc[0].Bytes()
+	if err != nil {
+		t.Fatalf("thumbnail Bytes: %v", err)
+	}
+	if len(thumbBytes) < 2 || thumbBytes[0] != 0xFF || thumbBytes[1] != 0xD8 {
+		t.Errorf("thumbnail missing JPEG SOI; first 4 = % x", thumbBytes[:min(4, len(thumbBytes))])
+	}
+
+	// IFE-specific metadata via MetadataOf.
+	ifeMD, ok := MetadataOf(tiler)
+	if !ok {
+		t.Fatal("MetadataOf returned !ok on cervix")
+	}
+	if ifeMD.MicronsPerPixel == 0 {
+		t.Error("MicronsPerPixel = 0; cervix header carries 16.835")
+	}
+	if ifeMD.AttributesFormat != AttributesFormatFreeText {
+		t.Errorf("AttributesFormat = %v, want free-text", ifeMD.AttributesFormat)
+	}
+	if got := len(ifeMD.Attributes); got != 24 {
+		t.Errorf("Attributes count = %d, want 24", got)
+	}
+	// Spot-check a few well-known cervix attributes.
+	if v := ifeMD.Attributes["aperio.AppMag"]; v != "40" {
+		t.Errorf("aperio.AppMag = %q, want 40", v)
+	}
+	if v := ifeMD.Attributes["aperio.MPP"]; v != "0.262968" {
+		t.Errorf("aperio.MPP = %q", v)
+	}
+	if v := ifeMD.Attributes["aperio.ScannerType"]; v != "GT450" {
+		t.Errorf("aperio.ScannerType = %q", v)
+	}
+	if ifeMD.CodecMajor == 0 {
+		t.Errorf("CodecMajor = %d (zero); cervix encoder is 2025.x", ifeMD.CodecMajor)
+	}
+
 	// Tiles iterator on the coarsest level (a 2×2 grid → 4 tiles).
 	lTop := levels[len(levels)-1]
 	count := 0

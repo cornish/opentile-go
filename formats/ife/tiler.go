@@ -50,15 +50,29 @@ func openIFE(r io.ReaderAt, size int64, _ *opentile.Config) (opentile.Tiler, err
 		apiOrder[len(fileOrder)-1-i] = le
 	}
 
+	// Optional metadata block; absent on minimal synthetic files.
+	var md Metadata
+	var assoc []opentile.AssociatedImage
+	var icc []byte
+	if hdr.MetadataOffset != NullOffset && hdr.MetadataOffset != 0 {
+		md, assoc, icc, err = readMetadata(r, hdr.MetadataOffset, size)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	t := &tiler{
-		hdr:               hdr,
-		tt:                tt,
-		compression:       compression,
-		layerExtentsFile:  fileOrder,
-		layerExtentsAPI:   apiOrder,
-		layerCumulative:   cumulative,
-		tileOffsets:       tiles,
-		r:                 r,
+		hdr:              hdr,
+		tt:               tt,
+		compression:      compression,
+		layerExtentsFile: fileOrder,
+		layerExtentsAPI:  apiOrder,
+		layerCumulative:  cumulative,
+		tileOffsets:      tiles,
+		r:                r,
+		md:               md,
+		associated:       assoc,
+		icc:              icc,
 	}
 	t.levels = make([]opentile.Level, len(apiOrder))
 	for i := range apiOrder {
@@ -81,6 +95,10 @@ type tiler struct {
 	tileOffsets      []TileEntry
 	r                io.ReaderAt
 	levels           []opentile.Level
+
+	md         Metadata
+	associated []opentile.AssociatedImage
+	icc        []byte
 }
 
 func (t *tiler) Format() opentile.Format { return opentile.FormatIFE }
@@ -102,10 +120,21 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	return t.levels[i], nil
 }
 
-func (t *tiler) Associated() []opentile.AssociatedImage { return nil }
-func (t *tiler) Metadata() opentile.Metadata            { return opentile.Metadata{} }
-func (t *tiler) ICCProfile() []byte                     { return nil }
-func (t *tiler) Close() error                           { return nil }
+func (t *tiler) Associated() []opentile.AssociatedImage {
+	out := make([]opentile.AssociatedImage, len(t.associated))
+	copy(out, t.associated)
+	return out
+}
+func (t *tiler) Metadata() opentile.Metadata { return t.md.Metadata }
+func (t *tiler) ICCProfile() []byte {
+	if len(t.icc) == 0 {
+		return nil
+	}
+	out := make([]byte, len(t.icc))
+	copy(out, t.icc)
+	return out
+}
+func (t *tiler) Close() error { return nil }
 
 // levelImpl is the IFE implementation of opentile.Level. apiIndex
 // indexes layerExtentsAPI (0 = native, len-1 = coarsest); the

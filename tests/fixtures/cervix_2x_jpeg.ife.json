@@ -166,7 +166,7 @@
     }
   ],
   "metadata": {
-    "magnification": 0
+    "magnification": 0.625
   },
   "sampled_tiles": {
     "0:0:0": {
@@ -465,5 +465,16 @@
       "sha256": "a25187959228acc98a00944998207373261fea7c6ec3ceeb217061b78da362f3",
       "reason": "bottom-right corner; OOB fill in both axes"
     }
-  }
+  },
+  "associated": [
+    {
+      "kind": "thumbnail",
+      "size": [
+        1920,
+        1337
+      ],
+      "compression": "jpeg",
+      "sha256": "4cfe7150e7326990ab66565c26fd11f29dc85b3bcc5b28bb2b3dea0729553365"
+    }
+  ]
 }

@@ -36,14 +36,18 @@ Cervix is a **2× downsampled** export from the Iris reference encoder (full-res
 | `TileReader` streaming | ✅ via `io.NewSectionReader` |
 | `Tiles` iterator (row-major, serial) | ✅ |
 | Three encoding values exposed via `Compression()` | ✅ | JPEG → `CompressionJPEG`; AVIF → `CompressionAVIF` (new); IRIS → `CompressionIRIS` (new) |
-| Synthetic-writer test harness | ✅ in `formats/ife/synthetic_test.go` — covers layer inversion, sparse, IRIS / AVIF encodings, iterator order, error paths |
+| METADATA block parsing | ✅ since v0.8 metadata closeout | `Tiler.Metadata().Magnification` from the header f32. `ife.MetadataOf(tiler)` exposes `MicronsPerPixel`, `MagnificationFromHeader`, `CodecMajor/Minor/Build`, `AttributesFormat`, `AttributesVersion`, and the free-form `Attributes map[string]string` |
+| ATTRIBUTES (free-form key/value map) | ✅ FREE_TEXT (format=1) only | DICOM attributes (format=2) explicitly rejected — no fixture exercises that path. Cervix carries 24 entries (`aperio.*` / `tiff.*` from a re-encoded GT450 SVS); IFE doesn't reserve attribute keys, so vendors set freely |
+| ICC profile passthrough | ✅ | `Tiler.ICCProfile()` returns the raw bytes. Cervix carries 6064 bytes |
+| Associated images (IMAGE_ARRAY) | ✅ | `Tiler.Associated()` returns label / overview / thumbnail / macro / map / probability with normalised kind names. Unknown titles surface lowercased. Per-image `Compression()` is JPEG (encoding=2) or AVIF (encoding=3); PNG (encoding=1) is reported as `CompressionUnknown` for now (passthrough — consumer can sniff the PNG signature). Cervix has one 1920×1337 JPEG thumbnail |
+| Synthetic-writer test harness | ✅ in `formats/ife/synthetic_test.go` + `formats/ife/metadata_test.go` — covers layer inversion, sparse tiles, IRIS / AVIF encodings, iterator order, error paths, and full METADATA round-trip with attributes / images / ICC |
 
 ## What's not supported
 
 | Capability | Status | Why |
 |---|---|---|
-| METADATA block parsing | ❌ deferred — L22 | Spec defines a METADATA block carrying vendor-specific properties + possibly associated images. v0.8 reads the offset but `Tiler.Metadata()` returns the zero value. Resolved when a consumer needs slide-level metadata |
-| Annotations + attributes + associated images | ❌ deferred | All defined in IFE v1.0 but unused for the bench / tile-serving use cases. Add when a consumer surfaces them |
+| ANNOTATIONS block parsing | ❌ deferred — L25 | IFE v1.0 defines polygon / rectangle / ellipse / freehand annotations + grouping metadata. v0.8 validates the offset is in-bounds but doesn't parse contents. Cervix carries `annotations_offset == NULL_OFFSET` |
+| DICOM-format attributes (`AttributesFormat=2`) | ❌ explicitly rejected | The IFE spec defines a DICOM-style key/value scheme as a sibling to FREE_TEXT (format=1). No fixture has exercised it; rejected at Open time so a future fixture surfaces the gap rather than silently mis-parsing |
 | Cipher block | ❌ ignored | Reserved for future Iris-Codec features; the reader expects `cipher_offset == NULL_OFFSET` (0xFFFFFFFFFFFFFFFF) and ignores the contents otherwise |
 | AVIF tile decode | ❌ — consumer's call (L24) | opentile-go is a byte-passthrough library; linking libavif would expand the cgo footprint past `internal/jpegturbo/` and break the byte-passthrough contract. Consumer either ships libavif or `golang.org/x/image/avif` (when stdlib gains it) |
 | Iris-proprietary codec decode | ❌ — consumer's call (L24) | Same as AVIF: passthrough only. opentile-go reports `CompressionIRIS` so consumers know they need an Iris codec; `Tile()` returns the raw bytes. Consumers that don't ship a codec typically 501 the request |

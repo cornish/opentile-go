@@ -13,8 +13,10 @@ upstream references, and retirement audit per milestone.
 
 Active limitations after v0.8: L4, L5, L14 (Permanent — carried over
 from v0.6) plus L19, L20 (v0.7 work items, still deferred — fixture-
-or research-driven), and L22, L23, L24 (v0.8 IFE work items deferred
-to v0.9+; see `docs/deferred.md` §2). Open work parked in tracked issues:
+or research-driven), and L23, L24, L25 (v0.8 IFE work items deferred
+to v0.9+; see `docs/deferred.md` §2). L22 (IFE METADATA block parsing)
+was retired by the v0.8 metadata closeout. Open work parked in tracked
+issues:
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
   SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
@@ -73,10 +75,26 @@ factories embed `RawUnsupported` for backward-compat zero-cost.
 - **`tests/fixtures/cervix_2x_jpeg.ife.json`** — sampled-tile SHA
   fixture. `TestSlideParity` now passes 17/17 slides
   (5 SVS + 3 NDPI + 4 Philips + 2 OME + 2 BIF + 1 IFE).
-- **Synthetic-IFE-writer test harness** (`formats/ife/synthetic_test.go`)
-  — hand-rolled IFE byte buffers cover layer inversion, sparse
-  tiles, IRIS / AVIF encoding mappings, iterator order, and the
-  open-time error paths without depending on the real fixture.
+- **Synthetic-IFE-writer test harness** (`formats/ife/synthetic_test.go`
+  + `formats/ife/metadata_test.go`) — hand-rolled IFE byte buffers
+  cover layer inversion, sparse tiles, IRIS / AVIF encoding mappings,
+  iterator order, open-time error paths, and full METADATA round-trip
+  with attributes / images / ICC, without depending on the real fixture.
+- **IFE METADATA block parsing** — full reader for METADATA +
+  ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE (skips ANNOTATIONS for
+  v0.9+). `Tiler.Metadata()` populates `Magnification` from the
+  header f32; `Tiler.ICCProfile()` returns the embedded color
+  profile bytes; `Tiler.Associated()` exposes IMAGE_ARRAY entries
+  with normalised `Kind()` ("label" / "overview" / "thumbnail" /
+  "macro" / "map" / "probability"; unknown titles surface
+  lowercased). New `ife.Metadata` struct + `ife.MetadataOf(tiler)`
+  accessor for IFE-specific fields: `MicronsPerPixel`,
+  `MagnificationFromHeader`, `CodecMajor/Minor/Build`,
+  `AttributesFormat`, `AttributesVersion`, and the free-form
+  `Attributes map[string]string`. Cervix surfaces 24 attributes
+  (every `aperio.*` / `tiff.*` key its source GT450 SVS carried
+  before the Iris re-encode) + a 6064-byte ICC profile + a
+  1920×1337 JPEG thumbnail.
 
 ### Changed
 
@@ -105,9 +123,6 @@ Two new deliberate divergences (see
 
 ### Deferred (v0.9+)
 
-- **L22** — IFE METADATA block parsing. v0.8 reads the offset but
-  doesn't parse the contents; `Tiler.Metadata()` returns the zero
-  value. Resolved when a consumer needs slide-level metadata.
 - **L23** — Cross-tool parity vs `tile_server_iris` HTTP output.
   v0.8 ships sample-tile SHA fixtures + synthetic-writer + per-
   fixture geometry as the correctness bar. Cross-language byte-
@@ -118,6 +133,10 @@ Two new deliberate divergences (see
   codec; linking libavif or an Iris codec would expand the cgo
   footprint past `internal/jpegturbo/` and break the byte-
   passthrough contract.
+- **L25** — IFE ANNOTATIONS block parsing. v0.8 validates the
+  offset is in-bounds but doesn't parse contents. Cervix has
+  `annotations_offset == NULL_OFFSET`, so this is fixture-driven —
+  resolved when a real annotated IFE surfaces.
 
 ### Notes
 
