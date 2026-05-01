@@ -1259,6 +1259,44 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.
 
+## 10a. v0.9 deferred — A.3 JPEG splice template (skipped per pprof)
+
+The v0.9 plan's Batch D (T7+T8) was conditional on a profile-driven
+decision: would the JPEG-splice cost (`jpeg.InsertTables` for
+Philips/BIF, `jpeg.InsertTablesAndAPP14` for SVS) hit ≥5% of CPU
+under warm-cache parallel pool TileInto?
+
+**Profiled at T7 (commit 37bffaf, 2026-05-01) under
+`-benchtime=10s -cpuprofile`:**
+
+| Function | CPU% (cumulative) |
+|---|---:|
+| `jpeg.InsertTables` | 1.34% |
+| `jpeg.InsertTablesAndAPP14` | 1.16% |
+| **Combined splice cost** | **~2.5%** |
+
+Below the 5% threshold by a meaningful margin. Where time
+actually goes on the post-A.1+A.2 hot path:
+
+| Function | CPU% |
+|---|---:|
+| `runtime.memmove` (tile bytes mmap → dst) | 51.19% |
+| Goroutine scheduler overhead (lock2/usleep/pthread_cond_wait) | ~28% |
+| `runtime.madvise` (mmap page management) | 6.20% |
+
+The dominant cost is the irreducible userspace memcpy that mmap
+exists to do. Optimizing the splice would have to halve a 2.5%
+slice — not worth the implementation complexity (per-format
+prefix-buffer caching + SOI-skip arithmetic + byte-equivalence
+test against the current `InsertTables*` output).
+
+**Resolution path if a future profile contradicts this:** rerun
+the perf gate after a workload that emphasizes splice (e.g., a
+slide with very small tiles where the per-tile splice overhead
+amortizes worse). T8's prefix-template design is in the v0.9 plan
+verbatim; revival would land additively as a private optimization
+on the splice formats with no public API change.
+
 ## 11. Consolidated backlog (re-triage after v0.9)
 
 v0.9 is a sole-focus performance milestone (mmap default, `TileInto`,
