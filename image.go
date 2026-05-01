@@ -9,9 +9,27 @@ import (
 
 // Level is a single resolution in a pyramidal WSI.
 //
-// Tile and TileReader are safe for concurrent use from multiple goroutines,
-// provided the io.ReaderAt supplied to Open is also safe for concurrent use.
-// (stdlib *os.File satisfies this.)
+// Concurrency: Tile, TileInto, TileAt, TileReader, and the Tiles
+// iterator are safe to call concurrently from multiple goroutines on
+// SVS / Philips / OME tiled / BIF / IFE — those formats have no
+// internal locks on the tile hot path. NDPI's striped Level holds a
+// per-page mutex around the assembled-frame cache: concurrent reads
+// of *different* pages run in parallel; concurrent reads of the
+// *same* page serialize. OME OneFrame uses a similar per-level
+// extended-frame cache. The underlying [io.ReaderAt] supplied to
+// [Open] (or constructed by [OpenFile]) must itself be safe for
+// concurrent use; stdlib *os.File and the v0.9 mmap-backed
+// io.ReaderAt both satisfy this.
+//
+// Bytes returned by Tile / TileAt are caller-owned. Bytes written
+// by TileInto into the caller-provided dst remain caller-owned.
+// opentile-go never reads them after return.
+//
+// Under [BackingMmap] (the v0.9 default), the underlying file must
+// not be truncated or rewritten while a Tiler is open — doing so
+// raises SIGBUS in any thread that subsequently reads through the
+// mapping. WSI files don't get truncated under normal use; if your
+// storage allows it, opt out via [WithBacking](BackingPread).
 type Level interface {
 	Index() int
 	PyramidIndex() int
