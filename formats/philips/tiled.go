@@ -200,13 +200,39 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 
 func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
 
+// Tile keeps the v0.8-and-earlier fast path: sparse-fill check, read,
+// splice. TileInto is the pool-friendly variant.
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
-	buf := make([]byte, l.maxTileSize)
-	n, err := l.TileInto(x, y, buf)
-	if err != nil {
-		return nil, err
+	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
+		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
 	}
-	return buf[:n], nil
+	idx := y*l.grid.W + x
+
+	var raw []byte
+	if l.counts[idx] == 0 {
+		b, err := l.blankTile()
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		raw = make([]byte, len(b))
+		copy(raw, b)
+	} else {
+		length := l.counts[idx]
+		off := int64(l.offsets[idx])
+		raw = make([]byte, length)
+		if err := tiff.ReadAtFull(l.reader, raw, off); err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+	}
+
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		out, err := jpeg.InsertTables(raw, l.jpegTables)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		return out, nil
+	}
+	return raw, nil
 }
 
 func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {

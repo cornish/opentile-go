@@ -192,15 +192,36 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 
 func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
 
+// Tile keeps the v0.8-and-earlier fast path: read tile bytes, splice
+// JPEGTables if needed, return the result. Allocates only the
+// final output (one alloc on no-splice; one read scratch + one
+// spliced output on the JPEG-splice path).
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
-	buf := make([]byte, l.maxTileSize)
-	n, err := l.TileInto(x, y, buf)
+	idx, err := l.indexOf(x, y)
 	if err != nil {
 		return nil, err
 	}
-	return buf[:n], nil
+	length := l.counts[idx]
+	off := int64(l.offsets[idx])
+	buf := make([]byte, length)
+	if err := tiff.ReadAtFull(l.reader, buf, off); err != nil {
+		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
+		out, err := jpeg.InsertTablesAndAPP14(buf, l.jpegTables)
+		if err != nil {
+			return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		return out, nil
+	}
+	return buf, nil
 }
 
+// TileInto reads into dst directly when no splice is needed (zero
+// internal alloc on JP2K / non-JPEG SVS); on the JPEG-splice path
+// it falls back to scratch+splice+copy. T8 will replace the splice
+// path with a prefix-memcpy template that writes straight to dst
+// when pprof confirms the splice work is hot.
 func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
 	idx, err := l.indexOf(x, y)
 	if err != nil {
@@ -218,11 +239,6 @@ func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
 		}
 		return length, nil
 	}
-	// JPEG splice path — InsertTablesAndAPP14 returns a fresh []byte
-	// today; v0.9 keeps the read in dst (which is large enough since
-	// l.maxTileSize accounts for the splice overhead) but the splice
-	// itself still allocates an intermediate. T8 will replace this
-	// with a pre-built prefix template if pprof shows it as hot.
 	if len(dst) < l.maxTileSize {
 		return 0, io.ErrShortBuffer
 	}

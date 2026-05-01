@@ -307,9 +307,9 @@ func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
 func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
 
 // Tile returns the compressed tile bytes at (col, row) in
-// image-space at the nominal focal plane (Z=0) — a standalone valid
-// JPEG (or, for theoretical non-JPEG BIF dialects, the raw
-// codestream). Equivalent to TileAt(TileCoord{X: col, Y: row}).
+// image-space at the nominal focal plane (Z=0). Allocates the
+// returned slice; high-RPS callers should switch to TileInto with
+// a pooled buffer.
 //
 // See readTileAtIdx for the empty-tile / JPEGTables-splice / raw
 // passthrough behaviour shared with TileAt.

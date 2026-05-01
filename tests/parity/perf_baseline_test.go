@@ -30,6 +30,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	opentile "github.com/cornish/opentile-go"
@@ -129,6 +130,37 @@ func BenchmarkTile(b *testing.B) {
 						y := rng.Intn(grid.H)
 						if _, err := lvl.Tile(x, y); err != nil {
 							b.Fatalf("parallel Tile: %v", err)
+						}
+					}
+				})
+			})
+
+			// Pool-aware TileInto variant: the v0.9 hot-path API.
+			// Same access pattern as the parallel Tile() bench above
+			// but draws buffers from a sync.Pool sized to TileMaxSize.
+			// On formats where Tile() does not internally allocate
+			// (SVS / Philips / OME tiled / BIF / IFE), this should
+			// drop allocs/op to ~0.
+			b.Run("parallel_pool_tileinto", func(b *testing.B) {
+				maxSize := lvl.TileMaxSize()
+				pool := &sync.Pool{
+					New: func() any {
+						buf := make([]byte, maxSize)
+						return &buf
+					},
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.RunParallel(func(pb *testing.PB) {
+					rng := rand.New(rand.NewSource(rand.Int63()))
+					for pb.Next() {
+						x := rng.Intn(grid.W)
+						y := rng.Intn(grid.H)
+						bufPtr := pool.Get().(*[]byte)
+						_, err := lvl.TileInto(x, y, *bufPtr)
+						pool.Put(bufPtr)
+						if err != nil {
+							b.Fatalf("parallel_pool_tileinto: %v", err)
 						}
 					}
 				})

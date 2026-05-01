@@ -213,13 +213,34 @@ func (l *levelImpl) linearIndex(col, row int) (uint64, error) {
 
 func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
 
+// Tile allocates a fresh []byte sized exactly to the entry's Size
+// and reads tile bytes directly into it. High-RPS callers should
+// switch to TileInto with a pooled buffer (no internal alloc; IFE
+// tiles are self-contained — no splice needed).
 func (l *levelImpl) Tile(col, row int) ([]byte, error) {
-	buf := make([]byte, l.maxTileSize)
-	n, err := l.TileInto(col, row, buf)
+	idx, err := l.linearIndex(col, row)
 	if err != nil {
 		return nil, err
 	}
-	return buf[:n], nil
+	entry := l.tiler.tileOffsets[idx]
+	if entry.Offset == NullTile || entry.Size == 0 {
+		return nil, &opentile.TileError{
+			Level: l.apiIndex,
+			X:     col,
+			Y:     row,
+			Err:   opentile.ErrSparseTile,
+		}
+	}
+	buf := make([]byte, entry.Size)
+	if _, err := l.tiler.r.ReadAt(buf, int64(entry.Offset)); err != nil {
+		return nil, &opentile.TileError{
+			Level: l.apiIndex,
+			X:     col,
+			Y:     row,
+			Err:   err,
+		}
+	}
+	return buf, nil
 }
 
 func (l *levelImpl) TileInto(col, row int, dst []byte) (int, error) {
