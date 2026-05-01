@@ -22,7 +22,7 @@ const philipsSoftwarePrefix = "Philips DP"
 const philipsDescriptionSuffix = "</DataObject>"
 
 // Factory is the FormatFactory implementation for Philips TIFF.
-type Factory struct{}
+type Factory struct{ opentile.RawUnsupported }
 
 // New returns a Philips factory. Safe to call once and register globally.
 func New() *Factory { return &Factory{} }

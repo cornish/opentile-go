@@ -26,7 +26,7 @@ import (
 )
 
 // Factory is the FormatFactory implementation for Ventana BIF.
-type Factory struct{}
+type Factory struct{ opentile.RawUnsupported }
 
 // New returns a BIF factory. Safe to call once and register globally.
 func New() *Factory { return &Factory{} }

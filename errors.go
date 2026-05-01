@@ -50,6 +50,18 @@ var (
 	// Added in v0.7 alongside Level.TileAt and the multi-dim Image
 	// dimension accessors.
 	ErrDimensionUnavailable = errors.New("opentile: dimension not supported on this format/image")
+
+	// ErrSparseTile is returned (wrapped in TileError) when a tile
+	// position falls within the level's grid but the underlying file
+	// has no compressed bytes at that cell — the format encodes
+	// "absent / blank tile" as a sentinel offset rather than empty
+	// content. Iris IFE uses NULL_TILE (0xFFFFFFFFFF in the 40-bit
+	// offset field); other formats may add later. Consumers typically
+	// translate this into an HTTP 404 or a fixed blank image. Distinct
+	// from ErrTileOutOfBounds (the position itself is past the grid).
+	//
+	// Added in v0.8 alongside the Iris IFE format package.
+	ErrSparseTile = errors.New("opentile: sparse tile (no compressed bytes at this position)")
 )
 
 // TileError wraps a per-tile failure with the (level, x, y) that produced it.

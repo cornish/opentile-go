@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-A Go library for reading raw compressed tiles from whole-slide imaging (WSI) TIFF files used in digital pathology. Direct port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library, with byte-identical output on every supported format.
+A Go library for reading raw compressed tiles from whole-slide imaging (WSI) files used in digital pathology, including TIFF dialects (Aperio SVS, Hamamatsu NDPI, Philips TIFF, OME-TIFF, Ventana BIF) and the bleeding-edge non-TIFF [Iris File Extension](https://github.com/IrisDigitalPathology/Iris-File-Extension). Direct port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library for the four TIFF formats it supports, with byte-identical output. BIF (v0.7) and IFE (v0.8) are opentile-go's own additions beyond upstream's coverage.
 
 ```go
 import (
@@ -29,12 +29,13 @@ tile, err := base.Tile(0, 0) // raw compressed JPEG / JP2K / etc. bytes
 | **Philips TIFF** | `.tiff` | tiled, with sparse-tile fill | label, overview, thumbnail | JPEG | byte-parity vs. Python opentile | [docs/formats/philips.md](./docs/formats/philips.md) |
 | **OME-TIFF** | `.ome.tiff` | tiled (SubIFD) + OneFrame | macro, label, thumbnail | JPEG (uint8 RGB only) | byte-parity vs. Python opentile + tifffile | [docs/formats/ome.md](./docs/formats/ome.md) |
 | **Ventana BIF** | `.bif` | tiled, serpentine remap, with overlap metadata\* + ScanWhitePoint blank-tile fill | overview, probability\*, thumbnail | JPEG | tifffile (DP 200) + sampled-tile SHAs (both fixtures) | [docs/formats/bif.md](./docs/formats/bif.md) |
+| **Iris IFE\*** | `.iris` | tiled (256×256, native-first inversion) with sparse-tile sentinel | label, overview, thumbnail, macro, map, probability + free-form titles + ICC profile + free-form attribute map | JPEG, AVIF (passthrough), Iris-proprietary (passthrough) | sampled-tile SHAs + synthetic-writer + per-fixture geometry pin | [docs/formats/ife.md](./docs/formats/ife.md) |
 
 \* Marks Go-side extensions beyond upstream Python opentile; see [Deviations](#deviations-from-upstream-python-opentile) below.
 
-**Detection** is automatic. `opentile.OpenFile` walks the registered factories and dispatches the first one that reports `Supports(file) == true`; format packages register at import time via `_ "github.com/cornish/opentile-go/formats/all"`.
+**Detection** is automatic. `opentile.OpenFile` walks the registered factories — first asking each for `SupportsRaw(r, size)` against the raw byte stream, then falling through to TIFF-parsed `Supports(file)` — and dispatches the first match. The two-stage dispatch lets non-TIFF formats (IFE) short-circuit before `tiff.Open`. Format packages register at import time via `_ "github.com/cornish/opentile-go/formats/all"`.
 
-**Format coverage**: opentile-go ports the four formats Python opentile 0.20.0 supports for tile extraction. 3DHistech TIFF (the fifth) is parked at [#2](https://github.com/cornish/opentile-go/issues/2). Ventana BIF — the first opentile-go format beyond upstream's coverage — landed in v0.7. Sakura SVSlide is parked at [#3](https://github.com/cornish/opentile-go/issues/3).
+**Format coverage**: opentile-go ports the four TIFF formats Python opentile 0.20.0 supports for tile extraction. 3DHistech TIFF (the fifth upstream format) is parked at [#2](https://github.com/cornish/opentile-go/issues/2). Ventana BIF — the first beyond upstream's coverage — landed in v0.7. Iris IFE — the first non-TIFF format — landed in v0.8. Sakura SVSlide is parked at [#3](https://github.com/cornish/opentile-go/issues/3).
 
 ## Prerequisites
 
@@ -63,7 +64,7 @@ t, err := opentile.OpenFile("slide.tiff")
 if err != nil { /* ErrUnsupportedFormat or open error */ }
 defer t.Close()
 
-fmt.Println("format:", t.Format())                 // "svs", "ndpi", "philips", "ome", "bif"
+fmt.Println("format:", t.Format())                 // "svs", "ndpi", "philips", "ome", "bif", "ife"
 fmt.Println("levels:", len(t.Levels()))
 ```
 
@@ -191,6 +192,8 @@ opentile-go aims for byte-parity with Python opentile 0.20.0. A small number of 
 | `Level.TileOverlap() image.Point` interface evolution | BIF + all | v0.7 | non-BIF formats return `image.Point{}` (zero) — no caller change needed | BIF level-0 stores tiles with horizontal overlap; consumer needs the value to position raw tile bytes correctly. |
 | Non-strict `ScannerModel` acceptance | BIF | v0.7 | not opt-out-able | The BIF spec mandates rejecting any slide whose `ScannerModel != "VENTANA DP 200"`; we accept any iScan-tagged BigTIFF and route via `HasPrefix("VENTANA DP")` so legacy iScan slides aren't worse-than-openslide. |
 | Multi-dimensional WSI API addition (`TileCoord` + `Level.TileAt` + `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`) | All formats | v0.7 | additive — 2D-only formats inherit `SingleImage` defaults | Modern WSI consumers (fluorescence, focal-plane viewers, time series) need explicit multi-dim addressing. BIF reads multi-Z natively; OME surfaces dimensions honestly + defers `TileAt(z != 0)` to a future format-package milestone. |
+| Non-TIFF dispatch path (`FormatFactory.SupportsRaw` + `OpenRaw` + `RawUnsupported` base) | All formats | v0.8 | additive — TIFF factories embed `RawUnsupported` and inherit defaults | Iris IFE is the first non-TIFF format opentile-go reads. Table-driven dispatch lets each format own its detection; future non-TIFF formats drop in additively. |
+| `TILE_TABLE.x_extent` / `y_extent` ignored | IFE | v0.8 | not opt-out-able | The IFE v1.0 spec doc claims these fields carry image pixel dims, but the cervix fixture stores tile counts (matching `LAYER_EXTENTS.x_tiles`). Reader derives image dims from `LAYER_EXTENTS × 256` instead — unambiguous either way. |
 
 Full reasoning + per-deviation commit references are in [`docs/deferred.md`](./docs/deferred.md).
 

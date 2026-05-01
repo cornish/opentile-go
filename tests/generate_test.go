@@ -36,6 +36,9 @@ func sampledByDefault(slide string) bool {
 	// both qualify under the >100 MB sampled-by-default policy.
 	case "Ventana-1.bif", "OS-1.bif":
 		return true
+	// IFE: cervix_2x_jpeg is 2.1 GB; sample-only.
+	case "cervix_2x_jpeg.iris":
+		return true
 	}
 	return false
 }

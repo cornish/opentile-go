@@ -20,7 +20,7 @@ import (
 const aperioPrefix = "Aperio"
 
 // Factory is the FormatFactory implementation for SVS.
-type Factory struct{}
+type Factory struct{ opentile.RawUnsupported }
 
 // New returns an SVS factory. Safe to call once and register globally.
 func New() *Factory { return &Factory{} }

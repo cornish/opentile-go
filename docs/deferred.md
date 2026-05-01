@@ -211,6 +211,42 @@ README.md and per-format docs link here.
 - **Tracking:** see [`docs/superpowers/specs/2026-04-29-opentile-go-multidim-design.md`](superpowers/specs/2026-04-29-opentile-go-multidim-design.md)
   + [`docs/superpowers/plans/2026-04-29-opentile-go-multidim.md`](superpowers/plans/2026-04-29-opentile-go-multidim.md).
 
+### Non-TIFF dispatch path (since v0.8)
+
+- **Upstream:** Python opentile dispatches all format detection
+  through a single TIFF-parsed entry point — every supported format
+  (SVS / NDPI / Philips / OME / 3DHistech) is a TIFF dialect.
+- **opentile-go:** adds `FormatFactory.SupportsRaw(io.ReaderAt,
+  int64) bool` and `OpenRaw(r, size, *Config) (Tiler, error)` that
+  run *before* `tiff.Open`. A `RawUnsupported` zero-impl base
+  struct embedded into the existing five TIFF factories returns
+  `false` / `ErrUnsupportedFormat` so backward compatibility is
+  zero-cost.
+- **Reason:** Iris IFE is the first non-TIFF format opentile-go
+  reads (v0.8); the table-driven dispatch lets each format own its
+  detection rather than wiring magic-byte sniffs into
+  `opentile.Open` directly. Future non-TIFF formats (DICOM-WSI,
+  vendor-specific containers) drop in additively.
+- **Tracking:** see [`docs/superpowers/specs/2026-04-29-opentile-go-ife-design.md`](superpowers/specs/2026-04-29-opentile-go-ife-design.md) §3.
+
+### IFE: TILE_TABLE x_extent / y_extent ignored (since v0.8)
+
+- **Upstream:** the Iris IFE v1.0 spec doc claims `TILE_TABLE.x_extent`
+  / `y_extent` carry "image width/height in pixels at top resolution
+  layer."
+- **opentile-go:** ignores those fields for level dimensions. The
+  `cervix_2x_jpeg.iris` fixture (the only public IFE we have)
+  stores `x_extent=496, y_extent=345` — exact matches for the
+  native layer's `LAYER_EXTENTS.x_tiles=496, y_tiles≈346`, i.e.
+  **tile counts, not pixels** as the spec doc claims. The reader
+  derives image pixel dims from `native_layer.x_tiles ×
+  TileSidePixels` instead.
+- **Reason:** spec ambiguity. Either the doc's "pixels" wording is
+  wrong or the cervix file is non-conforming; without a second
+  fixture we can't tell. Driving size from `LAYER_EXTENTS` is
+  unambiguous and matches what the reader needs anyway.
+- **Tracking:** T3 gate (commit `d597755`) recorded the surprise.
+
 ---
 
 ## 2. Active limitations (open after v0.3)
@@ -290,6 +326,71 @@ multi-dim deviation in §1a + the multi-dim retirement subsection
 of §8a below. Synthetic-fixture coverage only (no real volumetric
 BIF in `sample_files/`). The work was executed sequentially on
 2026-04-29 across 19 plan tasks.
+
+~~### L22 — IFE: METADATA block parsing deferred (since v0.8)~~
+**Closed in v0.8 metadata closeout (2026-05-01).** `formats/ife/`
+now parses METADATA + ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE (skips
+ANNOTATIONS). `Tiler.Metadata()` surfaces magnification from the
+header; `Tiler.ICCProfile()` returns the embedded color profile;
+`Tiler.Associated()` exposes the IMAGE_ARRAY entries with normalised
+kinds ("thumbnail" / "label" / "overview" / "macro" / "map" /
+"probability"; unknown titles surface lowercased). New
+`ife.MetadataOf(tiler)` accessor returns IFE-specific fields:
+`MicronsPerPixel`, `MagnificationFromHeader`, `CodecMajor/Minor/Build`,
+`AttributesFormat`, `Attributes map[string]string`. Cervix surfaces
+24 free-form attributes (every original "aperio.*" / "tiff.*" key
+the source SVS carried before the Iris re-encode) + a 6064-byte ICC
+profile + a 1920×1337 JPEG thumbnail. ANNOTATIONS parsing tracked as
+L25 below — fixture-driven; cervix has no annotations.
+
+### L25 — IFE: ANNOTATIONS block parsing deferred (since v0.8)
+- **Source:** v0.8 metadata closeout follow-on.
+- **Severity:** v0.9+ work — fixture-driven; trigger when a real
+  IFE file with annotations surfaces.
+- IFE v1.0 defines an ANNOTATIONS block carrying per-region polygon
+  / rectangle / ellipse / freehand annotations + grouping metadata.
+  The v0.8 reader skips the block (validates the offset is in-bounds
+  but doesn't parse contents). Cervix carries
+  `annotations_offset == NULL_OFFSET`.
+- **Resolution path:** add `ife.Annotation` types + a parse helper.
+  Likely a new exported field on `ife.Metadata` so the cross-format
+  `opentile.Tiler.Metadata()` stays simple. Estimate: a half day
+  given the nesting (ANNOTATION_ENTRY × N + ANNOTATION_BYTES +
+  ANNOTATION_GROUP_SIZES + ANNOTATION_GROUP_BYTES).
+
+### L23 — IFE: cross-tool parity vs `tile_server_iris` deferred (since v0.8)
+- **Source:** v0.8 IFE design spec §7.
+- **Severity:** v0.9+ work — IFE shipped with sample-tile SHA fixtures
+  + synthetic-writer unit tests as the correctness bar; cross-tool
+  byte-equality vs `tile_server_iris` HTTP output remains a future
+  follow-up.
+- IFE has no Python analogue (tifffile / opentile-py don't read it),
+  so v0.7's tifffile + opentile parity oracles don't port. Coverage
+  is `TestSlideParity` SHA hashes against `cervix_2x_jpeg.ife.json`
+  + `tests/parity/ife_geometry_test.go` per-fixture pinning + the
+  synthetic writer in `formats/ife/synthetic_test.go`. The first
+  divergence story (opentile-go produces byte X, consumer Y observes
+  byte Z) is debugged from scratch.
+- **Resolution path:** if a downstream divergence surfaces, write a
+  shell-out runner that fetches tiles from `tile_server_iris` HTTP
+  and compares to `Level.Tile(c, r)` byte-for-byte. Same shape as
+  the v0.7 openslide oracle, cross-language.
+
+### L24 — IFE: AVIF + Iris-proprietary tile decode is consumer's responsibility (since v0.8)
+- **Source:** v0.8 IFE design spec §10 Q9.
+- **Severity:** Permanent — design choice. opentile-go is a
+  byte-passthrough library by design; AVIF and Iris-proprietary
+  codecs are no different from JPEG/JP2K in that respect.
+- IFE tiles can be encoded as JPEG (decodable via stdlib),
+  AVIF (consumer links libavif or `golang.org/x/image/avif` when
+  stdlib gains it), or the Iris-proprietary codec (consumer
+  embeds an Iris codec or 501s the request). opentile-go reports
+  `CompressionAVIF` / `CompressionIRIS` so consumers know the
+  codec without trying decode and discovering by failure.
+- **Resolution path:** none. Linking libavif or an Iris codec into
+  opentile-go would expand the cgo footprint past `internal/jpegturbo/`
+  and break the byte-passthrough contract that v0.1's `Level.Tile`
+  established.
 
 ---
 
@@ -463,6 +564,93 @@ that locks the change in.
   duplicate DQT/DHT segments in the sparse-tile output — JPEG
   decoders accept this. Cross-check against Python at Philips-4 L0
   (0,0) caught our initial single-splice version.
+
+---
+
+## 8b. Retired in v0.8
+
+Items closed during the v0.8 Iris IFE milestone — the first non-TIFF
+format opentile-go reads, the first format beyond what's even
+adjacent to upstream Python opentile's coverage (BIF in v0.7 was
+WSI but not in upstream's slate; IFE is bleeding-edge with no
+upstream comparison at all). Branch `feat/v0.8`.
+
+**Roadmap items (R-prefix):**
+
+- **R18** — Iris IFE support landed end-to-end. New `formats/ife/`
+  package (FILE_HEADER + TILE_TABLE + LAYER_EXTENTS + TILE_OFFSETS
+  parsing, layer-ordering inversion, sparse-tile sentinel via
+  `ErrSparseTile`, encoding-enum mapping). Plumbing refactor
+  (`FormatFactory.SupportsRaw` + `OpenRaw` + `RawUnsupported` base)
+  ships alongside; new `Compression` enum values `CompressionAVIF`
+  and `CompressionIRIS` surface so consumers know what they're
+  getting. One real fixture (`cervix_2x_jpeg.iris`, 2.16 GB,
+  JPEG-encoded). Round-trips through `opentile.OpenFile` cleanly:
+  9 levels native-first, 256×256 tiles, JPEG SOI markers on every
+  decoded tile.
+
+**Active limitations (L-prefix):**
+
+- **L22** — IFE METADATA block parsing. **Closed mid-v0.8
+  (2026-05-01).** `formats/ife/` gained a full metadata reader
+  covering METADATA + ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE.
+  `Tiler.Metadata() / ICCProfile() / Associated()` all populate
+  for IFE; new `ife.MetadataOf(tiler)` exposes the IFE-specific
+  bag (MPP, codec version, free-form attributes map).
+  ANNOTATIONS parsing carried forward as L25 — fixture-driven.
+- **L23** (cross-tool parity), **L24** (AVIF/Iris decode), and
+  the new **L25** (ANNOTATIONS) tracked in §2 above.
+
+**JIT verification gates (Batch A of the v0.8 plan):**
+
+- **T1** — magic bytes + endianness gate (`16907ef`):
+  `cervix_2x_jpeg.iris` first 4 bytes are `0x73 0x69 0x72 0x49`,
+  assemble as LE-uint32 to `0x49726973` exactly. Confirmed
+  upstream's claim.
+- **T2** — FILE_HEADER structure offsets gate (`f17ecee`): all 38
+  bytes parse cleanly; `extension_major=1`, `file_size=2,161,105,409`
+  matches stat, `tile_table_offset` and `metadata_offset` both
+  within file bounds.
+- **T3** — LAYER_EXTENTS layer ordering gate (`d597755`): 9 layers,
+  scales `[1, 2, 4, 8, 16, 32, 64, 128, 256]` strictly increasing —
+  coarsest-first as the design's §6 inversion logic requires.
+  **One surprise**: TILE_TABLE `x_extent=496, y_extent=345` look
+  like tile counts (matches native layer's x_tiles=496) rather
+  than pixels; reader filed against L22's neighbor and ignores the
+  TILE_TABLE extents in favor of `LAYER_EXTENTS` math.
+- **T4** — TILE_OFFSETS sparse-sentinel gate (`3f4b336`): 228,958
+  entries = sum-of-tile-counts across all 9 layers; 40+24-bit
+  encoding decodes cleanly; cervix has zero sparse entries
+  (fully-tiled). Probe handles absence gracefully.
+
+**Mid-task discoveries (where the cervix surprised us):**
+
+- TILE_TABLE.x_extent / y_extent are tile counts, not pixels (T3).
+  Logged as a deviation in §1a; reader derives image dims from
+  `LAYER_EXTENTS` instead.
+- Tile bytes are JPEG-prefixed (`ff d8 ff e0 ... JFIF ...`) rather
+  than the abbreviated-scan format SVS / BIF use. Confirms the
+  spec's claim that IFE tiles are self-contained — no JPEGTables
+  splice needed in the reader, distinct from every other format
+  opentile-go has shipped.
+- Layer ordering inversion was the highest-risk gate (T3) but
+  passed cleanly; §6 stands.
+
+**Architecture invariants preserved:**
+
+- Public API stable. Five new exported names (`opentile.FormatIFE`,
+  `opentile.RawUnsupported`, `opentile.ErrSparseTile`,
+  `opentile.CompressionAVIF`, `opentile.CompressionIRIS`).
+- `FormatFactory` interface evolved additively — existing factories
+  embed `RawUnsupported` to inherit defaults; no caller change.
+- cgo footprint unchanged at `internal/jpegturbo/`. AVIF and Iris
+  codecs are consumer's call.
+- Lock-free hot path preserved — IFE Tiler builds metadata at Open
+  time; `Tile()` is direct ReadAt against the cached `tileOffsets`
+  slice.
+
+**Plan cross-reference:** [`docs/superpowers/plans/2026-04-29-opentile-go-v08-ife.md`](superpowers/plans/2026-04-29-opentile-go-v08-ife.md)
+(19 tasks across Batches A–E).
 
 ---
 

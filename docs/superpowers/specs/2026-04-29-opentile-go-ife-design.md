@@ -20,6 +20,9 @@ prioritisation against alternatives). **Predecessors:** v0.1 – v0.7
 | 5 | **New `Compression` values**: `CompressionAVIF` (decodable by future consumers via libavif/dav1d) and `CompressionIRIS` (proprietary; reported but undecodable in opentile-go — consumers either ship an Iris codec or 501 the request). |
 | 6 | **Layer ordering inverted at parse time.** IFE stores layers coarsest-first; opentile-go's `Levels()` is native-first. Reader builds an inverted slice + a `layerCumulative` prefix sum and never exposes the file's storage order across the API. |
 | 7 | **Parity strategy: sample-tile SHA fixtures only.** No external pixel oracle in v0.8/IFE-1.0 — IFE is bleeding-edge with no analogue of tifffile or openslide for cross-validation. Coverage is `TestSlideParity` SHA hashes against committed fixtures + synthetic-IFE-writer unit tests. Cross-tool parity (e.g. `tile_server_iris` HTTP byte-for-byte) is a future work item. |
+| 10 Q7 | **Cervix-only fixture for v0.8.** Download `cervix_2x_jpeg.iris` (~2.16 GB, SHA256 `b080859913d2…`) from `irisdigitalpathology.s3.us-east-2.amazonaws.com/example-slides/cervix_2x_jpeg.iris` into `sample_files/ife/` (gitignored). No regen tooling in v0.8 — locally-encoded fixtures via the user's separate Iris workspace can be added later if needed. |
+| 10 Q8 | **Plumbing refactor + IFE ship together as v0.8.0.** Refactor lands as Batch B of the IFE milestone — cleaner story, single tag. The refactor is additive (default `SupportsRaw` returns false; default `OpenRaw` returns `ErrUnsupportedFormat`) so no caller breakage. |
+| 10 Q9 | **No AVIF decoder integration.** opentile-go remains byte-passthrough — we expose `CompressionAVIF` so consumers know what they're getting, but linking `libavif` or any decoder is the consumer's call. Keeps the cgo footprint at `internal/jpegturbo/` only. Same model as JPEG / JP2K today. |
 
 ---
 
@@ -342,3 +345,6 @@ the per-task batches.
 | 2026-04-29 | 5 | New `CompressionAVIF` + `CompressionIRIS` enum values | Toby |
 | 2026-04-29 | 6 | Layer ordering inverted at parse time | Toby |
 | 2026-04-29 | 7 | Sample-tile SHA fixtures + synthetic-writer unit tests; cross-tool parity deferred | Toby |
+| 2026-04-29 | 10 Q7 | Cervix-only fixture for v0.8; no regen tooling | Toby |
+| 2026-04-29 | 10 Q8 | Plumbing refactor + IFE ship together as v0.8.0 | Toby |
+| 2026-04-29 | 10 Q9 | No AVIF decoder integration; byte-passthrough preserved | Toby |

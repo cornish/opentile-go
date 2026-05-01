@@ -24,7 +24,7 @@ import (
 const tagMake uint16 = 271
 
 // Factory is the FormatFactory implementation for NDPI.
-type Factory struct{}
+type Factory struct{ opentile.RawUnsupported }
 
 // New returns an NDPI factory. Safe to register globally.
 func New() *Factory { return &Factory{} }

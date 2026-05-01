@@ -31,7 +31,7 @@ import (
 const omeDescriptionSuffix = "OME>"
 
 // Factory is the FormatFactory implementation for OME TIFF.
-type Factory struct{}
+type Factory struct{ opentile.RawUnsupported }
 
 // New returns an OME factory. Safe to call once and register globally.
 func New() *Factory { return &Factory{} }

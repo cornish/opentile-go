@@ -16,6 +16,7 @@ import (
 
 	opentile "github.com/cornish/opentile-go"
 	"github.com/cornish/opentile-go/formats/bif"
+	"github.com/cornish/opentile-go/formats/ife"
 	"github.com/cornish/opentile-go/formats/ndpi"
 	"github.com/cornish/opentile-go/formats/ome"
 	"github.com/cornish/opentile-go/formats/philips"
@@ -33,6 +34,7 @@ func Register() {
 		opentile.Register(philips.New())
 		opentile.Register(ome.New())
 		opentile.Register(bif.New())
+		opentile.Register(ife.New())
 	})
 }
 

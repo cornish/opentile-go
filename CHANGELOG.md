@@ -11,12 +11,12 @@ upstream references, and retirement audit per milestone.
 
 ## [Unreleased]
 
-Active limitations after v0.7: L4, L5, L14 (Permanent — carried over
-from v0.6) plus L19, L20 (v0.7 work items deferred to v0.8+; see
-`docs/deferred.md` §2). L21 (volumetric Z-stacks) was retired by the
-v0.7 multi-dim closeout — BIF reads multi-Z natively; OME surfaces
-honest dimensions and defers `TileAt(z != 0)` to a future format-
-package milestone. Open work parked in tracked issues:
+Active limitations after v0.8: L4, L5, L14 (Permanent — carried over
+from v0.6) plus L19, L20 (v0.7 work items, still deferred — fixture-
+or research-driven), and L23, L24, L25 (v0.8 IFE work items deferred
+to v0.9+; see `docs/deferred.md` §2). L22 (IFE METADATA block parsing)
+was retired by the v0.8 metadata closeout. Open work parked in tracked
+issues:
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
   SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
@@ -26,6 +26,133 @@ package milestone. Open work parked in tracked issues:
   the wild. Trigger-driven park.
 - **R15** ([#3](https://github.com/cornish/opentile-go/issues/3)) —
   Sakura SVSlide. Trigger-driven park.
+
+## [0.8.0] — 2026-05-01
+
+Iris File Extension (IFE) v1.0 support — **the first non-TIFF format
+opentile-go reads**, and the first format opentile-go ships with no
+Python or external-binary parity oracle. One real fixture
+(`cervix_2x_jpeg.iris`, 2.16 GB, JPEG-encoded) round-trips through
+`opentile.OpenFile` cleanly: 9 levels native-first, 256×256 tiles,
+JPEG SOI markers on every decoded tile.
+
+The plumbing refactor (`FormatFactory.SupportsRaw` + `OpenRaw` +
+`RawUnsupported` base) ships alongside; the existing five TIFF
+factories embed `RawUnsupported` for backward-compat zero-cost.
+
+### Added
+
+- **Iris IFE format** — `formats/ife/`. Magic-byte sniff
+  (`0x49726973` LE) via `Factory.SupportsRaw` runs *before*
+  `tiff.Open` in the dispatch loop. FILE_HEADER (38 B) → TILE_TABLE
+  (44 B) → LAYER_EXTENTS (16-B header + 12-B entries) →
+  TILE_OFFSETS (16-B header + 8-B entries with 40+24-bit
+  offset/size encoding) parsing in pure Go via stdlib
+  `encoding/binary`. Layer ordering inverted at parse time
+  (file is coarsest-first; API exposes native-first). Tile bytes
+  are self-contained — no JPEGTables splice, distinct from
+  SVS/BIF abbreviated-scan pattern.
+- **`FormatFactory.SupportsRaw(io.ReaderAt, int64) bool`** +
+  **`FormatFactory.OpenRaw(r, size, *Config) (Tiler, error)`** —
+  additive interface evolution for non-TIFF dispatch.
+  `RawUnsupported` zero-impl base struct provides
+  `SupportsRaw → false` / `OpenRaw → ErrUnsupportedFormat`
+  defaults; the existing five TIFF factories embed it. Dispatch
+  reorder in `opentile.Open` walks `SupportsRaw` first, then
+  falls through to the TIFF path.
+- **`opentile.FormatIFE`** constant.
+- **`opentile.CompressionAVIF`** + **`opentile.CompressionIRIS`**
+  enum values. `CompressionAVIF`: tile bytes are an AVIF image;
+  consumer decodes via libavif. `CompressionIRIS`: Iris-proprietary
+  codec; opentile-go reports but does not decode (consumer embeds
+  an Iris codec or 501s).
+- **`opentile.ErrSparseTile`** sentinel (wrapped in `TileError`).
+  Returned when a tile position falls within the level grid but
+  the format encodes "absent" via a sentinel offset (IFE's
+  `NULL_TILE = 0xFFFFFFFFFF` in the 40-bit offset field).
+- **`tests/parity/ife_geometry_test.go`** — per-fixture geometry
+  pinning (no build tag, runs in `make test`).
+- **`tests/fixtures/cervix_2x_jpeg.ife.json`** — sampled-tile SHA
+  fixture. `TestSlideParity` now passes 17/17 slides
+  (5 SVS + 3 NDPI + 4 Philips + 2 OME + 2 BIF + 1 IFE).
+- **Synthetic-IFE-writer test harness** (`formats/ife/synthetic_test.go`
+  + `formats/ife/metadata_test.go`) — hand-rolled IFE byte buffers
+  cover layer inversion, sparse tiles, IRIS / AVIF encoding mappings,
+  iterator order, open-time error paths, and full METADATA round-trip
+  with attributes / images / ICC, without depending on the real fixture.
+- **IFE METADATA block parsing** — full reader for METADATA +
+  ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE (skips ANNOTATIONS for
+  v0.9+). `Tiler.Metadata()` populates `Magnification` from the
+  header f32; `Tiler.ICCProfile()` returns the embedded color
+  profile bytes; `Tiler.Associated()` exposes IMAGE_ARRAY entries
+  with normalised `Kind()` ("label" / "overview" / "thumbnail" /
+  "macro" / "map" / "probability"; unknown titles surface
+  lowercased). New `ife.Metadata` struct + `ife.MetadataOf(tiler)`
+  accessor for IFE-specific fields: `MicronsPerPixel`,
+  `MagnificationFromHeader`, `CodecMajor/Minor/Build`,
+  `AttributesFormat`, `AttributesVersion`, and the free-form
+  `Attributes map[string]string`. Cervix surfaces 24 attributes
+  (every `aperio.*` / `tiff.*` key its source GT450 SVS carried
+  before the Iris re-encode) + a 6064-byte ICC profile + a
+  1920×1337 JPEG thumbnail.
+
+### Changed
+
+- **`opentile.Open`** dispatch order: `SupportsRaw` walked before
+  `tiff.Open`. Backward-compat verified — every existing fixture
+  still routes through the TIFF path because every TIFF factory's
+  `SupportsRaw` (via `RawUnsupported`) returns false.
+- **`FormatFactory` interface** gains two methods (additive). Format
+  packages whose files are TIFF-based embed `RawUnsupported`;
+  non-TIFF packages override both methods.
+
+### Deviations from upstream
+
+Two new deliberate divergences (see
+[`docs/deferred.md` §1a](docs/deferred.md) for full reasoning):
+
+- **Non-TIFF dispatch path** — `FormatFactory.SupportsRaw` +
+  `OpenRaw` + `RawUnsupported`. Backward-compatible via embedded
+  defaults. The first table-driven non-TIFF dispatch in the
+  module.
+- **`TILE_TABLE.x_extent` / `y_extent` ignored** for level
+  dimensions on IFE. Spec doc claims these are "image
+  width/height in pixels at top resolution layer," but the
+  cervix fixture stores tile counts (matching `LAYER_EXTENTS.x_tiles`).
+  Reader derives image dims from `LAYER_EXTENTS × 256` instead.
+
+### Deferred (v0.9+)
+
+- **L23** — Cross-tool parity vs `tile_server_iris` HTTP output.
+  v0.8 ships sample-tile SHA fixtures + synthetic-writer + per-
+  fixture geometry as the correctness bar. Cross-language byte-
+  equality oracle is a future follow-up.
+- **L24** — AVIF + Iris-proprietary tile decode is consumer's
+  responsibility (Permanent — design choice). opentile-go reports
+  `CompressionAVIF` / `CompressionIRIS` so consumers know the
+  codec; linking libavif or an Iris codec would expand the cgo
+  footprint past `internal/jpegturbo/` and break the byte-
+  passthrough contract.
+- **L25** — IFE ANNOTATIONS block parsing. v0.8 validates the
+  offset is in-bounds but doesn't parse contents. Cervix has
+  `annotations_offset == NULL_OFFSET`, so this is fixture-driven —
+  resolved when a real annotated IFE surfaces.
+
+### Notes
+
+- IFE has **no Python parity oracle**. v0.7's tifffile + opentile-py
+  oracles can't read IFE; openslide doesn't either. Coverage is
+  layered: sample-tile SHAs lock in opentile-go's own output across
+  regressions; synthetic-writer tests catch reader bugs without
+  depending on a real fixture; per-fixture geometry pinning catches
+  dimension regressions. The first cross-tool divergence story we
+  hit will be debugged from scratch — acceptable risk for a
+  bleeding-edge format.
+- The plumbing refactor is the second additive interface evolution
+  in two milestones (v0.7 added `Level.TileOverlap` + `TileAt` +
+  `Image.Size{Z,C,T}`; v0.8 adds `FormatFactory.SupportsRaw` +
+  `OpenRaw`). Both paid for themselves — TileOverlap is non-zero
+  on BIF level 0; SupportsRaw is what makes IFE possible.
 
 ## [0.7.0] — 2026-04-28
 
@@ -461,7 +588,9 @@ Initial functional milestone. Aperio SVS tiled-level passthrough.
 - Three real-slide fixtures: CMU-1-Small-Region.svs, CMU-1.svs (JPEG),
   JP2K-33003-1.svs (JP2K passthrough).
 
-[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cornish/opentile-go/releases/tag/v0.8.0
+[0.7.0]: https://github.com/cornish/opentile-go/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cornish/opentile-go/releases/tag/v0.6.0
 [0.5.1]: https://github.com/cornish/opentile-go/releases/tag/v0.5.1
 [0.5.0]: https://github.com/cornish/opentile-go/releases/tag/v0.5.0
