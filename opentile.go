@@ -76,10 +76,27 @@ func Formats() []Format {
 	return out
 }
 
-// Open parses r as a WSI TIFF and returns a Tiler for the matching format.
+// Open parses r as a WSI file and returns a Tiler for the matching format.
 // size is the total file size in bytes.
+//
+// Dispatch order: each registered factory's SupportsRaw is queried first
+// against the raw byte stream; if any factory takes it, the input is
+// never handed to tiff.Open. Otherwise, r is parsed as TIFF / BigTIFF
+// and each factory's Supports is queried against the parsed *tiff.File.
+// The first non-TIFF format using the SupportsRaw path is Iris IFE in
+// v0.8.
 func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 	cfg := newConfig(opts)
+	registryMu.RLock()
+	factories := append([]FormatFactory(nil), registry...)
+	registryMu.RUnlock()
+
+	for _, f := range factories {
+		if f.SupportsRaw(r, size) {
+			return f.OpenRaw(r, size, &Config{c: cfg})
+		}
+	}
+
 	file, err := tiff.Open(r, size)
 	if err != nil {
 		if errors.Is(err, tiff.ErrInvalidTIFF) {
@@ -87,9 +104,6 @@ func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 		}
 		return nil, err
 	}
-	registryMu.RLock()
-	factories := append([]FormatFactory(nil), registry...)
-	registryMu.RUnlock()
 
 	for _, f := range factories {
 		if f.Supports(file) {
