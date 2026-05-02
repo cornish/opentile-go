@@ -42,12 +42,13 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets     []uint64
-	counts      []uint64
-	jpegTables  []byte
-	reader      io.ReaderAt
-	cfg         *opentile.Config
-	maxTileSize int // upper bound for Tile/TileInto output
+	offsets      []uint64
+	counts       []uint64
+	jpegTables   []byte
+	reader       io.ReaderAt
+	cfg          *opentile.Config
+	maxTileSize  int    // upper bound for Tile/TileInto output
+	splicePrefix []byte // tablesMid (no APP14 — Philips is YCbCr); nil for non-splice levels
 
 	// Lazy-built blank tile for sparse positions. Computed once on the
 	// first sparse-tile read; subsequent reads return the cached bytes.
@@ -140,10 +141,14 @@ func newTiledImage(
 		}
 	}
 	maxTileSize := int(maxCount)
+	var splicePrefix []byte
 	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
-		// jpeg.InsertTables prepends the tables; +8 covers the
-		// per-segment marker overhead.
-		maxTileSize += len(jpegTables) + 8
+		var err error
+		splicePrefix, err = jpeg.BuildSplicePrefix(jpegTables, false)
+		if err != nil {
+			return nil, fmt.Errorf("philips: build splice prefix: %w", err)
+		}
+		maxTileSize += len(splicePrefix)
 	}
 	// Sparse blank-tile path: blank-tile bytes are sized similarly
 	// (post-FillFrame they fit within a single tile envelope) so the
@@ -159,10 +164,11 @@ func newTiledImage(
 		pyrIndex:    pyr,
 		offsets:     offsets,
 		counts:      counts,
-		jpegTables:  jpegTables,
-		reader:      r,
-		cfg:         cfg,
-		maxTileSize: maxTileSize,
+		jpegTables:   jpegTables,
+		reader:       r,
+		cfg:          cfg,
+		maxTileSize:  maxTileSize,
+		splicePrefix: splicePrefix,
 	}, nil
 }
 
@@ -247,52 +253,54 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	return raw, nil
 }
 
+// TileInto writes tile bytes (sparse blank-fill or on-disk) into
+// dst. Splice path uses the in-place jpeg.InsertPrefixInPlace —
+// zero internal allocations on the common case. Sparse blank tiles
+// are still derived from the cached blank buffer (one alloc on
+// first sparse access; subsequent reads reuse the cache).
 func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
 	}
 	idx := y*l.grid.W + x
 
-	var raw []byte
 	if l.counts[idx] == 0 {
+		// Sparse: serve the cached blank tile. The blank tile has
+		// already been spliced (it's a complete JPEG produced via
+		// FillFrame on a spliced source); copy verbatim into dst.
 		b, err := l.blankTile()
 		if err != nil {
 			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 		}
-		raw = b
-	} else {
-		length := int(l.counts[idx])
-		off := int64(l.offsets[idx])
-		needsSplice := l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0
-		if !needsSplice {
-			if len(dst) < length {
-				return 0, io.ErrShortBuffer
-			}
-			if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
-				return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
-			}
-			return length, nil
-		}
-		raw = make([]byte, length)
-		if err := tiff.ReadAtFull(l.reader, raw, off); err != nil {
-			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
-		}
-	}
-
-	if l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0 {
-		if len(dst) < l.maxTileSize {
+		if len(dst) < len(b) {
 			return 0, io.ErrShortBuffer
 		}
-		out, err := jpeg.InsertTables(raw, l.jpegTables)
-		if err != nil {
+		return copy(dst, b), nil
+	}
+
+	length := int(l.counts[idx])
+	off := int64(l.offsets[idx])
+	if l.splicePrefix == nil {
+		if len(dst) < length {
+			return 0, io.ErrShortBuffer
+		}
+		if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
 			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
 		}
-		return copy(dst, out), nil
+		return length, nil
 	}
-	if len(dst) < len(raw) {
+	prefixLen := len(l.splicePrefix)
+	if len(dst) < length+prefixLen {
 		return 0, io.ErrShortBuffer
 	}
-	return copy(dst, raw), nil
+	if err := tiff.ReadAtFull(l.reader, dst[prefixLen:prefixLen+length], off); err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	n, err := jpeg.InsertPrefixInPlace(dst, length, l.splicePrefix)
+	if err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	return n, nil
 }
 
 // TileReader returns an io.ReadCloser carrying the same bytes as Tile.

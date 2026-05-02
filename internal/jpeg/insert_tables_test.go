@@ -18,6 +18,105 @@ var pythonAPP14 = []byte{
 	0x00, // ColorTransform = 0 (RGB)
 }
 
+// TestInsertPrefixInPlace_BytesMatchInsertTables pins the v0.9
+// contract: BuildSplicePrefix + InsertPrefixInPlace produces output
+// byte-identical to InsertTables / InsertTablesAndAPP14, with zero
+// allocations (the caller-provided dst is the only buffer). If
+// InsertPrefixInPlace ever drifts from the legacy splicers, this
+// test catches it before the per-format reader does.
+func TestInsertPrefixInPlace_BytesMatchInsertTables(t *testing.T) {
+	frame := []byte{
+		0xFF, 0xD8, // SOI
+		0xFF, 0xC0, 0x00, 0x08, 0x08, 0x00, 0x10, 0x00, 0x10, 0x03, // SOF0 stub
+		0xFF, 0xDA, 0x00, 0x08, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, // SOS stub
+		0xDE, 0xAD, 0xBE, 0xEF,
+		0xFF, 0xD9, // EOI
+	}
+	tables := []byte{
+		0xFF, 0xD8,
+		0xFF, 0xDB, 0x00, 0x03, 0x00,
+		0xFF, 0xC4, 0x00, 0x03, 0x10,
+		0xFF, 0xD9,
+	}
+
+	for _, tc := range []struct {
+		name         string
+		includeAPP14 bool
+		want         func() []byte
+	}{
+		{
+			name:         "InsertTablesAndAPP14",
+			includeAPP14: true,
+			want: func() []byte {
+				out, err := InsertTablesAndAPP14(frame, tables)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return out
+			},
+		},
+		{
+			name:         "InsertTables",
+			includeAPP14: false,
+			want: func() []byte {
+				out, err := InsertTables(frame, tables)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return out
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix, err := BuildSplicePrefix(tables, tc.includeAPP14)
+			if err != nil {
+				t.Fatalf("BuildSplicePrefix: %v", err)
+			}
+			// Caller responsibility: read frame into dst[len(prefix):].
+			dst := make([]byte, len(frame)+len(prefix)+8)
+			copy(dst[len(prefix):], frame)
+			n, err := InsertPrefixInPlace(dst, len(frame), prefix)
+			if err != nil {
+				t.Fatalf("InsertPrefixInPlace: %v", err)
+			}
+			want := tc.want()
+			if !bytes.Equal(dst[:n], want) {
+				t.Errorf("mismatch:\n got %x\nwant %x", dst[:n], want)
+			}
+		})
+	}
+}
+
+func TestInsertPrefixInPlace_ShortDst(t *testing.T) {
+	tables := []byte{0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x03, 0x00, 0xFF, 0xD9}
+	prefix, err := BuildSplicePrefix(tables, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// dst too small to hold both frame and prefix.
+	frameLen := 200
+	dst := make([]byte, len(prefix)+10)
+	_, err = InsertPrefixInPlace(dst, frameLen, prefix)
+	if err == nil {
+		t.Fatal("expected error on undersized dst")
+	}
+}
+
+func TestInsertPrefixInPlace_NoSOS(t *testing.T) {
+	tables := []byte{0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x03, 0x00, 0xFF, 0xD9}
+	prefix, err := BuildSplicePrefix(tables, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := []byte{0xFF, 0xD8, 0xFF, 0xD9} // SOI+EOI, no SOS
+	dst := make([]byte, len(prefix)+len(frame))
+	copy(dst[len(prefix):], frame)
+	_, err = InsertPrefixInPlace(dst, len(frame), prefix)
+	if err == nil {
+		t.Fatal("expected error when frame has no SOS")
+	}
+}
+
 func TestAdobeAPP14MatchesPython(t *testing.T) {
 	// Compile-time: adobeAPP14 (production constant) must equal the Python
 	// byte sequence. If someone "cleans up" the bytes, this test catches it.

@@ -108,7 +108,19 @@ func BenchmarkTile(b *testing.B) {
 				}
 			}
 
+			// Sample one tile to derive a representative byte count
+			// for the throughput metric (b.SetBytes makes the bench
+			// framework report MB/s natively). Tile sizes are roughly
+			// uniform within a level, so the mid-grid sample is
+			// representative within ~10%.
+			sample, err := lvl.Tile(grid.W/2, grid.H/2)
+			if err != nil {
+				b.Fatalf("sample Tile: %v", err)
+			}
+			tileBytes := int64(len(sample))
+
 			b.Run("serial", func(b *testing.B) {
+				b.SetBytes(tileBytes)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -121,6 +133,7 @@ func BenchmarkTile(b *testing.B) {
 			})
 
 			b.Run("parallel", func(b *testing.B) {
+				b.SetBytes(tileBytes)
 				b.ReportAllocs()
 				b.ResetTimer()
 				b.RunParallel(func(pb *testing.PB) {
@@ -149,6 +162,7 @@ func BenchmarkTile(b *testing.B) {
 						return &buf
 					},
 				}
+				b.SetBytes(tileBytes)
 				b.ReportAllocs()
 				b.ResetTimer()
 				b.RunParallel(func(pb *testing.PB) {

@@ -90,3 +90,71 @@ func InsertTables(frame, tables []byte) ([]byte, error) {
 	out = append(out, frame[sosIdx:]...)
 	return out, nil
 }
+
+// BuildSplicePrefix returns the constant-per-level splice payload —
+// the bytes that go between SOI and the first SOS marker on every
+// tile of a given level. Equal to `tables[2:-2]` (DQT/DHT segments
+// stripped of the JPEGTables wrapper SOI/EOI), optionally followed
+// by the Adobe APP14 colorspace-fix segment for SVS-style RGB JPEG.
+//
+// Cache the returned []byte on the level struct at construction time
+// and pass it to [InsertPrefixInPlace] on each tile read. Same byte
+// output as [InsertTablesAndAPP14] / [InsertTables], no per-call alloc.
+func BuildSplicePrefix(tables []byte, includeAPP14 bool) ([]byte, error) {
+	if len(tables) < 4 {
+		return nil, fmt.Errorf("%w: JPEGTables too short (%d bytes, want >=4)", ErrBadJPEG, len(tables))
+	}
+	tablesMid := tables[2 : len(tables)-2]
+	prefix := make([]byte, 0, len(tablesMid)+len(adobeAPP14))
+	prefix = append(prefix, tablesMid...)
+	if includeAPP14 {
+		prefix = append(prefix, adobeAPP14...)
+	}
+	return prefix, nil
+}
+
+// InsertPrefixInPlace splices prefix into a tile that has already been
+// read into dst at offset len(prefix), producing the final layout
+// (tile_pre_SOS + prefix + SOS_through_EOI) at dst[0:frameLen+len(prefix)].
+//
+// Caller contract:
+//
+//   - dst must be at least frameLen + len(prefix) bytes.
+//   - dst[len(prefix):len(prefix)+frameLen] holds the original tile
+//     bytes at function entry.
+//   - On success, dst[0:n] (where n = frameLen + len(prefix)) holds
+//     the spliced output, byte-identical to what [InsertTablesAndAPP14]
+//     or [InsertTables] would have produced.
+//
+// Algorithm: find SOS in the read region; in-place memmove the pre-SOS
+// bytes backward to the start; memcpy prefix into the gap. The
+// SOS-through-EOI portion is already in the right place (the byte
+// region dst[len(prefix)+sosIdx:len(prefix)+frameLen] is bit-equal to
+// dst[sosIdx+len(prefix):sosIdx+len(prefix)+(frameLen-sosIdx)]) so it
+// doesn't need to move.
+//
+// Zero internal allocations; the work is bounded by frameLen bytes
+// of memory traffic (the ReadAt the caller already did) plus a
+// sosIdx-bounded backward shift (typically <20 bytes — SOI + maybe
+// JFIF/APP0) and a len(prefix)-bounded forward write (DQT/DHT,
+// typically a few hundred bytes).
+func InsertPrefixInPlace(dst []byte, frameLen int, prefix []byte) (int, error) {
+	prefixLen := len(prefix)
+	if frameLen < 0 || frameLen+prefixLen > len(dst) {
+		return 0, fmt.Errorf("%w: dst too small (need %d, have %d)", ErrBadJPEG, frameLen+prefixLen, len(dst))
+	}
+	frame := dst[prefixLen : prefixLen+frameLen]
+	sosIdx := bytes.Index(frame, []byte{0xFF, byte(SOS)})
+	if sosIdx < 0 {
+		return 0, fmt.Errorf("%w: SOS marker not found", ErrBadJPEG)
+	}
+	// Shift pre-SOS bytes from dst[prefixLen:prefixLen+sosIdx] backward
+	// to dst[0:sosIdx]. Go's copy handles overlapping slices.
+	copy(dst[0:sosIdx], dst[prefixLen:prefixLen+sosIdx])
+	// Insert prefix into the gap at dst[sosIdx:sosIdx+prefixLen].
+	copy(dst[sosIdx:sosIdx+prefixLen], prefix)
+	// dst[sosIdx+prefixLen:sosIdx+prefixLen+(frameLen-sosIdx)] already
+	// holds SOS+scan+EOI (same byte region as
+	// dst[prefixLen+sosIdx:prefixLen+frameLen]). No copy needed.
+	return frameLen + prefixLen, nil
+}

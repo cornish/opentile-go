@@ -71,6 +71,12 @@ type levelImpl struct {
 	// output: max(counts) + JPEGTables splice overhead (when applicable),
 	// or len(blank tile) for tile-grid-empty fixtures whichever is larger.
 	maxTileSize int
+
+	// splicePrefix is the per-IFD constant payload spliced before SOS
+	// on every tile when JPEGTables is shared (legacy OS-1 path). nil
+	// when tiles are self-contained (Ventana-1 spec-compliant DP 200).
+	// BIF is YCbCr — no APP14 marker (unlike SVS).
+	splicePrefix []byte
 }
 
 // newLevelImpl constructs a levelImpl from a classified IFD. The
@@ -160,8 +166,14 @@ func newLevelImpl(
 		}
 	}
 	maxTileSize := int(maxCount)
+	var splicePrefix []byte
 	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
-		maxTileSize += len(jpegTables) + 8
+		var err error
+		splicePrefix, err = jpeg.BuildSplicePrefix(jpegTables, false)
+		if err != nil {
+			return nil, fmt.Errorf("bif level=%d: build splice prefix: %w", c.Level, err)
+		}
+		maxTileSize += len(splicePrefix)
 	}
 	// Empty-tile path returns a small JPEG (~tileSize²/100 bytes
 	// typically). It's bounded by the same per-tile envelope; no
@@ -183,6 +195,7 @@ func newLevelImpl(
 		imageDepth:     imageDepth,
 		reader:         reader,
 		maxTileSize:    maxTileSize,
+		splicePrefix:   splicePrefix,
 	}, nil
 }
 
@@ -346,6 +359,8 @@ func (l *levelImpl) TileInto(col, row int, dst []byte) (int, error) {
 // readTileAtIdxInto is the TileInto-shaped variant of readTileAtIdx.
 // Writes output bytes into dst; returns io.ErrShortBuffer when dst
 // is undersized. Caller has already validated (z, col, row) → idx.
+// Splice path uses the in-place jpeg.InsertPrefixInPlace —
+// zero internal allocations.
 func (l *levelImpl) readTileAtIdxInto(idx, col, row int, dst []byte) (int, error) {
 	if l.isEmpty(idx) {
 		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
@@ -359,8 +374,7 @@ func (l *levelImpl) readTileAtIdxInto(idx, col, row int, dst []byte) (int, error
 	}
 	length := int(l.counts[idx])
 	off := int64(l.offsets[idx])
-	needsSplice := l.compression == opentile.CompressionJPEG && len(l.jpegTables) > 0
-	if !needsSplice {
+	if l.splicePrefix == nil {
 		if len(dst) < length {
 			return 0, io.ErrShortBuffer
 		}
@@ -369,18 +383,18 @@ func (l *levelImpl) readTileAtIdxInto(idx, col, row int, dst []byte) (int, error
 		}
 		return length, nil
 	}
-	if len(dst) < l.maxTileSize {
+	prefixLen := len(l.splicePrefix)
+	if len(dst) < length+prefixLen {
 		return 0, io.ErrShortBuffer
 	}
-	tile := make([]byte, length)
-	if err := tiff.ReadAtFull(l.reader, tile, off); err != nil {
+	if err := tiff.ReadAtFull(l.reader, dst[prefixLen:prefixLen+length], off); err != nil {
 		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
 	}
-	out, err := jpeg.InsertTables(tile, l.jpegTables)
+	n, err := jpeg.InsertPrefixInPlace(dst, length, l.splicePrefix)
 	if err != nil {
 		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
 	}
-	return copy(dst, out), nil
+	return n, nil
 }
 
 // TileReader returns a streaming reader over the tile at (col, row).
