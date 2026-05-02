@@ -247,6 +247,63 @@ README.md and per-format docs link here.
   unambiguous and matches what the reader needs anyway.
 - **Tracking:** T3 gate (commit `d597755`) recorded the surprise.
 
+### Default mmap-backed `OpenFile` (since v0.9)
+
+- **Upstream:** Python opentile uses `open()` semantics — file
+  descriptor + pread-style reads. No mmap.
+- **opentile-go:** `OpenFile` defaults to memory-mapped tile reads
+  via `golang.org/x/exp/mmap`. Tile bytes become userspace memcpy
+  from the mapped region; no `pread(2)` syscall per `Tile()` /
+  `TileInto()` call. Auto-fallback to `pread` on mmap failure
+  (FUSE / network mounts that don't support mapping); explicit opt-
+  out via `WithBacking(BackingPread)` for callers that need
+  `os.File` truncation semantics.
+- **Reason:** universal perf win for the hot path. The cervix
+  fixture's serial Tile() went from 22µs to 0.75µs (29×) under
+  mmap; SVS / OME / Philips / BIF saw 8-22% wins; only NDPI is
+  unchanged because its bottleneck is libjpeg-turbo transcoding,
+  not I/O.
+- **Failure mode:** SIGBUS on file truncation under an open mmap-
+  backed Tiler. WSI files don't get truncated under normal use; if
+  your storage allows it, opt out via BackingPread. Documented
+  loudly in the `OpenFile` docstring.
+- **Tracking:** see [`docs/superpowers/specs/2026-05-01-opentile-go-v09-perf-design.md`](superpowers/specs/2026-05-01-opentile-go-v09-perf-design.md)
+  Q2 (sealed 2026-05-01).
+
+### Pool-friendly tile-read API addition (since v0.9)
+
+- **Upstream:** Python opentile's `Tile()` allocates a fresh `bytes`
+  object per call.
+- **opentile-go:** adds `Level.TileInto(x, y int, dst []byte) (int,
+  error)` and `Level.TileMaxSize() int`. The caller pools `dst`
+  buffers via `sync.Pool`; `TileInto` writes tile bytes directly
+  into the caller's buffer with zero internal allocation on every
+  TIFF format and IFE. NDPI / OME OneFrame still allocate their
+  internal scratch (per-page assembled frame) but the boundary-
+  level allocation is eliminated.
+- **Reason:** high-RPS HTTP serving and per-frame desktop viewer
+  paint loops generate severe GC pressure under the alloc-per-tile
+  contract. The pool path on splice formats (SVS, Philips) achieves
+  9-11× speedup and zero allocs after the v0.9 in-place splice
+  template lands.
+- **Backward compatibility:** existing `Tile()` calls unchanged —
+  same signature, same alloc-on-return behavior, same byte output.
+- **Tracking:** v0.9 perf design Q5/Q6 (sealed 2026-05-01).
+
+### `Tiler.WarmLevel(i int) error` page-cache pre-warm hook (since v0.9)
+
+- **Upstream:** Python opentile has no equivalent.
+- **opentile-go:** adds `Tiler.WarmLevel(i)` for callers that want
+  predictable warm-cache latency on slides they're about to read
+  intensively (slide-server pre-warm at startup; viewer pre-loading
+  the slide the user is about to open). Touches one byte per OS
+  page covering the level's tile-data ranges, forcing the kernel
+  to populate the page cache.
+- **Reason:** under mmap, first-fault latency on cold pages is
+  measurable; pre-warming amortizes it. Under pread, the same
+  helper does pread-per-page (slower; documented as best-effort).
+- **Tracking:** v0.9 perf design Q5 (sealed 2026-05-01).
+
 ---
 
 ## 2. Active limitations (open after v0.3)
@@ -564,6 +621,70 @@ that locks the change in.
   duplicate DQT/DHT segments in the sparse-tile output — JPEG
   decoders accept this. Cross-check against Python at Philips-4 L0
   (0,0) caught our initial single-splice version.
+
+---
+
+## 8c. Retired in v0.9
+
+v0.9 is the sole-focus performance milestone. No active L items
+retired; no new format support; no API removals. The work is the
+five §A items from `docs/opentile-go-svs-perf.md`, all shipped:
+
+**Performance items shipped:**
+
+- **A.1 mmap-backed `OpenFile` (default)** — `WithBacking(BackingMmap |
+  BackingPread)` option; auto-fallback to pread on mmap failure;
+  explicit opt-out via `BackingPread`. Single dep on
+  `golang.org/x/exp/mmap` for cross-platform Linux + macOS + Windows
+  coverage.
+- **A.2 `Level.TileInto(x, y, dst)` + `Level.TileMaxSize()`** —
+  pool-friendly tile-read API. Existing `Tile()` retained as a thin
+  wrapper for casual callers.
+- **A.3 In-place JPEG splice template** —
+  `internal/jpeg.BuildSplicePrefix` + `internal/jpeg.InsertPrefixInPlace`
+  cache the tablesMid + APP14 prefix per level; TileInto's splice
+  path is now zero-alloc. Initially deferred at T7 per CPU% gate;
+  reversed at owner review after a bytes/ns analysis revealed the
+  alloc-churn cost the CPU profile didn't capture (see §10a).
+- **A.4 `Tiler.WarmLevel(i int) error`** — page-cache pre-warm hook.
+  Walks tile-byte ranges; touches one byte per OS page. Mmap path:
+  forces kernel readahead. Pread path: pread(1)-per-page best-effort.
+- **A.5 Concurrency-contract docs** — Tiler / Level docstrings now
+  pin the per-format lock characteristics, the mmap SIGBUS-on-
+  truncation contract, and the dst ownership rules for TileInto.
+
+**Headline measured deltas vs v0.8 baseline (warm-cache pool TileInto,
+darwin/arm64 Apple M4):**
+
+| Fixture | v0.8 Tile() | v0.9 pool TileInto | Speedup |
+|---|---:|---:|---:|
+| Cervix IFE | 22,065 ns | 152 ns | 145× |
+| Leica OME | 4,286 ns | 376 ns | 11× |
+| **CMU-1.svs** | **1,583 ns** | **99.7 ns** | **16×** |
+| **Philips-1** | **6,473 ns** | **425 ns** | **15×** |
+| Ventana-1.bif | 26,003 ns | 3,225 ns | 8× |
+| CMU-1.ndpi (par) | 182k ns | 185k ns | ~same (CPU-bound) |
+
+**Allocs/op on the pool TileInto path: 0 across every TIFF format
+and IFE.** NDPI's stripe reassembly path drops from 12 → 4 allocs
+but stays internal-scratch-allocating by design.
+
+**Architecture invariants preserved:**
+
+- Public API stable from v0.3. Five new exported names
+  (`opentile.Backing`, `opentile.BackingMmap`, `opentile.BackingPread`,
+  `opentile.WithBacking`, `opentile.ErrMmapUnavailable`) plus three
+  new interface methods (`Level.TileInto`, `Level.TileMaxSize`,
+  `Tiler.WarmLevel`).
+- Behavior change: `OpenFile` defaults to mmap. SIGBUS on file
+  truncation documented loudly; auto-fallback covers mmap-unsupported
+  filesystems. Owner sign-off captured in spec §11 Q2.
+- cgo footprint unchanged at `internal/jpegturbo/`.
+- Lock-free hot path preserved; concurrency contract for each format
+  documented in the Tiler / Level interfaces.
+
+**Plan cross-reference:** [`docs/superpowers/plans/2026-05-01-opentile-go-v09-perf.md`](superpowers/plans/2026-05-01-opentile-go-v09-perf.md)
+(13 tasks across Batches A–F).
 
 ---
 
