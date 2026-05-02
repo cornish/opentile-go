@@ -1259,15 +1259,14 @@ Each gate decides a done-when bar or fix path for subsequent tasks.
 
 Once the branch lands on a remote, every numbered item above should become a tracked issue (GitHub, Linear, etc.) — scope items → roadmap epics, limitations → user-facing docs, reviewer suggestions → individual backlog tickets. Delete entries from this file as they get filed. The goal is for this file to eventually shrink to zero as polish milestones retire each item.
 
-## 10a. v0.9 deferred — A.3 JPEG splice template (skipped per pprof)
+## 10a. v0.9 splice-template gate — initially skipped, then shipped
 
 The v0.9 plan's Batch D (T7+T8) was conditional on a profile-driven
-decision: would the JPEG-splice cost (`jpeg.InsertTables` for
-Philips/BIF, `jpeg.InsertTablesAndAPP14` for SVS) hit ≥5% of CPU
-under warm-cache parallel pool TileInto?
+decision: would the JPEG-splice cost hit ≥5% of CPU under warm-cache
+parallel pool TileInto?
 
-**Profiled at T7 (commit 37bffaf, 2026-05-01) under
-`-benchtime=10s -cpuprofile`:**
+**T7 first pass (commit 37bffaf, 2026-05-01)** profiled the three
+splice formats under `-benchtime=10s -cpuprofile` and found:
 
 | Function | CPU% (cumulative) |
 |---|---:|
@@ -1275,27 +1274,26 @@ under warm-cache parallel pool TileInto?
 | `jpeg.InsertTablesAndAPP14` | 1.16% |
 | **Combined splice cost** | **~2.5%** |
 
-Below the 5% threshold by a meaningful margin. Where time
-actually goes on the post-A.1+A.2 hot path:
+Below the 5% threshold; T8 was deferred.
 
-| Function | CPU% |
-|---|---:|
-| `runtime.memmove` (tile bytes mmap → dst) | 51.19% |
-| Goroutine scheduler overhead (lock2/usleep/pthread_cond_wait) | ~28% |
-| `runtime.madvise` (mmap page management) | 6.20% |
+**Reversed at owner review (commit e0c05c5, 2026-05-01).** The CPU%
+view was insufficient. A bytes/ns analysis showed the splice path
+running at ~15 bytes/ns vs ~100 bytes/ns for no-splice formats —
+a 6× throughput-per-byte penalty driven by the per-call alloc
+churn that CPU profiles don't capture. Two extra allocations per
+tile on SVS and Philips translate to GC pressure that hurts tail
+latency under sustained load.
 
-The dominant cost is the irreducible userspace memcpy that mmap
-exists to do. Optimizing the splice would have to halve a 2.5%
-slice — not worth the implementation complexity (per-format
-prefix-buffer caching + SOI-skip arithmetic + byte-equivalence
-test against the current `InsertTables*` output).
+T8 shipped as `internal/jpeg.BuildSplicePrefix` +
+`internal/jpeg.InsertPrefixInPlace` — pre-built prefix cached at
+level open, in-place splice with zero internal allocs. SVS pool
+TileInto: 988 → 99.7 ns/op (9.9× speedup); Philips pool TileInto:
+4,504 → 425 ns/op (10.6× speedup). Every TIFF format that ships
+in opentile-go is now 0 allocs/op on the pool TileInto path.
 
-**Resolution path if a future profile contradicts this:** rerun
-the perf gate after a workload that emphasizes splice (e.g., a
-slide with very small tiles where the per-tile splice overhead
-amortizes worse). T8's prefix-template design is in the v0.9 plan
-verbatim; revival would land additively as a private optimization
-on the splice formats with no public API change.
+**Lesson for future profile-driven gates:** the 5% CPU threshold
+shouldn't be the only signal. Allocation count + bytes/ns
+throughput catch costs the CPU profile alone hides.
 
 ## 11. Consolidated backlog (re-triage after v0.9)
 
