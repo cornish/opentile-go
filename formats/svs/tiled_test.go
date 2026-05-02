@@ -299,6 +299,7 @@ func (f *fakeNonSVSTiler) Associated() []opentile.AssociatedImage { return nil }
 func (f *fakeNonSVSTiler) Metadata() opentile.Metadata            { return opentile.Metadata{} }
 func (f *fakeNonSVSTiler) ICCProfile() []byte                     { return nil }
 func (f *fakeNonSVSTiler) Close() error                           { return nil }
+func (f *fakeNonSVSTiler) WarmLevel(int) error                    { return nil }
 
 // buildSVSTIFFWithStrippedPage builds a 2-page SVS-like TIFF where page 0 is
 // tiled (a normal level) and page 1 is non-tiled (simulates a thumbnail /

@@ -145,6 +145,56 @@ func (l *Image) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+// TileMaxSize returns a generous upper bound for compressed tile
+// output. OneFrame's libjpeg-turbo crop output size depends on
+// entropy coding; we return tileSize.W * tileSize.H as a worst-case
+// bound (one byte per pixel) consistent with NDPI striped's
+// approach.
+func (l *Image) TileMaxSize() int { return l.tileSize.W * l.tileSize.H }
+
+// warm pre-faults the page-cache pages backing the page's strips.
+// OneFrame stores the level as a single (or per-channel) TIFF strip;
+// touching all bytes of every strip is what warmup means here.
+func (l *Image) warm() error {
+	offs, err := l.page.ScalarArrayU64(tiff.TagStripOffsets)
+	if err != nil {
+		return err
+	}
+	counts, err := l.page.ScalarArrayU64(tiff.TagStripByteCounts)
+	if err != nil {
+		return err
+	}
+	if len(offs) != len(counts) {
+		// Defensive — TIFF rules require parity but we don't want to
+		// panic during a hint operation.
+		n := len(offs)
+		if len(counts) < n {
+			n = len(counts)
+		}
+		offs, counts = offs[:n], counts[:n]
+	}
+	for i, off := range offs {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TileInto writes the tile bytes into dst. The OneFrame internal
+// scratch (extended frame + libjpeg-turbo crop output) still
+// allocates; dst receives the final copy.
+func (l *Image) TileInto(x, y int, dst []byte) (int, error) {
+	b, err := l.Tile(x, y)
+	if err != nil {
+		return 0, err
+	}
+	if len(dst) < len(b) {
+		return 0, io.ErrShortBuffer
+	}
+	return copy(dst, b), nil
+}
+
 // Tile returns the JPEG bytes for the tile at (x, y). Out-of-bounds
 // coordinates yield ErrTileOutOfBounds (wrapped in opentile.TileError).
 // All in-bounds reads share the lazily-built extended frame; the

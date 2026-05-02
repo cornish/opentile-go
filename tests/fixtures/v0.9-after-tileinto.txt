@@ -1,0 +1,27 @@
+# v0.9 baseline benchmark — AFTER A.2 TileInto + caller pool (T6 commit)
+# Captured: 2026-05-01T22:19:21Z on Apple M4 (darwin/arm64).
+# Adds parallel_pool_tileinto sub-bench using sync.Pool + Level.TileInto.
+# Reproduce: same as v0.9-baseline.txt; just rerun the bench.
+
+pkg: github.com/cornish/opentile-go/tests/parity
+cpu: Apple M4
+BenchmarkTile/CMU-1.svs/serial-10  	  956944	      1241 ns/op	   14648 B/op	       2 allocs/op
+BenchmarkTile/CMU-1.svs/parallel-10         	 1000000	      1268 ns/op	   14690 B/op	       2 allocs/op
+BenchmarkTile/CMU-1.svs/parallel_pool_tileinto-10         	 1211234	       988.4 ns/op	   14651 B/op	       2 allocs/op
+BenchmarkTile/CMU-1.ndpi/serial-10                        	    1753	    952408 ns/op	   47740 B/op	      12 allocs/op
+BenchmarkTile/CMU-1.ndpi/parallel-10                      	    5821	    179896 ns/op	   55793 B/op	      12 allocs/op
+BenchmarkTile/CMU-1.ndpi/parallel_pool_tileinto-10        	    6915	    181078 ns/op	   27803 B/op	       4 allocs/op
+BenchmarkTile/Philips-1.tiff/serial-10                    	  161634	      6333 ns/op	   82098 B/op	       2 allocs/op
+BenchmarkTile/Philips-1.tiff/parallel-10                  	  171474	      7026 ns/op	   82607 B/op	       2 allocs/op
+BenchmarkTile/Philips-1.tiff/parallel_pool_tileinto-10    	  264882	      4504 ns/op	   82327 B/op	       2 allocs/op
+BenchmarkTile/Leica-1.ome.tiff/serial-10                  	  260773	      3862 ns/op	   40136 B/op	       1 allocs/op
+BenchmarkTile/Leica-1.ome.tiff/parallel-10                	  337714	      3616 ns/op	   40079 B/op	       1 allocs/op
+BenchmarkTile/Leica-1.ome.tiff/parallel_pool_tileinto-10  	 3259671	       368.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTile/Ventana-1.bif/serial-10                     	   50350	     23543 ns/op	  305152 B/op	       1 allocs/op
+BenchmarkTile/Ventana-1.bif/parallel-10                   	   73507	     16406 ns/op	  305225 B/op	       1 allocs/op
+BenchmarkTile/Ventana-1.bif/parallel_pool_tileinto-10     	  372825	      3172 ns/op	      16 B/op	       0 allocs/op
+BenchmarkTile/cervix_2x_jpeg.iris/serial-10               	 1420004	       765.6 ns/op	    9781 B/op	       1 allocs/op
+BenchmarkTile/cervix_2x_jpeg.iris/parallel-10             	 1676023	       710.4 ns/op	    9802 B/op	       1 allocs/op
+BenchmarkTile/cervix_2x_jpeg.iris/parallel_pool_tileinto-10         	 8007459	       149.3 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/cornish/opentile-go/tests/parity	27.690s

@@ -1,0 +1,24 @@
+# v0.9 baseline benchmark — pre-A.1 mmap, pre-A.2 TileInto
+# Captured: 2026-05-01T21:42:57Z on Apple M4 (darwin/arm64).
+# Commit: f207b26137fad16063997d3d6b6b6e2130b37a37
+# Reproduce:
+#   OPENTILE_TESTDIR=$PWD/sample_files \
+#     go test -tags benchgate -bench=BenchmarkTile -benchmem -count=1 \
+#       -run=^$ ./tests/parity/
+
+pkg: github.com/cornish/opentile-go/tests/parity
+cpu: Apple M4
+BenchmarkTile/CMU-1.svs/serial-10  	  771118	      1583 ns/op	   14645 B/op	       2 allocs/op
+BenchmarkTile/CMU-1.svs/parallel-10         	  723812	      1640 ns/op	   14665 B/op	       2 allocs/op
+BenchmarkTile/CMU-1.ndpi/serial-10          	    1755	    953283 ns/op	   47701 B/op	      12 allocs/op
+BenchmarkTile/CMU-1.ndpi/parallel-10        	    6057	    182516 ns/op	   54848 B/op	      12 allocs/op
+BenchmarkTile/Philips-1.tiff/serial-10      	  185226	      6473 ns/op	   82282 B/op	       2 allocs/op
+BenchmarkTile/Philips-1.tiff/parallel-10    	  159032	      7321 ns/op	   82527 B/op	       2 allocs/op
+BenchmarkTile/Leica-1.ome.tiff/serial-10    	  283126	      4286 ns/op	   40129 B/op	       1 allocs/op
+BenchmarkTile/Leica-1.ome.tiff/parallel-10  	  314162	      3675 ns/op	   40057 B/op	       1 allocs/op
+BenchmarkTile/Ventana-1.bif/serial-10       	   41094	     26003 ns/op	  305030 B/op	       1 allocs/op
+BenchmarkTile/Ventana-1.bif/parallel-10     	   76303	     15987 ns/op	  305564 B/op	       1 allocs/op
+BenchmarkTile/cervix_2x_jpeg.iris/serial-10 	   98883	     22065 ns/op	   10448 B/op	       1 allocs/op
+BenchmarkTile/cervix_2x_jpeg.iris/parallel-10         	  865072	      1216 ns/op	    9810 B/op	       1 allocs/op
+PASS
+ok  	github.com/cornish/opentile-go/tests/parity	21.397s

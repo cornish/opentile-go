@@ -2,18 +2,22 @@
 
 Direct Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB) with one cgo dependency (libjpeg-turbo, narrowly scoped to `internal/jpegturbo/`). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.8
+## Current milestone — v0.9 (shipped)
 
-- **Scope:** Iris File Extension (IFE) v1.0 support — **the first non-TIFF format opentile-go reads**, and the first format with no Python or external-binary parity oracle. New `formats/ife/` package (~600 LoC reader + tests); new `FormatFactory.SupportsRaw` + `OpenRaw` + `RawUnsupported` base for non-TIFF dispatch; new `CompressionAVIF` + `CompressionIRIS` enum values; new `ErrSparseTile` sentinel. One real fixture (`cervix_2x_jpeg.iris`, 2.16 GB, JPEG-encoded, 9 layers, 126,976 × 88,576 px native) round-trips cleanly through `opentile.OpenFile`.
-- **API extension:** `FormatFactory.SupportsRaw(io.ReaderAt, int64) bool` + `FormatFactory.OpenRaw(r, size, *Config) (Tiler, error)` — additive interface evolution. Non-TIFF formats override both; TIFF-based formats embed `RawUnsupported` for default `false` / `ErrUnsupportedFormat`. `opentile.Open` walks `SupportsRaw` *before* `tiff.Open`, so non-TIFF files never get parsed as TIFF. Backward-compat verified across all 17 packages with `-race`.
-- **Active limitations:** L4, L5, L14 (Permanent — carried from v0.6) plus L19, L20 (v0.7 BIF work items still deferred — fixture- or research-driven), L23 (IFE cross-tool parity vs `tile_server_iris` — v0.9+, trigger-driven), L24 (AVIF + Iris-proprietary tile decode — Permanent, byte-passthrough by design), L25 (IFE ANNOTATIONS block parsing — v0.9+, fixture-driven). L22 (METADATA block parsing) was retired by the v0.8 mid-milestone metadata closeout — full reader now ships for METADATA + ATTRIBUTES + IMAGE_ARRAY + ICC_PROFILE.
-- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): everything from v0.7 plus two v0.8 entries: non-TIFF dispatch path (architectural — backward-compat additive via `RawUnsupported`); `TILE_TABLE.x_extent` / `y_extent` ignored on IFE (spec-doc-vs-fixture mismatch — values match tile counts, not pixels as spec claims).
-- **Correctness bar:** IFE has **no external parity oracle**. v0.7's tifffile + opentile-py oracles can't read IFE; openslide doesn't either. Coverage is layered: sample-tile SHA fixtures (`tests/fixtures/cervix_2x_jpeg.ife.json` via `TestSlideParity`) lock in opentile-go's own output; synthetic-IFE-writer tests in `formats/ife/synthetic_test.go` catch reader bugs without the real fixture; `tests/parity/ife_geometry_test.go` pins per-fixture geometry. Cross-tool divergence (tile bytes mismatch with `tile_server_iris`) is debugged from scratch when it surfaces.
-- **Deferred:** R4 (SVS corrupt-edge reconstruct) + R9 (JP2K decode/encode) parked at [#1](https://github.com/cornish/opentile-go/issues/1). R6 (3DHistech TIFF) parked at [#2](https://github.com/cornish/opentile-go/issues/2); R15 (Sakura SVSlide) parked at [#3](https://github.com/cornish/opentile-go/issues/3). v0.9 candidates: L19 / L20 BIF closeout, IFE METADATA (L22), IFE cross-tool parity (L23), or another non-TIFF format (DICOM-WSI). TBD based on real-slide demand.
-- **Design:** `docs/superpowers/specs/2026-04-29-opentile-go-ife-design.md`
-- **Plan:** `docs/superpowers/plans/2026-04-29-opentile-go-v08-ife.md`
-- **Reference spec:** `sample_files/ife/ife-format-spec-for-opentile-go.md`
-- **Work branch:** `feat/v0.8`
+- **Scope:** Sole-focus performance milestone implementing the §A items from `docs/opentile-go-svs-perf.md`. All five shipped: A.1 mmap-backed `OpenFile` (default); A.2 `Level.TileInto(x, y, dst)` + `Level.TileMaxSize()`; A.3 in-place JPEG splice template (internal `BuildSplicePrefix` + `InsertPrefixInPlace`); A.4 `Tiler.WarmLevel(i int) error`; A.5 concurrency-contract docs.
+- **Headline perf:** Cervix IFE pool TileInto: 22µs → 152 ns (145×). SVS pool TileInto: 1583 → 99.7 ns (16×, 0 allocs). Philips: 6473 → 425 ns (15×, 0 allocs). Every TIFF format and IFE at 0 allocs/op on the pool path. NDPI unchanged (CPU-bound libjpeg-turbo transcoding).
+- **API additions:** `WithBacking(BackingMmap | BackingPread)` Option (defaults mmap); `ErrMmapUnavailable` sentinel; `Level.TileInto`, `Level.TileMaxSize`, `Tiler.WarmLevel` interface methods (additive). Single new dep: `golang.org/x/exp/mmap` (Go-team subrepo, cross-platform Linux + macOS + Windows).
+- **Behavior change:** `OpenFile(path)` mmap-backs by default. Auto-fallback to pread on mmap failure (FUSE / unusual fs); explicit `WithBacking(BackingPread)` opt-out. SIGBUS on file truncation under mmap is the documented failure mode; loud crash beats silent corruption.
+- **Active limitations:** Same as post-v0.8 (L4, L5, L14 Permanent; L19, L20 v0.7 deferred; L23, L24, L25 v0.8 deferred). v0.9 retired no L items — sole-focus perf.
+- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): everything from v0.8 plus three v0.9 entries (default mmap, pool-friendly TileInto API, WarmLevel hook).
+- **Correctness bar:** Pre-flight benchmark gate (`tests/parity/perf_baseline_test.go` under `-tags benchgate`) captured baseline-vs-after deltas across the full parity slate. Four committed snapshots (`tests/fixtures/v0.9-{baseline,after-mmap,after-tileinto,after-splice}.txt`) document the optimization journey. Existing byte-equality oracle (`make parity`) + new cross-backing parity test (`TestOpenFileBackingsByteIdentical`) gate correctness.
+- **T7 lesson:** initial profile gate said "skip splice template" at 2.5% CPU. Owner review reversed via bytes/ns analysis (splice path was 6× worse throughput-per-byte). Recorded in `docs/deferred.md §10a`: don't gate solely on cumulative CPU%; check allocs + throughput too.
+- **Deferred forward:** L19, L20, L23, L24, L25, R4/R6/R9, R15, R16, plus v0.9 follow-ons (`Level.TilePrefix()` accessor, zero-copy `TileBorrow`). Consolidated list at `docs/deferred.md §11` for post-v0.9 re-triage.
+- **Design:** `docs/superpowers/specs/2026-05-01-opentile-go-v09-perf-design.md`
+- **Plan:** `docs/superpowers/plans/2026-05-01-opentile-go-v09-perf.md`
+- **Reference doc:** `docs/opentile-go-svs-perf.md`
+- **Perf guide:** `docs/perf.md`
+- **Work branch:** `feat/v0.9`
 
 ## Invariants
 

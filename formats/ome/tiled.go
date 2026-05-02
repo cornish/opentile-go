@@ -33,10 +33,12 @@ type tiledImage struct {
 	mpp         opentile.SizeMm
 	pyrIndex    int
 
-	offsets    []uint64
-	counts     []uint64
-	jpegTables []byte
-	reader     io.ReaderAt
+	offsets      []uint64
+	counts       []uint64
+	jpegTables   []byte
+	reader       io.ReaderAt
+	maxTileSize  int    // cached upper bound for Tile/TileInto output
+	splicePrefix []byte // tablesMid (no APP14); nil for non-splice levels
 }
 
 func newTiledImage(
@@ -107,6 +109,23 @@ func newTiledImage(
 	}
 	mpp := scaleMPP(baseMPP, baseSize, size)
 
+	var maxCount uint64
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	maxTileSize := int(maxCount)
+	var splicePrefix []byte
+	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
+		var err error
+		splicePrefix, err = jpeg.BuildSplicePrefix(jpegTables, false)
+		if err != nil {
+			return nil, fmt.Errorf("ome: build splice prefix: %w", err)
+		}
+		maxTileSize += len(splicePrefix)
+	}
+
 	return &tiledImage{
 		index:       index,
 		size:        size,
@@ -117,8 +136,10 @@ func newTiledImage(
 		pyrIndex:    pyr,
 		offsets:     offsets,
 		counts:      counts,
-		jpegTables:  jpegTables,
-		reader:      r,
+		jpegTables:   jpegTables,
+		reader:       r,
+		maxTileSize:  maxTileSize,
+		splicePrefix: splicePrefix,
 	}, nil
 }
 
@@ -154,6 +175,21 @@ func (l *tiledImage) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.Tile(coord.X, coord.Y)
 }
 
+func (l *tiledImage) TileMaxSize() int { return l.maxTileSize }
+
+// warm pre-faults the page-cache pages backing every tile on this
+// level.
+func (l *tiledImage) warm() error {
+	for i, off := range l.offsets {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(l.counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Tile keeps the v0.8-and-earlier fast path: read + splice (when
+// applicable) + return. TileInto is the pool-friendly variant.
 func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
 		return nil, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
@@ -174,6 +210,41 @@ func (l *tiledImage) Tile(x, y int) ([]byte, error) {
 		return out, nil
 	}
 	return buf, nil
+}
+
+// TileInto reads tile bytes directly into dst. Both the no-splice
+// path (most OME files — neither Leica fixture carries JPEGTables)
+// and the splice path do zero internal allocation.
+func (l *tiledImage) TileInto(x, y int, dst []byte) (int, error) {
+	if x < 0 || y < 0 || x >= l.grid.W || y >= l.grid.H {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrTileOutOfBounds}
+	}
+	idx := y*l.grid.W + x
+	length := int(l.counts[idx])
+	if length == 0 {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: opentile.ErrCorruptTile}
+	}
+	if l.splicePrefix == nil {
+		if len(dst) < length {
+			return 0, io.ErrShortBuffer
+		}
+		if err := tiff.ReadAtFull(l.reader, dst[:length], int64(l.offsets[idx])); err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+		}
+		return length, nil
+	}
+	prefixLen := len(l.splicePrefix)
+	if len(dst) < length+prefixLen {
+		return 0, io.ErrShortBuffer
+	}
+	if err := tiff.ReadAtFull(l.reader, dst[prefixLen:prefixLen+length], int64(l.offsets[idx])); err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	n, err := jpeg.InsertPrefixInPlace(dst, length, l.splicePrefix)
+	if err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: x, Y: y, Err: err}
+	}
+	return n, nil
 }
 
 // TileReader returns an io.ReadCloser over the tile bytes. When the

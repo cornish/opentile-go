@@ -10,6 +10,30 @@ const (
 	CorruptTileFix                            // v1.0: reconstruct from parent level
 )
 
+// Backing identifies the I/O backend used to read tile bytes from a
+// slide file. Selectable via [WithBacking]; defaults to [BackingMmap]
+// since v0.9.
+//
+// BackingMmap memory-maps the file read-only and reads tiles via
+// userspace memcpy from the mapped region. No syscall per Tile()
+// call once the kernel has paged in the relevant region. Recommended
+// for high-RPS serving and warm-cache desktop use. Caveat: SIGBUS
+// on file truncation; not suitable for storage that gets rewritten
+// underneath open Tilers.
+//
+// BackingPread keeps the v0.8 (and earlier) [os.File]-based path:
+// pread(2) syscall per [Level.Tile] call. Use this on filesystems
+// that don't support mmap (some FUSE / network mounts), or when
+// you specifically need the os.File semantics around truncation.
+type Backing uint8
+
+const (
+	// BackingMmap memory-maps the slide file. Default since v0.9.
+	BackingMmap Backing = iota
+	// BackingPread uses os.File + pread(2) per Tile().
+	BackingPread
+)
+
 // Option mutates the opentile configuration before Open returns a Tiler.
 type Option func(*config)
 
@@ -19,6 +43,8 @@ type config struct {
 	hasTileSize    bool
 	corruptTile    CorruptTilePolicy
 	ndpiSynthLabel bool // default true
+	backing        Backing
+	hasBacking     bool
 }
 
 func newConfig(opts []Option) *config {
@@ -26,6 +52,7 @@ func newConfig(opts []Option) *config {
 		tileSize:       Size{},
 		corruptTile:    CorruptTileError,
 		ndpiSynthLabel: true, // v0.2 behavior; opt-out via WithNDPISynthesizedLabel(false)
+		backing:        BackingMmap,
 	}
 	for _, o := range opts {
 		o(c)
@@ -59,6 +86,26 @@ func WithNDPISynthesizedLabel(enable bool) Option {
 	}
 }
 
+// WithBacking selects the I/O backend used by [OpenFile]. The default
+// since v0.9 is [BackingMmap]; pass WithBacking(BackingPread) on the
+// rare filesystem that doesn't support mmap or when you need os.File
+// truncation semantics.
+//
+// Has no effect on [Open] (which already takes a caller-provided
+// [io.ReaderAt]); only the path-resolving [OpenFile] honors this.
+//
+// When set to BackingMmap and the underlying mmap call fails (FUSE
+// mount that doesn't support mapping, etc.), OpenFile returns
+// [ErrMmapUnavailable] wrapping the underlying error rather than
+// silently falling back. Callers that want auto-fallback should
+// retry with WithBacking(BackingPread).
+func WithBacking(b Backing) Option {
+	return func(c *config) {
+		c.backing = b
+		c.hasBacking = true
+	}
+}
+
 // Config is an opaque, read-only view of the configuration passed to a
 // FormatFactory. Format packages import opentile.Config rather than the
 // unexported config struct.
@@ -87,6 +134,12 @@ func (c *Config) CorruptTilePolicy() CorruptTilePolicy { return c.c.corruptTile 
 // NDPISynthesizedLabel reports whether NDPI Tiler.Associated() should
 // include a synthesized label cropped from the overview. Default true.
 func (c *Config) NDPISynthesizedLabel() bool { return c.c.ndpiSynthLabel }
+
+// Backing reports the I/O backing the caller selected via
+// [WithBacking]. Defaults to [BackingMmap] since v0.9 if no option
+// was passed. Format packages typically don't need this — Open is
+// path-agnostic — but it's exposed for diagnostic accessors.
+func (c *Config) Backing() Backing { return c.c.backing }
 
 // NewTestConfig constructs a Config for use in tests.
 //

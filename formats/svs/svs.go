@@ -155,6 +155,15 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	}
 	return t.levels[i], nil
 }
+func (t *tiler) WarmLevel(i int) error {
+	if i < 0 || i >= len(t.levels) {
+		return opentile.ErrLevelOutOfRange
+	}
+	if w, ok := t.levels[i].(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 
 // tilerUnwrapper is implemented by opentile wrapper types (e.g., *fileCloser
 // returned by OpenFile) that hold an inner Tiler. Kept unexported because it

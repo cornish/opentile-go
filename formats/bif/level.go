@@ -66,6 +66,17 @@ type levelImpl struct {
 	imageDepth int
 
 	reader io.ReaderAt // for SectionReader-based streaming
+
+	// maxTileSize is the cached upper bound for Tile/TileInto/TileAt
+	// output: max(counts) + JPEGTables splice overhead (when applicable),
+	// or len(blank tile) for tile-grid-empty fixtures whichever is larger.
+	maxTileSize int
+
+	// splicePrefix is the per-IFD constant payload spliced before SOS
+	// on every tile when JPEGTables is shared (legacy OS-1 path). nil
+	// when tiles are self-contained (Ventana-1 spec-compliant DP 200).
+	// BIF is YCbCr — no APP14 marker (unlike SVS).
+	splicePrefix []byte
 }
 
 // newLevelImpl constructs a levelImpl from a classified IFD. The
@@ -148,6 +159,26 @@ func newLevelImpl(
 		tileOverlap = weightedAverageOverlap(encodeInfo)
 	}
 
+	var maxCount uint64
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	maxTileSize := int(maxCount)
+	var splicePrefix []byte
+	if ocomp == opentile.CompressionJPEG && len(jpegTables) > 0 {
+		var err error
+		splicePrefix, err = jpeg.BuildSplicePrefix(jpegTables, false)
+		if err != nil {
+			return nil, fmt.Errorf("bif level=%d: build splice prefix: %w", c.Level, err)
+		}
+		maxTileSize += len(splicePrefix)
+	}
+	// Empty-tile path returns a small JPEG (~tileSize²/100 bytes
+	// typically). It's bounded by the same per-tile envelope; no
+	// adjustment needed.
+
 	return &levelImpl{
 		index:          index,
 		pyrIndex:       c.Level,
@@ -163,6 +194,8 @@ func newLevelImpl(
 		scanWhitePoint: scanWhitePoint,
 		imageDepth:     imageDepth,
 		reader:         reader,
+		maxTileSize:    maxTileSize,
+		splicePrefix:   splicePrefix,
 	}, nil
 }
 
@@ -282,10 +315,26 @@ func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {
 	return l.readTileAtIdx(idx, coord.X, coord.Y)
 }
 
+// TileMaxSize is the cached upper bound for Tile / TileInto / TileAt
+// output bytes on this level (since v0.9).
+func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
+
+// warm pre-faults the page-cache pages backing every tile on this
+// level. For volumetric IFDs (imageDepth > 1) the offsets array
+// already contains all Z-plane entries flat; one pass covers them.
+func (l *levelImpl) warm() error {
+	for i, off := range l.offsets {
+		if err := tiff.TouchPages(l.reader, int64(off), int64(l.counts[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Tile returns the compressed tile bytes at (col, row) in
-// image-space at the nominal focal plane (Z=0) — a standalone valid
-// JPEG (or, for theoretical non-JPEG BIF dialects, the raw
-// codestream). Equivalent to TileAt(TileCoord{X: col, Y: row}).
+// image-space at the nominal focal plane (Z=0). Allocates the
+// returned slice; high-RPS callers should switch to TileInto with
+// a pooled buffer.
 //
 // See readTileAtIdx for the empty-tile / JPEGTables-splice / raw
 // passthrough behaviour shared with TileAt.
@@ -295,6 +344,57 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 		return nil, err
 	}
 	return l.readTileAtIdx(idx, col, row)
+}
+
+// TileInto writes the tile at (col, row) into dst (since v0.9).
+// Returns io.ErrShortBuffer if len(dst) < TileMaxSize().
+func (l *levelImpl) TileInto(col, row int, dst []byte) (int, error) {
+	idx, err := l.indexOf(0, col, row)
+	if err != nil {
+		return 0, err
+	}
+	return l.readTileAtIdxInto(idx, col, row, dst)
+}
+
+// readTileAtIdxInto is the TileInto-shaped variant of readTileAtIdx.
+// Writes output bytes into dst; returns io.ErrShortBuffer when dst
+// is undersized. Caller has already validated (z, col, row) → idx.
+// Splice path uses the in-place jpeg.InsertPrefixInPlace —
+// zero internal allocations.
+func (l *levelImpl) readTileAtIdxInto(idx, col, row int, dst []byte) (int, error) {
+	if l.isEmpty(idx) {
+		b, err := blankTile(l.tileSize.W, l.tileSize.H, l.scanWhitePoint)
+		if err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		if len(dst) < len(b) {
+			return 0, io.ErrShortBuffer
+		}
+		return copy(dst, b), nil
+	}
+	length := int(l.counts[idx])
+	off := int64(l.offsets[idx])
+	if l.splicePrefix == nil {
+		if len(dst) < length {
+			return 0, io.ErrShortBuffer
+		}
+		if err := tiff.ReadAtFull(l.reader, dst[:length], off); err != nil {
+			return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+		}
+		return length, nil
+	}
+	prefixLen := len(l.splicePrefix)
+	if len(dst) < length+prefixLen {
+		return 0, io.ErrShortBuffer
+	}
+	if err := tiff.ReadAtFull(l.reader, dst[prefixLen:prefixLen+length], off); err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+	}
+	n, err := jpeg.InsertPrefixInPlace(dst, length, l.splicePrefix)
+	if err != nil {
+		return 0, &opentile.TileError{Level: l.index, X: col, Y: row, Err: err}
+	}
+	return n, nil
 }
 
 // TileReader returns a streaming reader over the tile at (col, row).

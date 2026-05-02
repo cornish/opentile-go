@@ -193,6 +193,15 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	}
 	return t.levels[i], nil
 }
+func (t *tiler) WarmLevel(i int) error {
+	if i < 0 || i >= len(t.levels) {
+		return opentile.ErrLevelOutOfRange
+	}
+	if w, ok := t.levels[i].(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 
 // tilerUnwrapper is the same coordination interface SVS / NDPI use to
 // peel off opentile's *fileCloser wrapper before MetadataOf can type-

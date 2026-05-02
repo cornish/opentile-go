@@ -113,9 +113,48 @@ func Open(r io.ReaderAt, size int64, opts ...Option) (Tiler, error) {
 	return nil, ErrUnsupportedFormat
 }
 
-// OpenFile opens path for reading and delegates to Open. The returned Tiler
-// owns the file handle; Close closes it.
+// OpenFile opens path for reading and delegates to [Open]. The
+// returned [Tiler] owns the underlying file handle (or memory map);
+// Close releases it.
+//
+// Default backing since v0.9 is [BackingMmap]: the file is
+// memory-mapped read-only and tile reads become userspace memcpys
+// from the mapped region — no `pread(2)` syscall per [Level.Tile]
+// call. The kernel page cache handles paging in tile-data regions
+// on first access; warm-cache reads hit RAM at memory-bandwidth
+// speed.
+//
+// Pass [WithBacking](BackingPread) to opt out and use the v0.8 (and
+// earlier) os.File + pread path. Required for filesystems that
+// don't support mmap (some FUSE / network mounts) or when the
+// caller specifically needs os.File truncation semantics.
+//
+// Failure modes:
+//   - mmap unavailable for this file (filesystem doesn't support it,
+//     or some platform-specific failure): returns
+//     [ErrMmapUnavailable] wrapping the underlying error. Callers
+//     wanting automatic fallback should retry with
+//     WithBacking(BackingPread).
+//   - file truncated underneath an open mmap-backed Tiler: subsequent
+//     Tile() calls into the truncated region raise SIGBUS in the
+//     calling thread. WSI files don't get truncated under normal
+//     use; if your storage allows it, use BackingPread.
 func OpenFile(path string, opts ...Option) (Tiler, error) {
+	cfg := newConfig(opts)
+	switch cfg.backing {
+	case BackingMmap:
+		return openFileMmap(path, opts)
+	case BackingPread:
+		return openFilePread(path, opts)
+	default:
+		return nil, fmt.Errorf("opentile: unknown backing %d", cfg.backing)
+	}
+}
+
+// openFilePread is the v0.8 (and earlier) os.File + pread(2) path.
+// Active when WithBacking(BackingPread) is passed; also the
+// fallback target if a future mmap-backed code path wants to retry.
+func openFilePread(path string, opts []Option) (Tiler, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opentile: open %q: %w", path, err)
@@ -133,6 +172,23 @@ func OpenFile(path string, opts ...Option) (Tiler, error) {
 	return &fileCloser{Tiler: t, f: f}, nil
 }
 
+// openFileMmap is the v0.9 default path. Memory-maps the file and
+// passes the resulting *tiff.MmapFile (which implements io.ReaderAt
+// + io.Closer) to Open. The returned Tiler owns the mapping; Close
+// unmaps and releases the underlying file.
+func openFileMmap(path string, opts []Option) (Tiler, error) {
+	m, err := tiff.OpenMmap(path)
+	if err != nil {
+		return nil, fmt.Errorf("opentile: %s: %w: %v", path, ErrMmapUnavailable, err)
+	}
+	t, err := Open(m, m.Size(), opts...)
+	if err != nil {
+		m.Close()
+		return nil, fmt.Errorf("opentile: %s: %w", path, err)
+	}
+	return &mmapCloser{Tiler: t, m: m}, nil
+}
+
 // fileCloser overrides Close to also close the underlying file.
 type fileCloser struct {
 	Tiler
@@ -143,8 +199,20 @@ func (fc *fileCloser) Close() error {
 	return errors.Join(fc.Tiler.Close(), fc.f.Close())
 }
 
-// UnwrapTiler exposes the wrapped Tiler so format packages can reach their
-// concrete implementation through type assertion via svs.MetadataOf (and
-// equivalent per-format accessors) when the consumer obtained the Tiler
-// through OpenFile rather than Open.
+// UnwrapTiler exposes the inner Tiler so format-specific MetadataOf
+// helpers can reach the concrete implementation.
 func (fc *fileCloser) UnwrapTiler() Tiler { return fc.Tiler }
+
+// mmapCloser is the BackingMmap analog of fileCloser. Holds a
+// *tiff.MmapFile and releases the mapping on Close.
+type mmapCloser struct {
+	Tiler
+	m *tiff.MmapFile
+}
+
+func (mc *mmapCloser) Close() error {
+	return errors.Join(mc.Tiler.Close(), mc.m.Close())
+}
+
+// UnwrapTiler — same purpose as fileCloser.UnwrapTiler.
+func (mc *mmapCloser) UnwrapTiler() Tiler { return mc.Tiler }

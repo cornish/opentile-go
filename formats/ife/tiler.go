@@ -7,6 +7,7 @@ import (
 	"iter"
 
 	opentile "github.com/cornish/opentile-go"
+	"github.com/cornish/opentile-go/internal/tiff"
 )
 
 // openIFE is the real OpenRaw entry point. It parses every metadata
@@ -76,7 +77,21 @@ func openIFE(r io.ReaderAt, size int64, _ *opentile.Config) (opentile.Tiler, err
 	}
 	t.levels = make([]opentile.Level, len(apiOrder))
 	for i := range apiOrder {
-		t.levels[i] = &levelImpl{tiler: t, apiIndex: i}
+		// Compute TileMaxSize for this level: walk the per-level
+		// slice of TILE_OFFSETS entries and find the maximum byte
+		// length. Sparse entries (Offset == NullTile) carry Size == 0
+		// and don't move the max.
+		fi := len(apiOrder) - 1 - i
+		ext := fileOrder[fi]
+		base := cumulative[fi]
+		levelTileCount := uint64(ext.XTiles) * uint64(ext.YTiles)
+		var maxSize uint32
+		for k := uint64(0); k < levelTileCount; k++ {
+			if s := tiles[base+k].Size; s > maxSize {
+				maxSize = s
+			}
+		}
+		t.levels[i] = &levelImpl{tiler: t, apiIndex: i, maxTileSize: int(maxSize)}
 	}
 	return t, nil
 }
@@ -135,14 +150,24 @@ func (t *tiler) ICCProfile() []byte {
 	return out
 }
 func (t *tiler) Close() error { return nil }
+func (t *tiler) WarmLevel(i int) error {
+	if i < 0 || i >= len(t.levels) {
+		return opentile.ErrLevelOutOfRange
+	}
+	if w, ok := t.levels[i].(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 
 // levelImpl is the IFE implementation of opentile.Level. apiIndex
 // indexes layerExtentsAPI (0 = native, len-1 = coarsest); the
 // underlying TILE_OFFSETS lookups use the file-storage index
 // derived as len-1-apiIndex.
 type levelImpl struct {
-	tiler    *tiler
-	apiIndex int
+	tiler       *tiler
+	apiIndex    int
+	maxTileSize int // max(entry.Size) across this level's TILE_OFFSETS entries
 }
 
 func (l *levelImpl) Index() int        { return l.apiIndex }
@@ -196,24 +221,39 @@ func (l *levelImpl) linearIndex(col, row int) (uint64, error) {
 	return l.tiler.layerCumulative[fi] + uint64(row)*uint64(ext.XTiles) + uint64(col), nil
 }
 
+func (l *levelImpl) TileMaxSize() int { return l.maxTileSize }
+
+// warm pre-faults the page-cache pages backing every tile entry on
+// this level. Sparse entries (Offset == NullTile) carry no on-disk
+// bytes and are skipped. Called via Tiler.WarmLevel.
+func (l *levelImpl) warm() error {
+	fi := l.fileIndex()
+	ext := l.tiler.layerExtentsFile[fi]
+	base := l.tiler.layerCumulative[fi]
+	n := uint64(ext.XTiles) * uint64(ext.YTiles)
+	for k := uint64(0); k < n; k++ {
+		e := l.tiler.tileOffsets[base+k]
+		if e.Offset == NullTile || e.Size == 0 {
+			continue
+		}
+		if err := tiff.TouchPages(l.tiler.r, int64(e.Offset), int64(e.Size)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Tile allocates a fresh []byte sized exactly to the entry's Size
+// and reads tile bytes directly into it. High-RPS callers should
+// switch to TileInto with a pooled buffer (no internal alloc; IFE
+// tiles are self-contained — no splice needed).
 func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 	idx, err := l.linearIndex(col, row)
 	if err != nil {
 		return nil, err
 	}
 	entry := l.tiler.tileOffsets[idx]
-	if entry.Offset == NullTile {
-		return nil, &opentile.TileError{
-			Level: l.apiIndex,
-			X:     col,
-			Y:     row,
-			Err:   opentile.ErrSparseTile,
-		}
-	}
-	if entry.Size == 0 {
-		// Real tile with zero size shouldn't happen; treat defensively
-		// as sparse rather than returning an empty buffer that the
-		// caller might mistake for valid bytes.
+	if entry.Offset == NullTile || entry.Size == 0 {
 		return nil, &opentile.TileError{
 			Level: l.apiIndex,
 			X:     col,
@@ -231,6 +271,34 @@ func (l *levelImpl) Tile(col, row int) ([]byte, error) {
 		}
 	}
 	return buf, nil
+}
+
+func (l *levelImpl) TileInto(col, row int, dst []byte) (int, error) {
+	idx, err := l.linearIndex(col, row)
+	if err != nil {
+		return 0, err
+	}
+	entry := l.tiler.tileOffsets[idx]
+	if entry.Offset == NullTile || entry.Size == 0 {
+		return 0, &opentile.TileError{
+			Level: l.apiIndex,
+			X:     col,
+			Y:     row,
+			Err:   opentile.ErrSparseTile,
+		}
+	}
+	if len(dst) < int(entry.Size) {
+		return 0, io.ErrShortBuffer
+	}
+	if _, err := l.tiler.r.ReadAt(dst[:entry.Size], int64(entry.Offset)); err != nil {
+		return 0, &opentile.TileError{
+			Level: l.apiIndex,
+			X:     col,
+			Y:     row,
+			Err:   err,
+		}
+	}
+	return int(entry.Size), nil
 }
 
 func (l *levelImpl) TileAt(coord opentile.TileCoord) ([]byte, error) {

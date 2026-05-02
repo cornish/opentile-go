@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-A Go library for reading raw compressed tiles from whole-slide imaging (WSI) files used in digital pathology, including TIFF dialects (Aperio SVS, Hamamatsu NDPI, Philips TIFF, OME-TIFF, Ventana BIF) and the bleeding-edge non-TIFF [Iris File Extension](https://github.com/IrisDigitalPathology/Iris-File-Extension). Direct port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library for the four TIFF formats it supports, with byte-identical output. BIF (v0.7) and IFE (v0.8) are opentile-go's own additions beyond upstream's coverage.
+A Go library for reading raw compressed tiles from whole-slide imaging (WSI) files used in digital pathology, including TIFF dialects (Aperio SVS, Hamamatsu NDPI, Philips TIFF, OME-TIFF, Ventana BIF) and the bleeding-edge non-TIFF [Iris File Extension](https://github.com/IrisDigitalPathology/Iris-File-Extension). Direct port of the Python [opentile](https://github.com/imi-bigpicture/opentile) library for the four TIFF formats it supports, with byte-identical output. BIF (v0.7) and IFE (v0.8) are opentile-go's own additions beyond upstream's coverage. **Memory-mapped tile reads + pool-friendly `TileInto` API since v0.9** — see [docs/perf.md](./docs/perf.md).
 
 ```go
 import (
@@ -173,11 +173,19 @@ if md, ok := ome.MetadataOf(t); ok {
 
 ### Concurrency
 
-`Level.Tile(x, y)` and `Level.TileReader(x, y)` are safe to call concurrently from multiple goroutines, provided the `io.ReaderAt` passed to `Open` is concurrent-safe. `*os.File` satisfies this; `OpenFile` is goroutine-safe out of the box.
+`Level.Tile`, `Level.TileInto`, `Level.TileAt`, and `Level.TileReader` are safe to call concurrently from multiple goroutines. SVS / Philips / OME tiled / BIF / IFE have no internal locks on the tile hot path. NDPI's striped reader takes a per-page mutex on its assembled-frame cache; concurrent reads of *different* pages run in parallel, concurrent reads of the *same* page serialize. OME OneFrame is similar.
 
-All internal caches (parsed IFDs, per-tile offset / length tables, metadata) are populated at `Open()` time and then immutable — no locks on the tile hot path. Format packages with shared lazy caches (`formats/ndpi/striped.go::Tile`'s per-frame assembly cache; `formats/ndpi/oneframe.go`'s extended-frame cache; `formats/philips/tiled.go`'s blank-tile cache) use `sync.Once` and produce byte-deterministic output regardless of which goroutine populates them first.
+All internal caches (parsed IFDs, per-tile offset / length tables, metadata) are populated at `Open()` time and then immutable — no locks on the tile hot path. Format packages with shared lazy caches use `sync.Once` and produce byte-deterministic output regardless of which goroutine populates them first.
 
-`Close()` must not race with in-flight tile reads — drain before closing.
+`Close()` must not race with in-flight tile reads — drain before closing. Under the v0.9 default mmap backing, this is non-negotiable: closing unmaps the file, and subsequent reads through the mapping raise SIGBUS.
+
+### Performance
+
+opentile-go's tile reads are designed for high-RPS HTTP serving and per-frame desktop viewers. See [`docs/perf.md`](./docs/perf.md) for the full guide. Quick summary:
+
+- **`OpenFile` is mmap-backed by default** since v0.9. Tile reads become userspace memcpy; no `pread(2)` syscall per call. Opt out via `opentile.WithBacking(opentile.BackingPread)`.
+- **Use `Level.TileInto(x, y, dst) (int, error)`** with a `sync.Pool` of `[]byte` buffers sized to `Level.TileMaxSize()` for zero-allocation tile reads. Cervix serial: 152 ns/op, 0 allocs (vs v0.8's 22µs).
+- **`Tiler.WarmLevel(i) error`** pre-warms the page cache for predictable warm-cache latency.
 
 ## Deviations from upstream Python opentile
 
@@ -194,6 +202,9 @@ opentile-go aims for byte-parity with Python opentile 0.20.0. A small number of 
 | Multi-dimensional WSI API addition (`TileCoord` + `Level.TileAt` + `Image.SizeZ/SizeC/SizeT/ChannelName/ZPlaneFocus`) | All formats | v0.7 | additive — 2D-only formats inherit `SingleImage` defaults | Modern WSI consumers (fluorescence, focal-plane viewers, time series) need explicit multi-dim addressing. BIF reads multi-Z natively; OME surfaces dimensions honestly + defers `TileAt(z != 0)` to a future format-package milestone. |
 | Non-TIFF dispatch path (`FormatFactory.SupportsRaw` + `OpenRaw` + `RawUnsupported` base) | All formats | v0.8 | additive — TIFF factories embed `RawUnsupported` and inherit defaults | Iris IFE is the first non-TIFF format opentile-go reads. Table-driven dispatch lets each format own its detection; future non-TIFF formats drop in additively. |
 | `TILE_TABLE.x_extent` / `y_extent` ignored | IFE | v0.8 | not opt-out-able | The IFE v1.0 spec doc claims these fields carry image pixel dims, but the cervix fixture stores tile counts (matching `LAYER_EXTENTS.x_tiles`). Reader derives image dims from `LAYER_EXTENTS × 256` instead — unambiguous either way. |
+| Default mmap-backed `OpenFile` | All formats | v0.9 | `WithBacking(BackingPread)` | Universal perf win on the hot path (8–145× speedup; cervix serial Tile dropped from 22µs to 0.75µs). Auto-fallback to pread on mmap failure; SIGBUS on file truncation documented in the OpenFile docstring. |
+| `Level.TileInto` + `Level.TileMaxSize` interface evolution | All formats | v0.9 | additive — existing `Tile()` unchanged | Pool-friendly tile-read API. With `sync.Pool` of `[]byte` buffers sized to `TileMaxSize()`, the caller does zero allocations per tile on every TIFF format and IFE. NDPI / OME OneFrame still allocate internal scratch. |
+| `Tiler.WarmLevel(i)` interface evolution | All formats | v0.9 | additive — hint operation, callers can ignore | Page-cache pre-warm for predictable warm-cache latency. Useful for slide-server pre-warm at startup. |
 
 Full reasoning + per-deviation commit references are in [`docs/deferred.md`](./docs/deferred.md).
 

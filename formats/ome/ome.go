@@ -370,6 +370,16 @@ func (t *tiler) Level(i int) (opentile.Level, error) {
 	}
 	return t.images[0].Level(i)
 }
+func (t *tiler) WarmLevel(i int) error {
+	lvl, err := t.Level(i)
+	if err != nil {
+		return err
+	}
+	if w, ok := lvl.(interface{ warm() error }); ok {
+		return w.warm()
+	}
+	return nil
+}
 func (t *tiler) Associated() []opentile.AssociatedImage { return t.associated }
 func (t *tiler) Metadata() opentile.Metadata            { return opentile.Metadata{} } // upstream returns empty; matches.
 func (t *tiler) ICCProfile() []byte                     { return t.icc }
