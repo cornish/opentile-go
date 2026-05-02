@@ -11,12 +11,136 @@ upstream references, and retirement audit per milestone.
 
 ## [Unreleased]
 
-Active limitations after v0.8: L4, L5, L14 (Permanent — carried over
-from v0.6) plus L19, L20 (v0.7 work items, still deferred — fixture-
-or research-driven), and L23, L24, L25 (v0.8 IFE work items deferred
-to v0.9+; see `docs/deferred.md` §2). L22 (IFE METADATA block parsing)
-was retired by the v0.8 metadata closeout. Open work parked in tracked
-issues:
+Active limitations after v0.9: L4, L5, L14 (Permanent — carried over
+from v0.6) plus L19, L20, L23, L24, L25 (carried forward from
+v0.7 / v0.8; see `docs/deferred.md` §11 consolidated backlog).
+v0.9 was a sole-focus performance milestone — no L items retired,
+no new format support; the consolidated backlog gets re-triaged
+post-v0.9 ship. Open work parked in tracked issues:
+
+## [0.9.0] — 2026-05-01
+
+Sole-focus performance milestone implementing the §A
+recommendations from `docs/opentile-go-svs-perf.md` (the
+project-internal SVS perf doc dropped 2026-05-01). Every TIFF
+format and Iris IFE now ships with **memory-mapped tile reads**
+and a **pool-friendly `TileInto` API** that achieves zero
+allocations per tile on the hot path. Cumulative speedups range
+from 8× (BIF) to 145× (Cervix IFE) for high-RPS callers; NDPI is
+unchanged (CPU-bound libjpeg-turbo transcoding, not I/O).
+
+### Added
+
+- **`opentile.OpenFile` is mmap-backed by default.** Memory-maps
+  the slide file via `golang.org/x/exp/mmap` (cross-platform
+  Linux + macOS + Windows). Tile reads become userspace memcpy
+  from the mapped region; no `pread(2)` syscall per call. The
+  kernel page-fault handler brings tile data into the page cache
+  lazily on first access; warm-cache reads hit RAM at memory-
+  bandwidth speed.
+- **`opentile.WithBacking(Backing)` Option** — `BackingMmap`
+  (default) and `BackingPread` (the v0.8-and-earlier os.File +
+  pread path). Use `WithBacking(BackingPread)` on filesystems that
+  don't support mmap, or when you specifically need os.File
+  truncation semantics.
+- **`opentile.ErrMmapUnavailable`** — sentinel returned when
+  `WithBacking(BackingMmap)` is in effect (default) but the
+  underlying mmap call fails. Auto-fallback callers retry with
+  `WithBacking(BackingPread)`.
+- **`Level.TileInto(x, y int, dst []byte) (int, error)`** —
+  pool-friendly tile-read API. Writes tile bytes directly into
+  the caller's buffer with zero internal allocation on every TIFF
+  format and IFE. Returns `io.ErrShortBuffer` if `len(dst) <
+  Level.TileMaxSize()`. NDPI / OME OneFrame still allocate their
+  internal scratch (per-page assembled frame), but the boundary-
+  level allocation is eliminated.
+- **`Level.TileMaxSize() int`** — cached upper bound for `Tile()`
+  / `TileInto()` output. Sized for `len(largest_tile) + splice
+  overhead`; callers use this to size sync.Pool buckets.
+- **`Tiler.WarmLevel(i int) error`** — page-cache pre-warm hook.
+  Touches one byte per OS page covering level i's tile-data
+  ranges. Under mmap: forces kernel readahead. Under pread:
+  pread(1) per page (slower; documented as best-effort). Returns
+  `ErrLevelOutOfRange` on invalid i.
+- **`internal/jpeg.BuildSplicePrefix`** + **`internal/jpeg.InsertPrefixInPlace`**
+  — in-place JPEG splice template. Caches the per-level prefix
+  (DQT + DHT + optional Adobe APP14) at level open; per-tile
+  splice on `TileInto` is now zero-alloc. Byte-identical output
+  to the legacy `InsertTables` / `InsertTablesAndAPP14`.
+- **`tests/parity/perf_baseline_test.go`** — benchgate-tagged
+  baseline harness that captures per-format `Tile()` RPS +
+  allocations + MB/s (via `b.SetBytes`) across the parity slate.
+  Four committed snapshots (`tests/fixtures/v0.9-{baseline,after-mmap,
+  after-tileinto,after-splice}.txt`) document the cumulative
+  optimization journey.
+- **`docs/perf.md`** — performance-characteristics guide for
+  high-RPS / desktop / pipeline consumers.
+- **`golang.org/x/exp/mmap`** dependency. Cross-platform mmap;
+  Go-team subrepo, single file, frozen API.
+
+### Changed
+
+- **`OpenFile` defaults to mmap-backed I/O.** Existing callers see
+  the perf win automatically. SIGBUS on file truncation is the
+  documented failure mode under the new default; opt out via
+  `WithBacking(BackingPread)` if your storage allows truncation.
+- **`Tiler` interface gains `WarmLevel(i)`** — additive.
+- **`Level` interface gains `TileInto` + `TileMaxSize`** —
+  additive. Existing `Tile()` is now a thin wrapper that
+  allocates `TileMaxSize()` bytes and calls `TileInto` on no-
+  splice formats; on splice formats `Tile()` retains the legacy
+  alloc-per-call path for backward compat.
+- **Concurrency-contract docs** on Tiler / Level updated to pin
+  per-format lock characteristics, dst ownership rules for
+  TileInto, mmap-aliasing semantics, and the
+  SIGBUS-on-truncation contract.
+
+### Deviations from upstream (additive)
+
+Three new v0.9 entries in `docs/deferred.md §1a`:
+
+- Default mmap-backed `OpenFile`.
+- Pool-friendly `TileInto` + `TileMaxSize` API addition.
+- `Tiler.WarmLevel(i)` page-cache pre-warm hook.
+
+### Performance results
+
+Pool-aware `TileInto` (the v0.9 hot-path API) on Apple M4
+darwin/arm64 vs the v0.8 `Tile()` baseline:
+
+| Fixture | v0.8 Tile() ns | v0.9 pool TileInto ns | Speedup | Allocs |
+|---|---:|---:|---:|---:|
+| Cervix IFE | 22,065 | 152 | 145× | 0 |
+| Leica OME | 4,286 | 376 | 11× | 0 |
+| **CMU-1.svs** | **1,583** | **99.7** | **16×** | **0** |
+| **Philips-1** | **6,473** | **425** | **15×** | **0** |
+| Ventana-1.bif | 26,003 | 3,225 | 8× | 0 |
+| CMU-1.ndpi (par) | 182k | 185k | ~same | 4 |
+
+NDPI is unchanged because the bottleneck is libjpeg-turbo's
+DCT-domain crop work, not I/O — mmap doesn't help; pool doesn't
+help. For high-RPS NDPI serving, a consumer-side LRU cache on the
+spliced JPEG bytes is the right answer.
+
+### Notes
+
+- The plan deferred A.3 (in-place JPEG splice template) at T7
+  per a CPU% gate (combined splice cost ~2.5%, below the 5%
+  threshold). Reversed at owner review after a bytes/ns analysis
+  showed the splice path running at 6× worse throughput-per-byte
+  vs no-splice formats — alloc churn matters for tail latency
+  under sustained load even when CPU% is modest. Lesson recorded
+  in `docs/deferred.md §10a` for future profile-driven gates.
+- v0.9 ships with no Python parity oracle changes — every existing
+  fixture is byte-identical across both backings (verified by
+  `TestOpenFileBackingsByteIdentical`) and across `Tile()` /
+  `TileInto()` (verified by `tests/parity/tileinto_test.go`).
+- Baseline benchmark JSON (text) snapshots committed for the v0.9
+  retirement audit:
+  - `tests/fixtures/v0.9-baseline.txt` — pre-mmap (v0.8 numbers)
+  - `tests/fixtures/v0.9-after-mmap.txt` — after A.1
+  - `tests/fixtures/v0.9-after-tileinto.txt` — after A.2 + pool
+  - `tests/fixtures/v0.9-after-splice.txt` — after A.3 in-place splice
 
 - **R4 / R9** ([#1](https://github.com/cornish/opentile-go/issues/1)) —
   SVS corrupt-edge reconstruct + JP2K decode/encode. No local SVS slide
@@ -588,7 +712,8 @@ Initial functional milestone. Aperio SVS tiled-level passthrough.
 - Three real-slide fixtures: CMU-1-Small-Region.svs, CMU-1.svs (JPEG),
   JP2K-33003-1.svs (JP2K passthrough).
 
-[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cornish/opentile-go/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cornish/opentile-go/releases/tag/v0.9.0
 [0.8.0]: https://github.com/cornish/opentile-go/releases/tag/v0.8.0
 [0.7.0]: https://github.com/cornish/opentile-go/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cornish/opentile-go/releases/tag/v0.6.0

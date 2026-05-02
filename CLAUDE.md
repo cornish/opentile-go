@@ -2,18 +2,21 @@
 
 Direct Go port of [imi-bigpicture/opentile](https://github.com/imi-bigpicture/opentile) (Apache 2.0, Sectra AB) with one cgo dependency (libjpeg-turbo, narrowly scoped to `internal/jpegturbo/`). Reads tiles from WSI (whole-slide imaging) TIFF files used in digital pathology.
 
-## Current milestone — v0.9
+## Current milestone — v0.9 (shipped)
 
-- **Scope:** Sole-focus performance milestone landing the SVS-perf recommendations from `docs/opentile-go-svs-perf.md` §A. Five additive items: A.1 mmap-backed `OpenFile` (default); A.2 `Level.TileInto(x, y, dst)` + `Level.TileMaxSize()`; A.3 pre-built JPEG splice template per level (internal-only); A.4 `Tiler.WarmLevel(i int) error`; A.5 concurrency-contract docs (incremental). Every other deferred item (L19, L20, L23, L25, R4/R6/R9, R15, R16) consolidated into `docs/deferred.md §11` (re-triage post-v0.9).
-- **API extension:** New top-level option `WithBacking(BackingMmap | BackingPread)` defaults to mmap; new `Level` methods `TileInto(x, y int, dst []byte) (int, error)` + `TileMaxSize() int` (additive — existing `Tile()` becomes a thin wrapper); new `Tiler.WarmLevel(i int) error`; new `ErrMmapUnavailable` sentinel; new dep on `golang.org/x/exp/mmap` (Go-team subrepo, cross-platform). No new cgo.
-- **Behavior change:** `OpenFile(path)` now mmap-backs by default. Auto-fallback to `pread` on mmap failure (FUSE / unusual fs); explicit `WithBacking(BackingPread)` opt-out for callers that need `os.Open` semantics. **SIGBUS-on-truncation** documented loudly — WSI files don't get truncated under normal use; if they do, the process crashes (loud failure beats silent corruption).
-- **Active limitations:** Same as v0.8 (L4, L5, L14 Permanent; L19, L20 v0.7 deferred; L23, L24, L25 v0.8 deferred). v0.9 doesn't retire any L items — it's pure perf work.
-- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): everything from v0.8 plus the v0.9 default-mmap-backing change (caller-facing behavior change documented as additive — explicit opt-out preserves the old behavior).
-- **Correctness bar:** A pre-flight benchmark gate (`tests/parity/perf_baseline_test.go` under `-tags benchgate`) captures per-format `Tile()` RPS + `allocs/op` + top-5 pprof CPU consumers across the full parity slate before any optimization lands. Each task's commit shows before/after deltas; regressions on any format revert. Existing byte-equality oracle (`make parity`) continues to gate correctness.
-- **Deferred:** all of L19, L20, L23, L25, R4/R6/R9, R15, R16, plus the v0.9-internal `Level.TilePrefix()` follow-on and the zero-copy `TileBorrow` future API. Consolidated list at `docs/deferred.md §11` for post-v0.9 re-triage.
+- **Scope:** Sole-focus performance milestone implementing the §A items from `docs/opentile-go-svs-perf.md`. All five shipped: A.1 mmap-backed `OpenFile` (default); A.2 `Level.TileInto(x, y, dst)` + `Level.TileMaxSize()`; A.3 in-place JPEG splice template (internal `BuildSplicePrefix` + `InsertPrefixInPlace`); A.4 `Tiler.WarmLevel(i int) error`; A.5 concurrency-contract docs.
+- **Headline perf:** Cervix IFE pool TileInto: 22µs → 152 ns (145×). SVS pool TileInto: 1583 → 99.7 ns (16×, 0 allocs). Philips: 6473 → 425 ns (15×, 0 allocs). Every TIFF format and IFE at 0 allocs/op on the pool path. NDPI unchanged (CPU-bound libjpeg-turbo transcoding).
+- **API additions:** `WithBacking(BackingMmap | BackingPread)` Option (defaults mmap); `ErrMmapUnavailable` sentinel; `Level.TileInto`, `Level.TileMaxSize`, `Tiler.WarmLevel` interface methods (additive). Single new dep: `golang.org/x/exp/mmap` (Go-team subrepo, cross-platform Linux + macOS + Windows).
+- **Behavior change:** `OpenFile(path)` mmap-backs by default. Auto-fallback to pread on mmap failure (FUSE / unusual fs); explicit `WithBacking(BackingPread)` opt-out. SIGBUS on file truncation under mmap is the documented failure mode; loud crash beats silent corruption.
+- **Active limitations:** Same as post-v0.8 (L4, L5, L14 Permanent; L19, L20 v0.7 deferred; L23, L24, L25 v0.8 deferred). v0.9 retired no L items — sole-focus perf.
+- **Deviations from upstream Python opentile** (canonical list at `docs/deferred.md §1a`): everything from v0.8 plus three v0.9 entries (default mmap, pool-friendly TileInto API, WarmLevel hook).
+- **Correctness bar:** Pre-flight benchmark gate (`tests/parity/perf_baseline_test.go` under `-tags benchgate`) captured baseline-vs-after deltas across the full parity slate. Four committed snapshots (`tests/fixtures/v0.9-{baseline,after-mmap,after-tileinto,after-splice}.txt`) document the optimization journey. Existing byte-equality oracle (`make parity`) + new cross-backing parity test (`TestOpenFileBackingsByteIdentical`) gate correctness.
+- **T7 lesson:** initial profile gate said "skip splice template" at 2.5% CPU. Owner review reversed via bytes/ns analysis (splice path was 6× worse throughput-per-byte). Recorded in `docs/deferred.md §10a`: don't gate solely on cumulative CPU%; check allocs + throughput too.
+- **Deferred forward:** L19, L20, L23, L24, L25, R4/R6/R9, R15, R16, plus v0.9 follow-ons (`Level.TilePrefix()` accessor, zero-copy `TileBorrow`). Consolidated list at `docs/deferred.md §11` for post-v0.9 re-triage.
 - **Design:** `docs/superpowers/specs/2026-05-01-opentile-go-v09-perf-design.md`
 - **Plan:** `docs/superpowers/plans/2026-05-01-opentile-go-v09-perf.md`
 - **Reference doc:** `docs/opentile-go-svs-perf.md`
+- **Perf guide:** `docs/perf.md`
 - **Work branch:** `feat/v0.9`
 
 ## Invariants
