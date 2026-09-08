@@ -52,7 +52,12 @@ jobs:
 
       - name: Install prereqs (macOS)
         if: startsWith(matrix.name, 'macos')
-        run: brew install nasm pkg-config
+        run: |
+          brew install nasm pkg-config
+          # Lower the min-macOS floor so wheels aren't tagged for the runner's OS
+          # (macOS 26). Must match VCPKG_OSX_DEPLOYMENT_TARGET in the osx triplets
+          # so the static codec .a's and the Go lib share one deployment target.
+          echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos_cross == '1' && '10.13' || '11.0' }}" >> "$GITHUB_ENV"
 
       - name: Set up MSYS2 mingw (Windows)
         id: msys2
@@ -78,13 +83,13 @@ jobs:
           # Cross-target x86_64 on the plentiful Apple-Silicon runner (macos-13
           # Intel runners queue for hours). GOARCH=amd64 so cgo's -arch x86_64
           # doesn't clash with a default arm64; the x64-osx-static triplet already
-          # pins VCPKG_OSX_ARCHITECTURES=x86_64. _PYTHON_HOST_PLATFORM forces the
-          # x86_64 wheel tag. Rosetta lets an x86_64 python validate the wheel.
+          # pins VCPKG_OSX_ARCHITECTURES=x86_64. The x86_64 wheel tag comes from
+          # MACOSX_DEPLOYMENT_TARGET (set above) + setup.py's universal2->arch
+          # retag. Rosetta lets an x86_64 python validate the wheel.
           echo "GOARCH=amd64" >> "$GITHUB_ENV"
           echo "CGO_CFLAGS=-arch x86_64"  >> "$GITHUB_ENV"
           echo "CGO_CXXFLAGS=-arch x86_64" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-arch x86_64" >> "$GITHUB_ENV"
-          echo "_PYTHON_HOST_PLATFORM=macosx-10.9-x86_64" >> "$GITHUB_ENV"
           softwareupdate --install-rosetta --agree-to-license || true
 
       # --- vcpkg static codecs ---
@@ -105,7 +110,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: wheels-vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          key: wheels-vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', format('.github/vcpkg-triplets/{0}.cmake', matrix.triplet)) }}
 
       - name: Install codec libs (static)
         shell: bash
@@ -123,7 +128,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: wheels-vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          key: wheels-vcpkg-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json', format('.github/vcpkg-triplets/{0}.cmake', matrix.triplet)) }}
 
       # --- build + repair + validate wheel ---
       - name: Build wheel
